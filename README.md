@@ -1,3 +1,89 @@
+
+修改版命令
+
+编译telegram iOS
+
+目前在weixiaobin 根目录下有一个telegram-ios 的文件夹
+cd 到这个文件夹 之后 在终端运行以下命令 
+python3 build-system/Make/Make.py \
+ --overrideXcodeVersion \
+ --bazel="$HOME/bazel-dist/bazel" \
+ --cacheDir="$HOME/telegram-bazel-cache" \
+ build \
+ --configurationPath="$HOME/telegram-configuration/development-configuration.json" \
+ --buildNumber=100001 \
+ --configuration=release_universal \
+ --codesigningInformationPath="$HOME/telegram-configuration/fake-codesigning"
+
+即可进行初步编译 如果报错，去https://github.com/TelegramMessenger/Telegram-iOS/ 这里 搜索相应的错误。
+可能的报错就是xcode 版本 bazel版本，以及路径错误。 根据提示进行更改即可
+
+
+
+python3 build-system/Make/Make.py \
+ --bazel="$HOME/bazel-dist/bazel" \
+ --overrideXcodeVersion \
+ --cacheDir="$HOME/telegram-bazel-cache" \
+ build \
+ --configurationPath="$HOME/telegram-configuration" \
+ --buildNumber=100001 \
+ --configuration=release_universal
+
+
+python3 build-system/Make/Make.py \
+ --overrideXcodeVersion \
+ --bazel="$HOME/bazel-dist/bazel" \
+ --cacheDir="$HOME/telegram-bazel-cache" \
+ generateProject \
+ --configurationPath="$HOME/telegram-configuration" \
+ --disableExtensions \
+ --disableProvisioningProfiles \
+ --codesigningInformationPath="$HOME/telegram-configuration/fake-codesigning"
+
+
+python3 build-system/Make/Make.py \
+ --overrideXcodeVersion \
+ --bazel="$HOME/bazel-dist/bazel" \
+ --cacheDir="$HOME/telegram-bazel-cache" \
+ generateProject \
+ --configurationPath="$HOME/telegram-configuration/development-configuration.json" \
+ --codesigningInformationPath="$HOME/telegram-configuration/fake-codesigning"
+
+python3 build-system/Make/Make.py \
+ --overrideXcodeVersion \
+ --bazel="$HOME/bazel-dist/bazel" \
+ --cacheDir="$HOME/telegram-bazel-cache" \
+ generateProject \
+ --configurationPath="$HOME/telegram-configuration/development-configuration.json" \
+ --disableExtensions \
+ --codesigningInformationPath="$HOME/telegram-configuration/fake-codesigning"
+
+
+python3 build-system/Make/Make.py \
+ --overrideXcodeVersion \
+ --cacheDir="$HOME/telegram-bazel-cache" \
+ --bazel="$HOME/bazel-dist/bazel" \
+ generateProject \
+ --configurationPath="$HOME/telegram-configuration-development/" \
+ --codesigningInformationPath="$HOME/telegram-configuration-development/fake-codesigning"
+
+
+
+python3 build-system/Make/Make.py \
+    --cacheDir="$HOME/telegram-bazel-cache" \
+    generateProject \
+    --configurationPath="$HOME/telegram-configuration-development" \
+   --codesigningInformationPath="$HOME/telegram-configuration/fake-codesigning"
+
+
+
+python3 build-system/Make/Make.py \
+ --overrideXcodeVersion \
+ --bazel="$HOME/bazel-dist/bazel" \
+clean
+
+
+
 # Telegram iOS Source Code Compilation Guide
 
 We welcome all developers to use our API and source code to create applications on our platform.

@@ -11,6 +11,7 @@ import AccountContext
 import PhotoResources
 import UIKitRuntimeUtils
 import RangeSet
+import VideoToolbox
 
 private extension CGRect {
     var center: CGPoint {
@@ -28,13 +29,19 @@ public enum NativeVideoContentId: Hashable {
 public final class NativeVideoContent: UniversalVideoContent {
     public let id: AnyHashable
     public let nativeId: NativeVideoContentId
+    public let userLocation: MediaResourceUserLocation
     public let fileReference: FileMediaReference
+    public let previewSourceFileReference: FileMediaReference?
+    public let limitedFileRange: Range<Int64>?
     let imageReference: ImageMediaReference?
     public let dimensions: CGSize
-    public let duration: Int32
+    public let duration: Double
     public let streamVideo: MediaPlayerStreaming
     public let loopVideo: Bool
     public let enableSound: Bool
+    public let soundMuted: Bool
+    public let beginWithAmbientSound: Bool
+    public let mixWithOthers: Bool
     public let baseRate: Double
     let fetchAutomatically: Bool
     let onlyFullSizeThumbnail: Bool
@@ -45,13 +52,43 @@ public final class NativeVideoContent: UniversalVideoContent {
     let continuePlayingWithoutSoundOnLostAudioSession: Bool
     let placeholderColor: UIColor
     let tempFilePath: String?
+    let isAudioVideoMessage: Bool
     let captureProtected: Bool
     let hintDimensions: CGSize?
+    let storeAfterDownload: (() -> Void)?
+    let displayImage: Bool
+    let hasSentFramesToDisplay: (() -> Void)?
     
-    public init(id: NativeVideoContentId, fileReference: FileMediaReference, imageReference: ImageMediaReference? = nil, streamVideo: MediaPlayerStreaming = .none, loopVideo: Bool = false, enableSound: Bool = true, baseRate: Double = 1.0, fetchAutomatically: Bool = true, onlyFullSizeThumbnail: Bool = false, useLargeThumbnail: Bool = false, autoFetchFullSizeThumbnail: Bool = false, startTimestamp: Double? = nil, endTimestamp: Double? = nil, continuePlayingWithoutSoundOnLostAudioSession: Bool = false, placeholderColor: UIColor = .white, tempFilePath: String? = nil, captureProtected: Bool = false, hintDimensions: CGSize? = nil) {
+    public static func isVideoCodecSupported(videoCodec: String, isHardwareAv1Supported: Bool, isSoftwareAv1Supported: Bool) -> Bool {
+        if videoCodec == "h264" || videoCodec == "h265" || videoCodec == "avc" || videoCodec == "hevc" {
+            return true
+        }
+        
+        if videoCodec == "av1" || videoCodec == "av01" {
+            return isHardwareAv1Supported || isSoftwareAv1Supported
+        }
+        
+        return false
+    }
+    
+    public static func isHLSVideo(file: TelegramMediaFile) -> Bool {
+        for alternativeRepresentation in file.alternativeRepresentations {
+            if let alternativeFile = alternativeRepresentation as? TelegramMediaFile {
+                if alternativeFile.mimeType == "application/x-mpegurl" {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+    
+    public init(id: NativeVideoContentId, userLocation: MediaResourceUserLocation, fileReference: FileMediaReference, previewSourceFileReference: FileMediaReference? = nil, limitedFileRange: Range<Int64>? = nil, imageReference: ImageMediaReference? = nil, streamVideo: MediaPlayerStreaming = .none, loopVideo: Bool = false, enableSound: Bool = true, soundMuted: Bool = false, beginWithAmbientSound: Bool = false, mixWithOthers: Bool = false, baseRate: Double = 1.0, fetchAutomatically: Bool = true, onlyFullSizeThumbnail: Bool = false, useLargeThumbnail: Bool = false, autoFetchFullSizeThumbnail: Bool = false, startTimestamp: Double? = nil, endTimestamp: Double? = nil, continuePlayingWithoutSoundOnLostAudioSession: Bool = false, placeholderColor: UIColor = .white, tempFilePath: String? = nil, isAudioVideoMessage: Bool = false, captureProtected: Bool = false, hintDimensions: CGSize? = nil, storeAfterDownload: (() -> Void)?, displayImage: Bool = true, hasSentFramesToDisplay: (() -> Void)? = nil) {
         self.id = id
         self.nativeId = id
+        self.userLocation = userLocation
         self.fileReference = fileReference
+        self.previewSourceFileReference = previewSourceFileReference
+        self.limitedFileRange = limitedFileRange
         self.imageReference = imageReference
         if var dimensions = fileReference.media.dimensions {
             if let thumbnail = fileReference.media.previewRepresentations.first {
@@ -66,10 +103,13 @@ public final class NativeVideoContent: UniversalVideoContent {
             self.dimensions = CGSize(width: 128.0, height: 128.0)
         }
         
-        self.duration = fileReference.media.duration ?? 0
+        self.duration = fileReference.media.duration ?? 0.0
         self.streamVideo = streamVideo
         self.loopVideo = loopVideo
         self.enableSound = enableSound
+        self.soundMuted = soundMuted
+        self.beginWithAmbientSound = beginWithAmbientSound
+        self.mixWithOthers = mixWithOthers
         self.baseRate = baseRate
         self.fetchAutomatically = fetchAutomatically
         self.onlyFullSizeThumbnail = onlyFullSizeThumbnail
@@ -81,11 +121,15 @@ public final class NativeVideoContent: UniversalVideoContent {
         self.placeholderColor = placeholderColor
         self.tempFilePath = tempFilePath
         self.captureProtected = captureProtected
+        self.isAudioVideoMessage = isAudioVideoMessage
         self.hintDimensions = hintDimensions
+        self.storeAfterDownload = storeAfterDownload
+        self.displayImage = displayImage
+        self.hasSentFramesToDisplay = hasSentFramesToDisplay
     }
     
-    public func makeContentNode(postbox: Postbox, audioSession: ManagedAudioSession) -> UniversalVideoContentNode & ASDisplayNode {
-        return NativeVideoContentNode(postbox: postbox, audioSessionManager: audioSession, fileReference: self.fileReference, imageReference: self.imageReference, streamVideo: self.streamVideo, loopVideo: self.loopVideo, enableSound: self.enableSound, baseRate: self.baseRate, fetchAutomatically: self.fetchAutomatically, onlyFullSizeThumbnail: self.onlyFullSizeThumbnail, useLargeThumbnail: self.useLargeThumbnail, autoFetchFullSizeThumbnail: self.autoFetchFullSizeThumbnail, startTimestamp: self.startTimestamp, endTimestamp: self.endTimestamp, continuePlayingWithoutSoundOnLostAudioSession: self.continuePlayingWithoutSoundOnLostAudioSession, placeholderColor: self.placeholderColor, tempFilePath: self.tempFilePath, captureProtected: self.captureProtected, hintDimensions: self.hintDimensions)
+    public func makeContentNode(context: AccountContext, postbox: Postbox, audioSession: ManagedAudioSession) -> UniversalVideoContentNode & ASDisplayNode {
+        return NativeVideoContentNode(context: context, postbox: postbox, audioSessionManager: audioSession, userLocation: self.userLocation, fileReference: self.fileReference, previewSourceFileReference: self.previewSourceFileReference, limitedFileRange: self.limitedFileRange, imageReference: self.imageReference, streamVideo: self.streamVideo, loopVideo: self.loopVideo, enableSound: self.enableSound, soundMuted: self.soundMuted, beginWithAmbientSound: self.beginWithAmbientSound, mixWithOthers: self.mixWithOthers, baseRate: self.baseRate, fetchAutomatically: self.fetchAutomatically, onlyFullSizeThumbnail: self.onlyFullSizeThumbnail, useLargeThumbnail: self.useLargeThumbnail, autoFetchFullSizeThumbnail: self.autoFetchFullSizeThumbnail, startTimestamp: self.startTimestamp, endTimestamp: self.endTimestamp, continuePlayingWithoutSoundOnLostAudioSession: self.continuePlayingWithoutSoundOnLostAudioSession, placeholderColor: self.placeholderColor, tempFilePath: self.tempFilePath, isAudioVideoMessage: self.isAudioVideoMessage, captureProtected: self.captureProtected, hintDimensions: self.hintDimensions, storeAfterDownload: self.storeAfterDownload, displayImage: self.displayImage, hasSentFramesToDisplay: self.hasSentFramesToDisplay)
     }
     
     public func isEqual(to other: UniversalVideoContent) -> Bool {
@@ -102,16 +146,168 @@ public final class NativeVideoContent: UniversalVideoContent {
     }
 }
 
+private enum PlayerImpl {
+    case legacy(MediaPlayer)
+    case chunked(ChunkMediaPlayerV2)
+    
+    var actionAtEnd: MediaPlayerActionAtEnd {
+        get {
+            switch self {
+            case let .legacy(player):
+                return player.actionAtEnd
+            case let .chunked(player):
+                return player.actionAtEnd
+            }
+        } set(value) {
+            switch self {
+            case let .legacy(player):
+                player.actionAtEnd = value
+            case let .chunked(player):
+                player.actionAtEnd = value
+            }
+        }
+    }
+    
+    var status: Signal<MediaPlayerStatus, NoError> {
+        switch self {
+        case let .legacy(player):
+            return player.status
+        case let .chunked(player):
+            return player.status
+        }
+    }
+    
+    func play() {
+        switch self {
+        case let .legacy(player):
+            player.play()
+        case let .chunked(player):
+            player.play()
+        }
+    }
+    
+    func pause() {
+        switch self {
+        case let .legacy(player):
+            player.pause()
+        case let .chunked(player):
+            player.pause()
+        }
+    }
+    
+    func togglePlayPause(faded: Bool = false) {
+        switch self {
+        case let .legacy(player):
+            player.togglePlayPause(faded: faded)
+        case let .chunked(player):
+            player.togglePlayPause(faded: faded)
+        }
+    }
+    
+    func playOnceWithSound(playAndRecord: Bool, seek: MediaPlayerSeek = .start) {
+        switch self {
+        case let .legacy(player):
+            player.playOnceWithSound(playAndRecord: playAndRecord, seek: seek)
+        case let .chunked(player):
+            player.playOnceWithSound(playAndRecord: playAndRecord, seek: seek)
+        }
+    }
+    
+    func continueWithOverridingAmbientMode(isAmbient: Bool) {
+        switch self {
+        case let .legacy(player):
+            player.continueWithOverridingAmbientMode(isAmbient: isAmbient)
+        case let .chunked(player):
+            player.continueWithOverridingAmbientMode(isAmbient: isAmbient)
+        }
+    }
+    
+    func continuePlayingWithoutSound(seek: MediaPlayerSeek = .start) {
+        switch self {
+        case let .legacy(player):
+            player.continuePlayingWithoutSound(seek: seek)
+        case let .chunked(player):
+            player.continuePlayingWithoutSound(seek: seek)
+        }
+    }
+    
+    func seek(timestamp: Double, play: Bool? = nil) {
+        switch self {
+        case let .legacy(player):
+            player.seek(timestamp: timestamp, play: play)
+        case let .chunked(player):
+            player.seek(timestamp: timestamp, play: play)
+        }
+    }
+    
+    func setForceAudioToSpeaker(_ value: Bool) {
+        switch self {
+        case let .legacy(player):
+            player.setForceAudioToSpeaker(value)
+        case let .chunked(player):
+            player.setForceAudioToSpeaker(value)
+        }
+    }
+    
+    func setSoundMuted(soundMuted: Bool) {
+        switch self {
+        case let .legacy(player):
+            player.setSoundMuted(soundMuted: soundMuted)
+        case let .chunked(player):
+            player.setSoundMuted(soundMuted: soundMuted)
+        }
+    }
+    
+    func setBaseRate(_ baseRate: Double) {
+        switch self {
+        case let .legacy(player):
+            player.setBaseRate(baseRate)
+        case let .chunked(player):
+            player.setBaseRate(baseRate)
+        }
+    }
+    
+    func setContinuePlayingWithoutSoundOnLostAudioSession(_ value: Bool) {
+        switch self {
+        case let .legacy(player):
+            player.setContinuePlayingWithoutSoundOnLostAudioSession(value)
+        case let .chunked(player):
+            player.setContinuePlayingWithoutSoundOnLostAudioSession(value)
+        }
+    }
+}
+
+extension ChunkMediaPlayerV2.MediaDataReaderParams {
+    init(context: AccountContext) {
+        var useV2Reader = true
+        if let data = context.currentAppConfiguration.with({ $0 }).data, let value = data["ios_video_v2_reader"] as? Double {
+            useV2Reader = value != 0.0
+        }
+        
+        self.init(useV2Reader: useV2Reader)
+    }
+}
+
 private final class NativeVideoContentNode: ASDisplayNode, UniversalVideoContentNode {
     private let postbox: Postbox
+    private let userLocation: MediaResourceUserLocation
     private let fileReference: FileMediaReference
+    private let previewSourceFileReference: FileMediaReference?
+    private let limitedFileRange: Range<Int64>?
+    private let streamVideo: MediaPlayerStreaming
     private let enableSound: Bool
+    private let soundMuted: Bool
+    private let beginWithAmbientSound: Bool
+    private let mixWithOthers: Bool
     private let loopVideo: Bool
     private let baseRate: Double
     private let audioSessionManager: ManagedAudioSession
+    private let isAudioVideoMessage: Bool
     private let captureProtected: Bool
+    private let continuePlayingWithoutSoundOnLostAudioSession: Bool
+    private let displayImage: Bool
     
-    private let player: MediaPlayer
+    private var player: PlayerImpl?
     private var thumbnailPlayer: MediaPlayer?
     private let imageNode: TransformImageNode
     private let playerNode: MediaPlayerNode
@@ -144,47 +340,71 @@ private final class NativeVideoContentNode: ASDisplayNode, UniversalVideoContent
         return self._bufferingStatus.get()
     }
     
+    var isNativePictureInPictureActive: Signal<Bool, NoError> {
+        return .single(false)
+    }
+    
     private let _ready = Promise<Void>()
     var ready: Signal<Void, NoError> {
         return self._ready.get()
     }
     
+    private var initializePlayerDisposable: Disposable?
     private let fetchDisposable = MetaDisposable()
     private let fetchStatusDisposable = MetaDisposable()
     
     private var dimensions: CGSize?
     private let dimensionsPromise = ValuePromise<CGSize>(CGSize())
     
-    private var validLayout: CGSize?
+    private var validLayout: (size: CGSize, actualSize: CGSize)?
     
     private var shouldPlay: Bool = false
+    private var pendingSetSoundEnabled: Bool?
+    private var pendingSeek: Double?
+    private var pendingPlayOnceWithSound: (playAndRecord: Bool, seek: MediaPlayerSeek, actionAtEnd: MediaPlayerPlayOnceWithSoundActionAtEnd)?
+    private var pendingForceAudioToSpeaker: Bool?
+    private var pendingSetSoundMuted: Bool?
+    private var pendingContinueWithOverridingAmbientMode: Bool?
+    private var pendingSetBaseRate: Double?
+    private var pendingContinuePlayingWithoutSound: MediaPlayerPlayOnceWithSoundActionAtEnd?
+    private var pendingSetContinuePlayingWithoutSoundOnLostAudioSession: Bool?
     
-    init(postbox: Postbox, audioSessionManager: ManagedAudioSession, fileReference: FileMediaReference, imageReference: ImageMediaReference?, streamVideo: MediaPlayerStreaming, loopVideo: Bool, enableSound: Bool, baseRate: Double, fetchAutomatically: Bool, onlyFullSizeThumbnail: Bool, useLargeThumbnail: Bool, autoFetchFullSizeThumbnail: Bool, startTimestamp: Double?, endTimestamp: Double?, continuePlayingWithoutSoundOnLostAudioSession: Bool = false, placeholderColor: UIColor, tempFilePath: String?, captureProtected: Bool, hintDimensions: CGSize?) {
+    private let hasSentFramesToDisplay: (() -> Void)?
+    
+    init(context: AccountContext, postbox: Postbox, audioSessionManager: ManagedAudioSession, userLocation: MediaResourceUserLocation, fileReference: FileMediaReference, previewSourceFileReference: FileMediaReference?, limitedFileRange: Range<Int64>?, imageReference: ImageMediaReference?, streamVideo: MediaPlayerStreaming, loopVideo: Bool, enableSound: Bool, soundMuted: Bool, beginWithAmbientSound: Bool, mixWithOthers: Bool, baseRate: Double, fetchAutomatically: Bool, onlyFullSizeThumbnail: Bool, useLargeThumbnail: Bool, autoFetchFullSizeThumbnail: Bool, startTimestamp: Double?, endTimestamp: Double?, continuePlayingWithoutSoundOnLostAudioSession: Bool = false, placeholderColor: UIColor, tempFilePath: String?, isAudioVideoMessage: Bool, captureProtected: Bool, hintDimensions: CGSize?, storeAfterDownload: (() -> Void)? = nil, displayImage: Bool, hasSentFramesToDisplay: (() -> Void)?) {
         self.postbox = postbox
+        self.userLocation = userLocation
         self.fileReference = fileReference
+        self.previewSourceFileReference = previewSourceFileReference
+        self.limitedFileRange = limitedFileRange
+        self.streamVideo = streamVideo
         self.placeholderColor = placeholderColor
         self.enableSound = enableSound
+        self.soundMuted = soundMuted
+        self.beginWithAmbientSound = beginWithAmbientSound
+        self.mixWithOthers = mixWithOthers
         self.loopVideo = loopVideo
         self.baseRate = baseRate
         self.audioSessionManager = audioSessionManager
+        self.isAudioVideoMessage = isAudioVideoMessage
         self.captureProtected = captureProtected
+        self.continuePlayingWithoutSoundOnLostAudioSession = continuePlayingWithoutSoundOnLostAudioSession
+        self.displayImage = displayImage
+        self.hasSentFramesToDisplay = hasSentFramesToDisplay
         
         self.imageNode = TransformImageNode()
         
-        self.player = MediaPlayer(audioSessionManager: audioSessionManager, postbox: postbox, resourceReference: fileReference.resourceReference(fileReference.media.resource), tempFilePath: tempFilePath, streamable: streamVideo, video: true, preferSoftwareDecoding: false, playAutomatically: false, enableSound: enableSound, baseRate: baseRate, fetchAutomatically: fetchAutomatically, continuePlayingWithoutSoundOnLostAudioSession: continuePlayingWithoutSoundOnLostAudioSession)
-        
-        var actionAtEndImpl: (() -> Void)?
-        if enableSound && !loopVideo {
-            self.player.actionAtEnd = .action({
-                actionAtEndImpl?()
-            })
-        } else {
-            self.player.actionAtEnd = .loop({
-                actionAtEndImpl?()
-            })
+        var userContentType = MediaResourceUserContentType(file: fileReference.media)
+        switch fileReference {
+        case .story:
+            userContentType = .story
+        default:
+            break
         }
+        
+        let selectedFile = fileReference.media
+        
         self.playerNode = MediaPlayerNode(backgroundThread: false, captureProtected: captureProtected)
-        self.player.attachPlayerNode(self.playerNode)
         
         self.dimensions = fileReference.media.dimensions?.cgSize
         if let dimensions = self.dimensions {
@@ -193,38 +413,48 @@ private final class NativeVideoContentNode: ASDisplayNode, UniversalVideoContent
         
         super.init()
         
+        var didProcessFramesToDisplay = false
+        self.playerNode.isHidden = true
+        self.playerNode.hasSentFramesToDisplay = { [weak self] in
+            guard let self, !didProcessFramesToDisplay else {
+                return
+            }
+            didProcessFramesToDisplay = true
+            self.playerNode.isHidden = false
+            self.hasSentFramesToDisplay?()
+        }
+        
         if let dimensions = hintDimensions {
             self.dimensions = dimensions
             self.dimensionsPromise.set(dimensions)
         }
         
-        actionAtEndImpl = { [weak self] in
-            self?.performActionAtEnd()
-        }
-        
-        self.imageNode.setSignal(internalMediaGridMessageVideo(postbox: postbox, videoReference: fileReference, imageReference: imageReference, onlyFullSize: onlyFullSizeThumbnail, useLargeThumbnail: useLargeThumbnail, autoFetchFullSizeThumbnail: autoFetchFullSizeThumbnail || fileReference.media.isInstantVideo) |> map { [weak self] getSize, getData in
-            Queue.mainQueue().async {
-                if let strongSelf = self, strongSelf.dimensions == nil {
-                    if let dimensions = getSize() {
-                        strongSelf.dimensions = dimensions
-                        strongSelf.dimensionsPromise.set(dimensions)
-                        if let size = strongSelf.validLayout {
-                            strongSelf.updateLayout(size: size, transition: .immediate)
+        if displayImage {
+            if captureProtected {
+                setLayerDisableScreenshots(self.imageNode.layer, captureProtected)
+            }
+            
+            self.imageNode.setSignal(internalMediaGridMessageVideo(postbox: postbox, userLocation: userLocation, videoReference: fileReference, previewSourceFileReference: previewSourceFileReference, imageReference: imageReference, onlyFullSize: onlyFullSizeThumbnail, useLargeThumbnail: useLargeThumbnail, autoFetchFullSizeThumbnail: autoFetchFullSizeThumbnail || fileReference.media.isInstantVideo) |> map { [weak self] getSize, getData in
+                Queue.mainQueue().async {
+                    if let strongSelf = self, strongSelf.dimensions == nil {
+                        if let dimensions = getSize() {
+                            strongSelf.dimensions = dimensions
+                            strongSelf.dimensionsPromise.set(dimensions)
+                            if let validLayout = strongSelf.validLayout {
+                                strongSelf.updateLayout(size: validLayout.size, actualSize: validLayout.actualSize, transition: .immediate)
+                            }
                         }
                     }
                 }
-            }
-            return getData
-        })
+                return getData
+            })
+            
+            self.addSubnode(self.imageNode)
+        }
         
-        self.addSubnode(self.imageNode)
         self.addSubnode(self.playerNode)
-        self._status.set(combineLatest(self.dimensionsPromise.get(), self.player.status)
-        |> map { dimensions, status in
-            return MediaPlayerStatus(generationTimestamp: status.generationTimestamp, duration: status.duration, dimensions: dimensions, timestamp: status.timestamp, baseRate: status.baseRate, seekId: status.seekId, status: status.status, soundEnabled: status.soundEnabled)
-        })
         
-        self.fetchStatusDisposable.set((postbox.mediaBox.resourceStatus(fileReference.media.resource)
+        self.fetchStatusDisposable.set((postbox.mediaBox.resourceStatus(selectedFile.resource)
         |> deliverOnMainQueue).start(next: { [weak self] status in
             guard let strongSelf = self else {
                 return
@@ -239,28 +469,157 @@ private final class NativeVideoContentNode: ASDisplayNode, UniversalVideoContent
             }
         }))
         
-        if let size = fileReference.media.size {
-            self._bufferingStatus.set(postbox.mediaBox.resourceRangesStatus(fileReference.media.resource) |> map { ranges in
+        if let size = selectedFile.size {
+            self._bufferingStatus.set(postbox.mediaBox.resourceRangesStatus(selectedFile.resource) |> map { ranges in
                 return (ranges, size)
             })
         } else {
             self._bufferingStatus.set(.single(nil))
         }
         
-        self.imageNode.imageUpdated = { [weak self] _ in
-            self?._ready.set(.single(Void()))
+        if self.displayImage {
+            self.imageNode.imageUpdated = { [weak self] _ in
+                self?._ready.set(.single(Void()))
+            }
+        } else {
+            self._ready.set(.single(Void()))
         }
         
         if let startTimestamp = startTimestamp {
             self.seek(startTimestamp)
         }
+        
+        var useLegacyImplementation = !context.sharedContext.immediateExperimentalUISettings.playerV2
+        if let data = context.currentAppConfiguration.with({ $0 }).data, let value = data["ios_video_legacyplayer"] as? Double {
+            useLegacyImplementation = value != 0.0
+        }
+        
+        if useLegacyImplementation {
+            let mediaPlayer = MediaPlayer(
+                audioSessionManager: audioSessionManager,
+                postbox: postbox,
+                userLocation: userLocation,
+                userContentType: userContentType,
+                resourceReference: fileReference.resourceReference(selectedFile.resource),
+                tempFilePath: tempFilePath,
+                limitedFileRange: limitedFileRange,
+                streamable: streamVideo,
+                video: true,
+                preferSoftwareDecoding: false,
+                playAutomatically: false,
+                enableSound: enableSound,
+                baseRate: baseRate,
+                fetchAutomatically: fetchAutomatically,
+                soundMuted: soundMuted,
+                ambient: beginWithAmbientSound,
+                mixWithOthers: mixWithOthers,
+                continuePlayingWithoutSoundOnLostAudioSession: continuePlayingWithoutSoundOnLostAudioSession,
+                storeAfterDownload: storeAfterDownload,
+                isAudioVideoMessage: isAudioVideoMessage
+            )
+            mediaPlayer.attachPlayerNode(self.playerNode)
+            self.initializePlayer(player: .legacy(mediaPlayer))
+        } else {
+            let mediaPlayer = ChunkMediaPlayerV2(
+                params: ChunkMediaPlayerV2.MediaDataReaderParams(context: context),
+                audioSessionManager: audioSessionManager,
+                source: .directFetch(ChunkMediaPlayerV2.SourceDescription.ResourceDescription(
+                    postbox: postbox,
+                    size: selectedFile.size ?? 0,
+                    reference: fileReference.resourceReference(selectedFile.resource),
+                    userLocation: userLocation,
+                    userContentType: userContentType,
+                    statsCategory: statsCategoryForFileWithAttributes(fileReference.media.attributes),
+                    fetchAutomatically: fetchAutomatically
+                )),
+                video: true,
+                playAutomatically: false,
+                enableSound: enableSound,
+                baseRate: baseRate,
+                soundMuted: soundMuted,
+                ambient: beginWithAmbientSound,
+                mixWithOthers: mixWithOthers,
+                continuePlayingWithoutSoundOnLostAudioSession: continuePlayingWithoutSoundOnLostAudioSession,
+                isAudioVideoMessage: isAudioVideoMessage,
+                playerNode: self.playerNode
+            )
+            self.initializePlayer(player: .chunked(mediaPlayer))
+        }
     }
     
     deinit {
-        self.player.pause()
+        self.initializePlayerDisposable?.dispose()
+        self.player?.pause()
         self.thumbnailPlayer?.pause()
         self.fetchDisposable.dispose()
         self.fetchStatusDisposable.dispose()
+    }
+    
+    private func initializePlayer(player: PlayerImpl) {
+        var player = player
+        self.player = player
+        
+        var actionAtEndImpl: (() -> Void)?
+        if self.enableSound && !self.loopVideo {
+            player.actionAtEnd = .action({
+                actionAtEndImpl?()
+            })
+        } else {
+            player.actionAtEnd = .loop({
+                actionAtEndImpl?()
+            })
+        }
+        actionAtEndImpl = { [weak self] in
+            self?.performActionAtEnd()
+        }
+        
+        self._status.set(combineLatest(self.dimensionsPromise.get(), player.status)
+        |> map { dimensions, status in
+            return MediaPlayerStatus(generationTimestamp: status.generationTimestamp, duration: status.duration, dimensions: dimensions, timestamp: status.timestamp, baseRate: status.baseRate, seekId: status.seekId, status: status.status, soundEnabled: status.soundEnabled)
+        })
+        
+        if self.shouldPlay {
+            player.play()
+        } else {
+            player.pause()
+        }
+        
+        if let pendingSeek = self.pendingSeek {
+            self.pendingSeek = nil
+            self.seek(pendingSeek)
+        }
+        if let pendingSetSoundEnabled = self.pendingSetSoundEnabled {
+            self.pendingSetSoundEnabled = nil
+            self.setSoundEnabled(pendingSetSoundEnabled)
+        }
+        if let pendingPlayOnceWithSound = self.pendingPlayOnceWithSound {
+            self.pendingPlayOnceWithSound = nil
+            self.playOnceWithSound(playAndRecord: pendingPlayOnceWithSound.playAndRecord, seek: pendingPlayOnceWithSound.seek, actionAtEnd: pendingPlayOnceWithSound.actionAtEnd)
+        }
+        if let pendingForceAudioToSpeaker = self.pendingForceAudioToSpeaker {
+            self.pendingForceAudioToSpeaker = nil
+            self.setForceAudioToSpeaker(pendingForceAudioToSpeaker)
+        }
+        if let pendingSetSoundMuted = self.pendingSetSoundMuted {
+            self.pendingSetSoundMuted = nil
+            self.setSoundMuted(soundMuted: pendingSetSoundMuted)
+        }
+        if let pendingContinueWithOverridingAmbientMode = self.pendingContinueWithOverridingAmbientMode {
+            self.pendingContinueWithOverridingAmbientMode = nil
+            self.continueWithOverridingAmbientMode(isAmbient: pendingContinueWithOverridingAmbientMode)
+        }
+        if let pendingSetBaseRate = self.pendingSetBaseRate {
+            self.pendingSetBaseRate = nil
+            self.setBaseRate(pendingSetBaseRate)
+        }
+        if let pendingContinuePlayingWithoutSound = self.pendingContinuePlayingWithoutSound {
+            self.pendingContinuePlayingWithoutSound = nil
+            self.continuePlayingWithoutSound(actionAtEnd: pendingContinuePlayingWithoutSound)
+        }
+        if let pendingSetContinuePlayingWithoutSoundOnLostAudioSession = self.pendingSetContinuePlayingWithoutSoundOnLostAudioSession {
+            self.pendingSetContinuePlayingWithoutSoundOnLostAudioSession = nil
+            self.setContinuePlayingWithoutSoundOnLostAudioSession(pendingSetContinuePlayingWithoutSoundOnLostAudioSession)
+        }
     }
     
     private func createThumbnailPlayer() {
@@ -268,7 +627,7 @@ private final class NativeVideoContentNode: ASDisplayNode, UniversalVideoContent
             return
         }
         
-        let thumbnailPlayer = MediaPlayer(audioSessionManager: self.audioSessionManager, postbox: postbox, resourceReference: fileReference.resourceReference(videoThumbnail.resource), tempFilePath: nil, streamable: .none, video: true, preferSoftwareDecoding: false, playAutomatically: false, enableSound: false, baseRate: self.baseRate, fetchAutomatically: false, continuePlayingWithoutSoundOnLostAudioSession: false)
+        let thumbnailPlayer = MediaPlayer(audioSessionManager: self.audioSessionManager, postbox: postbox, userLocation: self.userLocation, userContentType: MediaResourceUserContentType(file: self.fileReference.media), resourceReference: self.fileReference.resourceReference(videoThumbnail.resource), tempFilePath: nil, streamable: .none, video: true, preferSoftwareDecoding: false, playAutomatically: false, enableSound: false, baseRate: self.baseRate, fetchAutomatically: false, continuePlayingWithoutSoundOnLostAudioSession: false)
         self.thumbnailPlayer = thumbnailPlayer
         
         var actionAtEndImpl: (() -> Void)?
@@ -304,11 +663,14 @@ private final class NativeVideoContentNode: ASDisplayNode, UniversalVideoContent
         }
         
         var processedSentFramesToDisplay = false
-        self.playerNode.hasSentFramesToDisplay = { [weak self] in
-            guard !processedSentFramesToDisplay, let _ = self else {
+        thumbnailNode.hasSentFramesToDisplay = { [weak self] in
+            guard !processedSentFramesToDisplay, let strongSelf = self else {
                 return
             }
             processedSentFramesToDisplay = true
+            
+            strongSelf.hasSentFramesToDisplay?()
+            
             Queue.mainQueue().after(0.1, {
                 guard let strongSelf = self else {
                     return
@@ -325,8 +687,8 @@ private final class NativeVideoContentNode: ASDisplayNode, UniversalVideoContent
         }
     }
     
-    func updateLayout(size: CGSize, transition: ContainedViewLayoutTransition) {
-        self.validLayout = size
+    func updateLayout(size: CGSize, actualSize: CGSize, transition: ContainedViewLayoutTransition) {
+        self.validLayout = (size, actualSize)
         
         if let dimensions = self.dimensions {
             let imageSize = CGSize(width: floor(dimensions.width / 2.0), height: floor(dimensions.height / 2.0))
@@ -354,41 +716,55 @@ private final class NativeVideoContentNode: ASDisplayNode, UniversalVideoContent
     
     func play() {
         assert(Queue.mainQueue().isCurrent())
-        self.player.play()
+        self.player?.play()
         self.shouldPlay = true
         self.thumbnailPlayer?.play()
     }
     
     func pause() {
         assert(Queue.mainQueue().isCurrent())
-        self.player.pause()
+        self.player?.pause()
         self.shouldPlay = false
         self.thumbnailPlayer?.pause()
     }
     
     func togglePlayPause() {
         assert(Queue.mainQueue().isCurrent())
-        self.player.togglePlayPause()
+        self.player?.togglePlayPause()
         self.shouldPlay = !self.shouldPlay
         self.thumbnailPlayer?.togglePlayPause()
     }
     
     func setSoundEnabled(_ value: Bool) {
         assert(Queue.mainQueue().isCurrent())
-        if value {
-            self.player.playOnceWithSound(playAndRecord: true)
+        if let player = self.player {
+            if value {
+                player.playOnceWithSound(playAndRecord: false, seek: .none)
+            } else {
+                player.continuePlayingWithoutSound(seek: .none)
+            }
         } else {
-            self.player.continuePlayingWithoutSound()
+            self.pendingSetSoundEnabled = value
         }
     }
     
     func seek(_ timestamp: Double) {
         assert(Queue.mainQueue().isCurrent())
-        self.player.seek(timestamp: timestamp)
+        if let player = self.player {
+            player.seek(timestamp: timestamp)
+        } else {
+            self.pendingSeek = timestamp
+        }
     }
     
     func playOnceWithSound(playAndRecord: Bool, seek: MediaPlayerSeek, actionAtEnd: MediaPlayerPlayOnceWithSoundActionAtEnd) {
         assert(Queue.mainQueue().isCurrent())
+        
+        guard var player = self.player else {
+            self.pendingPlayOnceWithSound = (playAndRecord, seek, actionAtEnd)
+            return
+        }
+        
         let action = { [weak self] in
             Queue.mainQueue().async {
                 self?.performActionAtEnd()
@@ -396,63 +772,108 @@ private final class NativeVideoContentNode: ASDisplayNode, UniversalVideoContent
         }
         switch actionAtEnd {
             case .loop:
-                self.player.actionAtEnd = .loop({})
+                player.actionAtEnd = .loop({})
             case .loopDisablingSound:
-                self.player.actionAtEnd = .loopDisablingSound(action)
+                player.actionAtEnd = .loopDisablingSound(action)
             case .stop:
-                self.player.actionAtEnd = .action(action)
+                player.actionAtEnd = .action(action)
             case .repeatIfNeeded:
-                let _ = (self.player.status
+                let _ = (player.status
                 |> deliverOnMainQueue
                 |> take(1)).start(next: { [weak self] status in
-                    guard let strongSelf = self else {
+                    guard let strongSelf = self, var player = strongSelf.player else {
                         return
                     }
                     if status.timestamp > status.duration * 0.1 {
-                        strongSelf.player.actionAtEnd = .loop({ [weak self] in
-                            guard let strongSelf = self else {
+                        player.actionAtEnd = .loop({ [weak self] in
+                            guard let strongSelf = self, var player = strongSelf.player else {
                                 return
                             }
-                            strongSelf.player.actionAtEnd = .loopDisablingSound(action)
+                            player.actionAtEnd = .loopDisablingSound(action)
                         })
                     } else {
-                        strongSelf.player.actionAtEnd = .loopDisablingSound(action)
+                        player.actionAtEnd = .loopDisablingSound(action)
                     }
                 })
         }
         
-        self.player.playOnceWithSound(playAndRecord: playAndRecord, seek: seek)
+        player.playOnceWithSound(playAndRecord: playAndRecord, seek: seek)
     }
     
     func setForceAudioToSpeaker(_ forceAudioToSpeaker: Bool) {
         assert(Queue.mainQueue().isCurrent())
-        self.player.setForceAudioToSpeaker(forceAudioToSpeaker)
+        if let player = self.player {
+            player.setForceAudioToSpeaker(forceAudioToSpeaker)
+        } else {
+            self.pendingForceAudioToSpeaker = forceAudioToSpeaker
+        }
+    }
+    
+    func setSoundMuted(soundMuted: Bool) {
+        if let player = self.player {
+            player.setSoundMuted(soundMuted: soundMuted)
+        } else {
+            self.pendingSetSoundMuted = soundMuted
+        }
+    }
+    
+    func continueWithOverridingAmbientMode(isAmbient: Bool) {
+        if let player = self.player {
+            player.continueWithOverridingAmbientMode(isAmbient: isAmbient)
+        } else {
+            self.pendingContinueWithOverridingAmbientMode = isAmbient
+        }
     }
     
     func setBaseRate(_ baseRate: Double) {
-        self.player.setBaseRate(baseRate)
+        if let player = self.player {
+            player.setBaseRate(baseRate)
+        } else {
+            self.pendingSetBaseRate = baseRate
+        }
+    }
+    
+    func setVideoQuality(_ quality: UniversalVideoContentVideoQuality) {
+    }
+    
+    func videoQualityState() -> (current: Int, preferred: UniversalVideoContentVideoQuality, available: [Int])? {
+        return nil
+    }
+    
+    func videoQualityStateSignal() -> Signal<(current: Int, preferred: UniversalVideoContentVideoQuality, available: [Int])?, NoError> {
+        return .single(nil)
     }
     
     func continuePlayingWithoutSound(actionAtEnd: MediaPlayerPlayOnceWithSoundActionAtEnd) {
         assert(Queue.mainQueue().isCurrent())
+        
+        guard var player = self.player else {
+            self.pendingContinuePlayingWithoutSound = actionAtEnd
+            return
+        }
+        
         let action = { [weak self] in
             Queue.mainQueue().async {
                 self?.performActionAtEnd()
             }
         }
         switch actionAtEnd {
-            case .loop:
-                self.player.actionAtEnd = .loop({})
-            case .loopDisablingSound, .repeatIfNeeded:
-                self.player.actionAtEnd = .loopDisablingSound(action)
-            case .stop:
-                self.player.actionAtEnd = .action(action)
+        case .loop:
+            player.actionAtEnd = .loop({})
+        case .loopDisablingSound, .repeatIfNeeded:
+            player.actionAtEnd = .loopDisablingSound(action)
+        case .stop:
+            player.actionAtEnd = .action(action)
         }
-        self.player.continuePlayingWithoutSound()
+        player.continuePlayingWithoutSound()
     }
     
     func setContinuePlayingWithoutSoundOnLostAudioSession(_ value: Bool) {
-        self.player.setContinuePlayingWithoutSoundOnLostAudioSession(value)
+        if let player = self.player {
+            player.setContinuePlayingWithoutSoundOnLostAudioSession(value)
+        } else {
+            self.pendingSetContinuePlayingWithoutSoundOnLostAudioSession = value
+        }
     }
     
     func addPlaybackCompleted(_ f: @escaping () -> Void) -> Int {
@@ -466,7 +887,7 @@ private final class NativeVideoContentNode: ASDisplayNode, UniversalVideoContent
     func fetchControl(_ control: UniversalVideoNodeFetchControl) {
         switch control {
             case .fetch:
-                self.fetchDisposable.set(fetchedMediaResource(mediaBox: self.postbox.mediaBox, reference: self.fileReference.resourceReference(self.fileReference.media.resource), statsCategory: statsCategoryForFileWithAttributes(self.fileReference.media.attributes)).start())
+            self.fetchDisposable.set(fetchedMediaResource(mediaBox: self.postbox.mediaBox, userLocation: self.userLocation, userContentType: .video, reference: self.fileReference.resourceReference(self.fileReference.media.resource), statsCategory: statsCategoryForFileWithAttributes(self.fileReference.media.attributes)).start())
             case .cancel:
                 self.postbox.mediaBox.cancelInteractiveResourceFetch(self.fileReference.media.resource)
         }
@@ -477,5 +898,16 @@ private final class NativeVideoContentNode: ASDisplayNode, UniversalVideoContent
 
     func setCanPlaybackWithoutHierarchy(_ canPlaybackWithoutHierarchy: Bool) {
         self.playerNode.setCanPlaybackWithoutHierarchy(canPlaybackWithoutHierarchy)
+    }
+    
+    func enterNativePictureInPicture() -> Bool {
+        return false
+    }
+    
+    func exitNativePictureInPicture() {
+    }
+    
+    func setNativePictureInPictureIsActive(_ value: Bool) {
+        self.imageNode.isHidden = value
     }
 }

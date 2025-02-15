@@ -4,7 +4,7 @@ import SwiftSignalKit
 import TelegramApi
 
 func _internal_topPeerActiveLiveLocationMessages(viewTracker: AccountViewTracker, accountPeerId: PeerId, peerId: PeerId) -> Signal<(Peer?, [Message]), NoError> {
-    return viewTracker.aroundMessageHistoryViewForLocation(.peer(peerId: peerId, threadId: nil), index: .upperBound, anchorIndex: .upperBound, count: 50, fixedCombinedReadStates: nil, tagMask: .liveLocation, orderStatistics: [], additionalData: [.peer(accountPeerId)])
+    return viewTracker.aroundMessageHistoryViewForLocation(.peer(peerId: peerId, threadId: nil), index: .upperBound, anchorIndex: .upperBound, count: 50, fixedCombinedReadStates: nil, tag: .tag(.liveLocation), orderStatistics: [], additionalData: [.peer(accountPeerId)])
     |> map { (view, _, _) -> (Peer?, [Message]) in
         var accountPeer: Peer?
         for entry in view.additionalData {
@@ -19,7 +19,7 @@ func _internal_topPeerActiveLiveLocationMessages(viewTracker: AccountViewTracker
         for entry in view.entries {
             for media in entry.message.media {
                 if let location = media as? TelegramMediaMap, let liveBroadcastingTimeout = location.liveBroadcastingTimeout {
-                    if entry.message.timestamp + liveBroadcastingTimeout > timestamp {
+                    if liveBroadcastingTimeout == liveLocationIndefinitePeriod || entry.message.timestamp + liveBroadcastingTimeout > timestamp {
                         result.append(entry.message)
                     }
                 } else {

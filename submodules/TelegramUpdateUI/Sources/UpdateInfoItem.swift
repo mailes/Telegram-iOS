@@ -362,7 +362,7 @@ class UpdateInfoItemNode: ListViewItemNode {
         }
     }
     
-    override func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
+    override func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.4)
     }
     
@@ -431,7 +431,7 @@ class UpdateInfoItemNode: ListViewItemNode {
                 if let current = self.linkHighlightingNode {
                     linkHighlightingNode = current
                 } else {
-                    linkHighlightingNode = LinkHighlightingNode(color: item.theme.list.itemAccentColor.withAlphaComponent(0.5))
+                    linkHighlightingNode = LinkHighlightingNode(color: item.theme.list.itemAccentColor.withAlphaComponent(0.2))
                     self.linkHighlightingNode = linkHighlightingNode
                     self.insertSubnode(linkHighlightingNode, belowSubnode: self.textNode)
                 }

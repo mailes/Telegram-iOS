@@ -100,7 +100,7 @@ private enum InviteRequestsEntry: ItemListNodeEntry {
         let arguments = arguments as! InviteRequestsControllerArguments
         switch self {
             case let .header(theme, text):
-                return InviteLinkHeaderItem(context: arguments.context, theme: theme, text: text, animationName: "Requests", sectionId: self.section, linkAction: { _ in
+                return InviteLinkHeaderItem(context: arguments.context, theme: theme, text: NSAttributedString(string: text), animationName: "Requests", sectionId: self.section, linkAction: { _ in
                     arguments.openLinks()
                 })
             case let .requestsHeader(_, text):
@@ -198,7 +198,7 @@ public func inviteRequestsController(context: AccountContext, updatedPresentatio
             } else {
                 string = presentationData.strings.MemberRequests_UserAddedToGroup(peer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)).string
             }
-            presentControllerImpl?(UndoOverlayController(presentationData: presentationData, content: .invitedToVoiceChat(context: context, peer: peer, text: string, action: nil), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), nil)
+            presentControllerImpl?(UndoOverlayController(presentationData: presentationData, content: .invitedToVoiceChat(context: context, peer: peer, title: nil, text: string, action: nil, duration: 3), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), nil)
         })
     }
     
@@ -268,7 +268,7 @@ public func inviteRequestsController(context: AccountContext, updatedPresentatio
     //            dismissPromise.set(true)
     //        }
             
-            let contextController = ContextController(account: context.account, presentationData: presentationData, source: .extracted(source), items: .single(ContextController.Items(content: .list(items))), gesture: gesture)
+            let contextController = ContextController(presentationData: presentationData, source: .extracted(source), items: .single(ContextController.Items(content: .list(items))), gesture: gesture)
             presentInGlobalOverlayImpl?(contextController)
         })
     })

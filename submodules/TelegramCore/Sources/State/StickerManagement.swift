@@ -2,6 +2,7 @@ import Foundation
 import TelegramApi
 import Postbox
 import SwiftSignalKit
+import MtProtoKit
 
 enum FeaturedStickerPacksCategory {
     case stickerPacks
@@ -37,6 +38,18 @@ private func hashForIdsReverse(_ ids: [Int64]) -> Int64 {
     return Int64(bitPattern: acc)
 }
 
+private func hashForIdsReverse(_ ids: [Int64], unreadIds: [Int64]) -> Int64 {
+    var acc: UInt64 = 0
+    
+    for id in ids {
+        combineInt64Hash(&acc, with: UInt64(bitPattern: id))
+        if unreadIds.contains(id) {
+            combineInt64Hash(&acc, with: 1 as UInt64)
+        }
+    }
+    return Int64(bitPattern: acc)
+}
+
 func manageStickerPacks(network: Network, postbox: Postbox) -> Signal<Void, NoError> {
     return (postbox.transaction { transaction -> Void in
         addSynchronizeInstalledStickerPacksOperation(transaction: transaction, namespace: .stickers, content: .sync, noDelay: false)
@@ -48,19 +61,69 @@ func manageStickerPacks(network: Network, postbox: Postbox) -> Signal<Void, NoEr
     } |> then(.complete() |> suspendAwareDelay(1.0 * 60.0 * 60.0, queue: Queue.concurrentDefaultQueue()))) |> restart
 }
 
+func resolveMissingStickerSets(network: Network, postbox: Postbox, stickerSets: [Api.StickerSetCovered], ignorePacksWithHashes: [Int64: Int32]) -> Signal<[Api.StickerSetCovered], NoError> {
+    var missingSignals: [Signal<(Int, Api.StickerSetCovered)?, NoError>] = []
+    for i in 0 ..< stickerSets.count {
+        switch stickerSets[i] {
+        case let .stickerSetNoCovered(value), let .stickerSetCovered(value, _):
+            switch value {
+            case let .stickerSet(_, _, id, accessHash, _, _, _, _, _, _, _, hash):
+                if ignorePacksWithHashes[id] == hash {
+                    continue
+                }
+                
+                missingSignals.append(network.request(Api.functions.messages.getStickerSet(stickerset: .inputStickerSetID(id: id, accessHash: accessHash), hash: 0))
+                |> map(Optional.init)
+                |> `catch` { _ -> Signal<Api.messages.StickerSet?, NoError> in
+                    return .single(nil)
+                }
+                |> map { result -> (Int, Api.StickerSetCovered)? in
+                    if let result = result {
+                        switch result {
+                        case let .stickerSet(set, packs, keywords, documents):
+                            return (i, Api.StickerSetCovered.stickerSetFullCovered(set: set, packs: packs, keywords: keywords, documents: documents))
+                        case .stickerSetNotModified:
+                            return nil
+                        }
+                    } else {
+                        return nil
+                    }
+                })
+            }
+        default:
+            break
+        }
+    }
+    
+    return combineLatest(missingSignals)
+    |> map { results -> [Api.StickerSetCovered] in
+        var updatedSets = stickerSets
+        for result in results {
+            if let result = result {
+                updatedSets[result.0] = result.1
+            }
+        }
+        return updatedSets
+    }
+}
+
 func updatedFeaturedStickerPacks(network: Network, postbox: Postbox, category: FeaturedStickerPacksCategory) -> Signal<Void, NoError> {
     return postbox.transaction { transaction -> Signal<Void, NoError> in
         let initialPacks = transaction.getOrderedListItems(collectionId: category.itemListNamespace)
         var initialPackMap: [Int64: FeaturedStickerPackItem] = [:]
+        var unreadIds: [Int64] = []
         for entry in initialPacks {
             let item = entry.contents.get(FeaturedStickerPackItem.self)!
             initialPackMap[FeaturedStickerPackItemId(entry.id).packId] = item
+            if item.unread {
+                unreadIds.append(item.info.id.id)
+            }
         }
         
         let initialPackIds = initialPacks.map {
             return FeaturedStickerPackItemId($0.id).packId
         }
-        let initialHash: Int64 = hashForIdsReverse(initialPackIds)
+        let initialHash: Int64 = hashForIdsReverse(initialPackIds, unreadIds: unreadIds)
         
         struct FeaturedListContent {
             var unreadIds: Set<Int64>
@@ -75,28 +138,36 @@ func updatedFeaturedStickerPacks(network: Network, postbox: Postbox, category: F
         switch category {
         case .stickerPacks:
             signal = network.request(Api.functions.messages.getFeaturedStickers(hash: initialHash))
-            |> map { result -> FeaturedList in
+            |> mapToSignal { result -> Signal<FeaturedList, MTRpcError> in
                 switch result {
                 case .featuredStickersNotModified:
-                    return .notModified
+                    return .single(.notModified)
                 case let .featuredStickers(flags, _, _, sets, unread):
-                    let unreadIds = Set(unread)
-                    var updatedPacks: [FeaturedStickerPackItem] = []
-                    for set in sets {
-                        var (info, items) = parsePreviewStickerSet(set, namespace: category.collectionIdNamespace)
-                        if let previousPack = initialPackMap[info.id.id] {
-                            if previousPack.info.hash == info.hash {
-                                items = previousPack.topItems
+                    return resolveMissingStickerSets(network: network, postbox: postbox, stickerSets: sets, ignorePacksWithHashes: initialPackMap.filter { $0.value.topItems.count > 1 }.mapValues({ item in
+                        item.info.hash
+                    }))
+                    |> castError(MTRpcError.self)
+                    |> map { sets -> FeaturedList in
+                        let unreadIds = Set(unread)
+                        var updatedPacks: [FeaturedStickerPackItem] = []
+                        for set in sets {
+                            var (info, items) = parsePreviewStickerSet(set, namespace: category.collectionIdNamespace)
+                            if let previousPack = initialPackMap[info.id.id] {
+                                if previousPack.info.hash == info.hash, previousPack.topItems.count > 1 {
+                                    items = previousPack.topItems
+                                } else {
+                                    items = Array(items.prefix(5))
+                                }
                             }
+                            updatedPacks.append(FeaturedStickerPackItem(info: info, topItems: items, unread: unreadIds.contains(info.id.id)))
                         }
-                        updatedPacks.append(FeaturedStickerPackItem(info: info, topItems: items, unread: unreadIds.contains(info.id.id)))
+                        let isPremium = flags & (1 << 0) != 0
+                        return .content(FeaturedListContent(
+                            unreadIds: unreadIds,
+                            packs: updatedPacks,
+                            isPremium: isPremium
+                        ))
                     }
-                    let isPremium = flags & (1 << 0) != 0
-                    return .content(FeaturedListContent(
-                        unreadIds: unreadIds,
-                        packs: updatedPacks,
-                        isPremium: isPremium
-                    ))
                 }
             }
             |> `catch` { _ -> Signal<FeaturedList, NoError> in
@@ -104,28 +175,34 @@ func updatedFeaturedStickerPacks(network: Network, postbox: Postbox, category: F
             }
         case .emojiPacks:
             signal = network.request(Api.functions.messages.getFeaturedEmojiStickers(hash: initialHash))
-            |> map { result -> FeaturedList in
+            |> mapToSignal { result -> Signal<FeaturedList, MTRpcError> in
                 switch result {
                 case .featuredStickersNotModified:
-                    return .notModified
+                    return .single(.notModified)
                 case let .featuredStickers(flags, _, _, sets, unread):
-                    let unreadIds = Set(unread)
-                    var updatedPacks: [FeaturedStickerPackItem] = []
-                    for set in sets {
-                        var (info, items) = parsePreviewStickerSet(set, namespace: category.collectionIdNamespace)
-                        if let previousPack = initialPackMap[info.id.id] {
-                            if previousPack.info.hash == info.hash {
-                                items = previousPack.topItems
+                    return resolveMissingStickerSets(network: network, postbox: postbox, stickerSets: sets, ignorePacksWithHashes: initialPackMap.mapValues({ item in
+                        item.info.hash
+                    }))
+                    |> castError(MTRpcError.self)
+                    |> map { sets -> FeaturedList in
+                        let unreadIds = Set(unread)
+                        var updatedPacks: [FeaturedStickerPackItem] = []
+                        for set in sets {
+                            var (info, items) = parsePreviewStickerSet(set, namespace: category.collectionIdNamespace)
+                            if let previousPack = initialPackMap[info.id.id] {
+                                if previousPack.info.hash == info.hash {
+                                    items = previousPack.topItems
+                                }
                             }
+                            updatedPacks.append(FeaturedStickerPackItem(info: info, topItems: items, unread: unreadIds.contains(info.id.id)))
                         }
-                        updatedPacks.append(FeaturedStickerPackItem(info: info, topItems: items, unread: unreadIds.contains(info.id.id)))
+                        let isPremium = flags & (1 << 0) != 0
+                        return .content(FeaturedListContent(
+                            unreadIds: unreadIds,
+                            packs: updatedPacks,
+                            isPremium: isPremium
+                        ))
                     }
-                    let isPremium = flags & (1 << 0) != 0
-                    return .content(FeaturedListContent(
-                        unreadIds: unreadIds,
-                        packs: updatedPacks,
-                        isPremium: isPremium
-                    ))
                 }
             }
             |> `catch` { _ -> Signal<FeaturedList, NoError> in
@@ -214,7 +291,7 @@ func parsePreviewStickerSet(_ set: Api.StickerSetCovered, namespace: ItemCollect
     case let .stickerSetCovered(set, cover):
         let info = StickerPackCollectionInfo(apiSet: set, namespace: namespace)
         var items: [StickerPackItem] = []
-        if let file = telegramMediaFileFromApiDocument(cover), let id = file.id {
+        if let file = telegramMediaFileFromApiDocument(cover, altDocuments: []), let id = file.id {
             items.append(StickerPackItem(index: ItemCollectionItemIndex(index: 0, id: id.id), file: file, indexKeys: []))
         }
         return (info, items)
@@ -222,7 +299,7 @@ func parsePreviewStickerSet(_ set: Api.StickerSetCovered, namespace: ItemCollect
         let info = StickerPackCollectionInfo(apiSet: set, namespace: namespace)
         var items: [StickerPackItem] = []
         for cover in covers {
-            if let file = telegramMediaFileFromApiDocument(cover), let id = file.id {
+            if let file = telegramMediaFileFromApiDocument(cover, altDocuments: []), let id = file.id {
                 items.append(StickerPackItem(index: ItemCollectionItemIndex(index: 0, id: id.id), file: file, indexKeys: []))
             }
         }
@@ -262,7 +339,7 @@ func parsePreviewStickerSet(_ set: Api.StickerSetCovered, namespace: ItemCollect
         let info = StickerPackCollectionInfo(apiSet: set, namespace: namespace)
         var items: [StickerPackItem] = []
         for document in documents {
-            if let file = telegramMediaFileFromApiDocument(document), let id = file.id {
+            if let file = telegramMediaFileFromApiDocument(document, altDocuments: []), let id = file.id {
                 let fileIndexKeys: [MemoryBuffer]
                 if let indexKeys = indexKeysByFile[id] {
                     fileIndexKeys = indexKeys
@@ -272,6 +349,10 @@ func parsePreviewStickerSet(_ set: Api.StickerSetCovered, namespace: ItemCollect
                 items.append(StickerPackItem(index: ItemCollectionItemIndex(index: 0, id: id.id), file: file, indexKeys: fileIndexKeys))
             }
         }
+        return (info, items)
+    case let .stickerSetNoCovered(set):
+        let info = StickerPackCollectionInfo(apiSet: set, namespace: namespace)
+        let items: [StickerPackItem] = []
         return (info, items)
     }
 }

@@ -2,23 +2,21 @@ import Foundation
 import UIKit
 import AsyncDisplayKit
 import Display
-import Postbox
 import TelegramCore
 import TelegramPresentationData
 import SegmentedControlNode
 
-final class LocationOptionsNode: ASDisplayNode {
+public final class LocationOptionsNode: ASDisplayNode {
     private var presentationData: PresentationData
     
-    private let backgroundNode: ASDisplayNode
+    private let backgroundNode: NavigationBackgroundNode
     private let separatorNode: ASDisplayNode
     private let segmentedControlNode: SegmentedControlNode
     
-    init(presentationData: PresentationData, updateMapMode: @escaping (LocationMapMode) -> Void) {
+    public init(presentationData: PresentationData, hasBackground: Bool = true, updateMapMode: @escaping (LocationMapMode) -> Void) {
         self.presentationData = presentationData
         
-        self.backgroundNode = ASDisplayNode()
-        self.backgroundNode.backgroundColor = self.presentationData.theme.rootController.navigationBar.opaqueBackgroundColor
+        self.backgroundNode = NavigationBackgroundNode(color: self.presentationData.theme.rootController.navigationBar.blurredBackgroundColor)
         self.separatorNode = ASDisplayNode()
         self.separatorNode.backgroundColor = self.presentationData.theme.rootController.navigationBar.separatorColor
         
@@ -26,8 +24,11 @@ final class LocationOptionsNode: ASDisplayNode {
                 
         super.init()
         
-        self.addSubnode(self.backgroundNode)
-        self.addSubnode(self.separatorNode)
+        if hasBackground {
+            self.addSubnode(self.backgroundNode)
+            self.addSubnode(self.separatorNode)
+        }
+        
         self.addSubnode(self.segmentedControlNode)
         
         self.segmentedControlNode.selectedIndexChanged = { index in
@@ -44,15 +45,17 @@ final class LocationOptionsNode: ASDisplayNode {
         }
     }
     
-    func updatePresentationData(_ presentationData: PresentationData) {
+    public func updatePresentationData(_ presentationData: PresentationData) {
         self.presentationData = presentationData
-        self.backgroundNode.backgroundColor = self.presentationData.theme.rootController.navigationBar.opaqueBackgroundColor
+        self.backgroundNode.updateColor(color: self.presentationData.theme.rootController.navigationBar.blurredBackgroundColor, transition: .immediate)
         self.separatorNode.backgroundColor = self.presentationData.theme.rootController.navigationBar.separatorColor
         self.segmentedControlNode.updateTheme(SegmentedControlTheme(theme: self.presentationData.theme))
     }
     
-    func updateLayout(size: CGSize, leftInset: CGFloat, rightInset: CGFloat, transition: ContainedViewLayoutTransition) {
+    public func updateLayout(size: CGSize, leftInset: CGFloat, rightInset: CGFloat, transition: ContainedViewLayoutTransition) {
         transition.updateFrame(node: self.backgroundNode, frame: CGRect(origin: CGPoint(), size: size))
+        self.backgroundNode.update(size: size, transition: transition)
+        
         transition.updateFrame(node: self.separatorNode, frame: CGRect(x: 0.0, y: size.height, width: size.width, height: UIScreenPixel))
         
         let controlSize = self.segmentedControlNode.updateLayout(.stretchToFill(width: size.width - 16.0 - leftInset - rightInset), transition: .immediate)

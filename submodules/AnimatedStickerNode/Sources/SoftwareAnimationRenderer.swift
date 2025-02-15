@@ -7,20 +7,30 @@ import YuvConversion
 import Accelerate
 
 final class SoftwareAnimationRenderer: ASDisplayNode, AnimationRenderer {
+    private let templateImageSupport: Bool
+    
     private var highlightedContentNode: ASDisplayNode?
     private var highlightedColor: UIColor?
     private var highlightReplacesContent = false
+    public var renderAsTemplateImage: Bool = false
     
-    public var currentFrameImage: UIImage? {
-        if let contents = self.contents {
-            return UIImage(cgImage: contents as! CGImage)
-        } else {
-            return nil
+    public private(set) var currentFrameImage: UIImage?
+    
+    init(templateImageSupport: Bool) {
+        self.templateImageSupport = templateImageSupport
+        
+        super.init()
+        
+        if templateImageSupport {
+            self.setViewBlock({
+                return UIImageView()
+            })
         }
     }
         
-    func render(queue: Queue, width: Int, height: Int, bytesPerRow: Int, data: Data, type: AnimationRendererFrameType, mulAlpha: Bool, completion: @escaping () -> Void) {
+    func render(queue: Queue, width: Int, height: Int, bytesPerRow: Int, data: Data, type: AnimationRendererFrameType, mulAlpha: Bool, completion: @escaping () -> Void, averageColor: ((UIColor) -> Void)?) {
         assert(bytesPerRow > 0)
+        let renderAsTemplateImage = self.renderAsTemplateImage
         queue.async { [weak self] in
             switch type {
             case .argb:
@@ -33,6 +43,7 @@ final class SoftwareAnimationRenderer: ASDisplayNode, AnimationRenderer {
             }
             
             var image: UIImage?
+            var averageColorValue: UIColor?
             
             autoreleasepool {
                 image = generateImagePixel(CGSize(width: CGFloat(width), height: CGFloat(height)), scale: 1.0, pixelGenerator: { _, pixelData, contextBytesPerRow in
@@ -70,18 +81,123 @@ final class SoftwareAnimationRenderer: ASDisplayNode, AnimationRenderer {
                         break
                     }
                 })
+                if renderAsTemplateImage {
+                    image = image?.withRenderingMode(.alwaysTemplate)
+                }
+                
+                if averageColor != nil {
+                    let blurredWidth = 16
+                    let blurredHeight = 16
+                    let blurredBytesPerRow = blurredWidth * 4
+                    guard let context = DrawingContext(size: CGSize(width: CGFloat(blurredWidth), height: CGFloat(blurredHeight)), scale: 1.0, opaque: true, bytesPerRow: blurredBytesPerRow) else {
+                        return
+                    }
+                    
+                    let size = CGSize(width: CGFloat(blurredWidth), height: CGFloat(blurredHeight))
+                    
+                    if let image, let cgImage = image.cgImage {
+                        context.withFlippedContext { c in
+                            c.setFillColor(UIColor.white.cgColor)
+                            c.fill(CGRect(origin: CGPoint(), size: size))
+                            c.draw(cgImage, in: CGRect(origin: CGPoint(x: -size.width / 2.0, y: -size.height / 2.0), size: CGSize(width: size.width * 1.8, height: size.height * 1.8)))
+                        }
+                    }
+                        
+                    var destinationBuffer = vImage_Buffer()
+                    destinationBuffer.width = UInt(blurredWidth)
+                    destinationBuffer.height = UInt(blurredHeight)
+                    destinationBuffer.data = context.bytes
+                    destinationBuffer.rowBytes = context.bytesPerRow
+                    
+                    vImageBoxConvolve_ARGB8888(&destinationBuffer,
+                                               &destinationBuffer,
+                                               nil,
+                                               0, 0,
+                                               UInt32(15),
+                                               UInt32(15),
+                                               nil,
+                                               vImage_Flags(kvImageTruncateKernel))
+                    
+                    let divisor: Int32 = 0x1000
+
+                    let rwgt: CGFloat = 0.3086
+                    let gwgt: CGFloat = 0.6094
+                    let bwgt: CGFloat = 0.0820
+
+                    let adjustSaturation: CGFloat = 1.7
+
+                    let a = (1.0 - adjustSaturation) * rwgt + adjustSaturation
+                    let b = (1.0 - adjustSaturation) * rwgt
+                    let c = (1.0 - adjustSaturation) * rwgt
+                    let d = (1.0 - adjustSaturation) * gwgt
+                    let e = (1.0 - adjustSaturation) * gwgt + adjustSaturation
+                    let f = (1.0 - adjustSaturation) * gwgt
+                    let g = (1.0 - adjustSaturation) * bwgt
+                    let h = (1.0 - adjustSaturation) * bwgt
+                    let i = (1.0 - adjustSaturation) * bwgt + adjustSaturation
+
+                    let satMatrix: [CGFloat] = [
+                        a, b, c, 0,
+                        d, e, f, 0,
+                        g, h, i, 0,
+                        0, 0, 0, 1
+                    ]
+
+                    var matrix: [Int16] = satMatrix.map { value in
+                        return Int16(value * CGFloat(divisor))
+                    }
+
+                    vImageMatrixMultiply_ARGB8888(&destinationBuffer, &destinationBuffer, &matrix, divisor, nil, nil, vImage_Flags(kvImageDoNotTile))
+                    
+                    context.withFlippedContext { c in
+                        c.setFillColor(UIColor.white.withMultipliedAlpha(0.1).cgColor)
+                        c.fill(CGRect(origin: CGPoint(), size: size))
+                    }
+                    
+                    var sumR: UInt64 = 0
+                    var sumG: UInt64 = 0
+                    var sumB: UInt64 = 0
+                    var sumA: UInt64 = 0
+                    
+                    for y in 0 ..< blurredHeight {
+                        let row = context.bytes.assumingMemoryBound(to: UInt8.self).advanced(by: y * blurredBytesPerRow)
+                        for x in 0 ..< blurredWidth {
+                            let pixel = row.advanced(by: x * 4)
+                            sumB += UInt64(pixel.advanced(by: 0).pointee)
+                            sumG += UInt64(pixel.advanced(by: 1).pointee)
+                            sumR += UInt64(pixel.advanced(by: 2).pointee)
+                            sumA += UInt64(pixel.advanced(by: 3).pointee)
+                        }
+                    }
+                    sumR /= UInt64(blurredWidth * blurredHeight)
+                    sumG /= UInt64(blurredWidth * blurredHeight)
+                    sumB /= UInt64(blurredWidth * blurredHeight)
+                    sumA /= UInt64(blurredWidth * blurredHeight)
+                    sumA = 255
+                    
+                    averageColorValue = UIColor(red: CGFloat(sumR) / 255.0, green: CGFloat(sumG) / 255.0, blue: CGFloat(sumB) / 255.0, alpha: CGFloat(sumA) / 255.0)
+                }
             }
             
             Queue.mainQueue().async {
                 guard let strongSelf = self else {
                     return
                 }
-                strongSelf.contents = image?.cgImage
+                strongSelf.currentFrameImage = image
+                if strongSelf.templateImageSupport {
+                    (strongSelf.view as? UIImageView)?.image = image
+                } else {
+                    strongSelf.contents = image?.cgImage
+                }
                 strongSelf.updateHighlightedContentNode()
                 if strongSelf.highlightedContentNode?.frame != strongSelf.bounds {
                     strongSelf.highlightedContentNode?.frame = strongSelf.bounds
                 }
                 completion()
+                
+                if let averageColor, let averageColorValue {
+                    averageColor(averageColorValue)
+                }
             }
         }
     }
@@ -90,12 +206,14 @@ final class SoftwareAnimationRenderer: ASDisplayNode, AnimationRenderer {
         guard let highlightedContentNode = self.highlightedContentNode, let highlightedColor = self.highlightedColor else {
             return
         }
-        if let contents = self.contents, CFGetTypeID(contents as CFTypeRef) == CGImage.typeID {
-            (highlightedContentNode.view as! UIImageView).image = UIImage(cgImage: contents as! CGImage).withRenderingMode(.alwaysTemplate)
-        }
+        (highlightedContentNode.view as! UIImageView).image = self.currentFrameImage?.withRenderingMode(.alwaysTemplate)
         highlightedContentNode.tintColor = highlightedColor
         if self.highlightReplacesContent {
-            self.contents = nil
+            if self.templateImageSupport {
+                (self.view as? UIImageView)?.image = nil
+            } else {
+                self.contents = nil
+            }
         }
     }
             

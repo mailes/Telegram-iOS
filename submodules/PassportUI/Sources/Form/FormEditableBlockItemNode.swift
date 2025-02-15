@@ -6,7 +6,7 @@ import TelegramPresentationData
 import ItemListUI
 import PresentationDataUtils
 
-class FormEditableBlockItemNode<Item: FormControllerItem>: ASDisplayNode, FormControllerItemNode, FormBlockItemNodeProto, UIGestureRecognizerDelegate {
+class FormEditableBlockItemNode<Item: FormControllerItem>: ASDisplayNode, FormControllerItemNode, FormBlockItemNodeProto, ASGestureRecognizerDelegate {
     private let topSeparatorInset: FormBlockItemInset
     
     private let highlightedBackgroundNode: ASDisplayNode
@@ -259,7 +259,7 @@ class FormEditableBlockItemNode<Item: FormControllerItem>: ASDisplayNode, FormCo
             }, tapticAction: { [weak self] in
                     self?.hapticImpact()
             })
-            revealNode.setOptions(self.revealOptions.left, isLeft: true)
+            revealNode.setOptions(self.revealOptions.left, isLeft: true, enableAnimations: true)
             self.leftRevealNode = revealNode
             
             if let (size, leftInset, _) = self.validLayout {
@@ -281,7 +281,7 @@ class FormEditableBlockItemNode<Item: FormControllerItem>: ASDisplayNode, FormCo
                 }, tapticAction: { [weak self] in
                     self?.hapticImpact()
             })
-            revealNode.setOptions(self.revealOptions.right, isLeft: false)
+            revealNode.setOptions(self.revealOptions.right, isLeft: false, enableAnimations: true)
             self.rightRevealNode = revealNode
             
             if let (size, _, rightInset) = self.validLayout {

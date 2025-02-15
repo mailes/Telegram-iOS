@@ -10,9 +10,51 @@ import MozjpegBinding
 import Accelerate
 import ManagedFile
 
-private func generateBlurredThumbnail(image: UIImage) -> UIImage? {
+private func adjustSaturationInContext(context: DrawingContext, saturation: CGFloat) {
+    var buffer = vImage_Buffer()
+    buffer.data = context.bytes
+    buffer.width = UInt(context.size.width * context.scale)
+    buffer.height = UInt(context.size.height * context.scale)
+    buffer.rowBytes = context.bytesPerRow
+
+    let divisor: Int32 = 0x1000
+
+    let rwgt: CGFloat = 0.3086
+    let gwgt: CGFloat = 0.6094
+    let bwgt: CGFloat = 0.0820
+
+    let adjustSaturation = saturation
+
+    let a = (1.0 - adjustSaturation) * rwgt + adjustSaturation
+    let b = (1.0 - adjustSaturation) * rwgt
+    let c = (1.0 - adjustSaturation) * rwgt
+    let d = (1.0 - adjustSaturation) * gwgt
+    let e = (1.0 - adjustSaturation) * gwgt + adjustSaturation
+    let f = (1.0 - adjustSaturation) * gwgt
+    let g = (1.0 - adjustSaturation) * bwgt
+    let h = (1.0 - adjustSaturation) * bwgt
+    let i = (1.0 - adjustSaturation) * bwgt + adjustSaturation
+
+    let satMatrix: [CGFloat] = [
+        a, b, c, 0,
+        d, e, f, 0,
+        g, h, i, 0,
+        0, 0, 0, 1
+    ]
+
+    var matrix: [Int16] = satMatrix.map { value in
+        return Int16(value * CGFloat(divisor))
+    }
+
+    vImageMatrixMultiply_ARGB8888(&buffer, &buffer, &matrix, divisor, nil, nil, vImage_Flags(kvImageDoNotTile))
+}
+
+
+private func generateBlurredThumbnail(image: UIImage, adjustSaturation: Bool = false) -> UIImage? {
     let thumbnailContextSize = CGSize(width: 32.0, height: 32.0)
-    let thumbnailContext = DrawingContext(size: thumbnailContextSize, scale: 1.0)
+    guard let thumbnailContext = DrawingContext(size: thumbnailContextSize, scale: 1.0) else {
+        return nil
+    }
 
     let filledSize = image.size.aspectFilled(thumbnailContextSize)
     let imageRect = CGRect(origin: CGPoint(x: (thumbnailContextSize.width - filledSize.width) / 2.0, y: (thumbnailContextSize.height - filledSize.height) / 2.0), size: filledSize)
@@ -22,10 +64,27 @@ private func generateBlurredThumbnail(image: UIImage) -> UIImage? {
     }
     telegramFastBlurMore(Int32(thumbnailContextSize.width), Int32(thumbnailContextSize.height), Int32(thumbnailContext.bytesPerRow), thumbnailContext.bytes)
 
+    if adjustSaturation {
+        adjustSaturationInContext(context: thumbnailContext, saturation: 1.7)
+    }
+    
     return thumbnailContext.generateImage()
 }
 
-private func storeImage(context: DrawingContext, to path: String) -> UIImage? {
+private func storeImage(context: DrawingContext, mediaBox: MediaBox, resourceId: MediaResourceId, imageType: DirectMediaImageCache.ImageType) -> UIImage? {
+    let representationId: String
+    switch imageType {
+    case .blurredThumbnail:
+        representationId = "blurred32"
+    case let .square(width, aspectRatio):
+        if aspectRatio == 1.0 {
+            representationId = "shm\(width)"
+        } else {
+            representationId = "shm\(width)-\(aspectRatio)"
+        }
+    }
+    let path = mediaBox.cachedRepresentationPathForId(resourceId.stringRepresentation, representationId: representationId, keepDuration: .general)
+    
     if context.size.width <= 70.0 && context.size.height <= 70.0 {
         guard let file = ManagedFile(queue: nil, path: path, mode: .readwrite) else {
             return nil
@@ -57,6 +116,9 @@ private func storeImage(context: DrawingContext, to path: String) -> UIImage? {
         vImageConvert_BGRA8888toRGB565(&source, &target, vImage_Flags(kvImageDoNotTile))
 
         let _ = file.write(targetData, count: targetLength)
+        if let pathData = path.data(using: .utf8), let size = file.getSize() {
+            mediaBox.cacheStorageBox.update(id: pathData, size: size)
+        }
 
         return context.generateImage()
     } else {
@@ -64,6 +126,9 @@ private func storeImage(context: DrawingContext, to path: String) -> UIImage? {
             return nil
         }
         let _ = try? resultData.write(to: URL(fileURLWithPath: path))
+        if let pathData = path.data(using: .utf8) {
+            mediaBox.cacheStorageBox.update(id: pathData, size: Int64(resultData.count))
+        }
         return image
     }
 }
@@ -129,7 +194,9 @@ private func loadImage(data: Data) -> UIImage? {
                 source.rowBytes = Int(width * 2)
                 source.data = UnsafeMutableRawPointer(mutating: sourceBytes.advanced(by: 4 + 2 + 2))
 
-                let context = DrawingContext(size: CGSize(width: CGFloat(width), height: CGFloat(height)), scale: 1.0, opaque: true, clear: false)
+                guard let context = DrawingContext(size: CGSize(width: CGFloat(width), height: CGFloat(height)), scale: 1.0, opaque: true, clear: false) else {
+                    return nil
+                }
 
                 var target = vImage_Buffer()
                 target.width = UInt(width)
@@ -154,17 +221,19 @@ private func loadImage(data: Data) -> UIImage? {
 public final class DirectMediaImageCache {
     public final class GetMediaResult {
         public let image: UIImage?
+        public let blurredImage: UIImage?
         public let loadSignal: Signal<UIImage?, NoError>?
 
-        init(image: UIImage?, loadSignal: Signal<UIImage?, NoError>?) {
+        init(image: UIImage?, blurredImage: UIImage? = nil, loadSignal: Signal<UIImage?, NoError>?) {
             self.image = image
+            self.blurredImage = blurredImage
             self.loadSignal = loadSignal
         }
     }
 
-    private enum ImageType {
+    fileprivate enum ImageType {
         case blurredThumbnail
-        case square(width: Int)
+        case square(width: Int, aspectRatio: CGFloat)
     }
 
     private let account: Account
@@ -178,18 +247,22 @@ public final class DirectMediaImageCache {
         switch imageType {
         case .blurredThumbnail:
             representationId = "blurred32"
-        case let .square(width):
-            representationId = "shm\(width)"
+        case let .square(width, aspectRatio):
+            if aspectRatio == 1.0 {
+                representationId = "shm\(width)"
+            } else {
+                representationId = "shm\(width)-\(aspectRatio)"
+            }
         }
         return self.account.postbox.mediaBox.cachedRepresentationPathForId(resourceId.stringRepresentation, representationId: representationId, keepDuration: .general)
     }
 
-    private func getLoadSignal(width: Int, resource: MediaResourceReference, resourceSizeLimit: Int64) -> Signal<UIImage?, NoError>? {
+    private func getLoadSignal(width: Int, aspectRatio: CGFloat, userLocation: MediaResourceUserLocation, userContentType: MediaResourceUserContentType, resource: MediaResourceReference, resourceSizeLimit: Int64) -> Signal<UIImage?, NoError>? {
         return Signal { subscriber in
-            let cachePath = self.getCachePath(resourceId: resource.resource.id, imageType: .square(width: width))
-
             let fetch = fetchedMediaResource(
                 mediaBox: self.account.postbox.mediaBox,
+                userLocation: userLocation,
+                userContentType: userContentType,
                 reference: resource,
                 ranges: [(0 ..< resourceSizeLimit, .default)],
                 statsCategory: .image,
@@ -217,15 +290,19 @@ public final class DirectMediaImageCache {
 
             let data = dataSignal.start(next: { data in
                 if let data = data, let image = UIImage(data: data) {
-                    let scaledSize = CGSize(width: CGFloat(width), height: CGFloat(width))
-                    let scaledContext = DrawingContext(size: scaledSize, scale: 1.0, opaque: true)
+                    let scaledSize = CGSize(width: CGFloat(width), height: floor(CGFloat(width) / aspectRatio))
+                    guard let scaledContext = DrawingContext(size: scaledSize, scale: 1.0, opaque: true) else {
+                        subscriber.putNext(nil)
+                        subscriber.putCompletion()
+                        return
+                    }
                     scaledContext.withFlippedContext { context in
                         let filledSize = image.size.aspectFilled(scaledSize)
                         let imageRect = CGRect(origin: CGPoint(x: (scaledSize.width - filledSize.width) / 2.0, y: (scaledSize.height - filledSize.height) / 2.0), size: filledSize)
                         context.draw(image.cgImage!, in: imageRect)
                     }
 
-                    if let scaledImage = storeImage(context: scaledContext, to: cachePath) {
+                    if let scaledImage = storeImage(context: scaledContext, mediaBox: self.account.postbox.mediaBox, resourceId: resource.resource.id, imageType: .square(width: width, aspectRatio: aspectRatio)) {
                         subscriber.putNext(scaledImage)
                         subscriber.putCompletion()
                     }
@@ -273,8 +350,16 @@ public final class DirectMediaImageCache {
     private func getResource(message: Message, file: TelegramMediaFile, width: Int) -> (resource: MediaResourceReference, size: Int64)? {
         return self.getProgressiveSize(mediaReference: MediaReference.message(message: MessageReference(message), media: file).abstract, width: width, representations: file.previewRepresentations)
     }
+    
+    private func getResource(peer: PeerReference, story: EngineStoryItem, image: TelegramMediaImage, width: Int) -> (resource: MediaResourceReference, size: Int64)? {
+        return self.getProgressiveSize(mediaReference: MediaReference.story(peer: peer, id: story.id, media: image).abstract, width: width, representations: image.representations)
+    }
 
-    private func getImageSynchronous(message: Message, media: Media, width: Int, possibleWidths: [Int]) -> GetMediaResult? {
+    private func getResource(peer: PeerReference, story: EngineStoryItem, file: TelegramMediaFile, width: Int) -> (resource: MediaResourceReference, size: Int64)? {
+        return self.getProgressiveSize(mediaReference: MediaReference.story(peer: peer, id: story.id, media: file).abstract, width: width, representations: file.previewRepresentations)
+    }
+
+    private func getImageSynchronous(message: Message, userLocation: MediaResourceUserLocation, media: Media, width: Int, aspectRatio: CGFloat, possibleWidths: [Int], includeBlurred: Bool) -> GetMediaResult? {
         var immediateThumbnailData: Data?
         var resource: (resource: MediaResourceReference, size: Int64)?
         if let image = media as? TelegramMediaImage {
@@ -288,39 +373,201 @@ public final class DirectMediaImageCache {
         guard let resource = resource else {
             return nil
         }
-
+        
+        
         var blurredImage: UIImage?
+        if includeBlurred, let data = immediateThumbnailData.flatMap(decodeTinyThumbnail), let image = loadImage(data: data), let blurredImageValue = generateBlurredThumbnail(image: image, adjustSaturation: true) {
+            blurredImage = blurredImageValue
+        }
+        
+        var resultImage: UIImage?
         for otherWidth in possibleWidths.reversed() {
             if otherWidth == width {
-                if let data = try? Data(contentsOf: URL(fileURLWithPath: self.getCachePath(resourceId: resource.resource.resource.id, imageType: .square(width: otherWidth)))), let image = loadImage(data: data) {
-                    return GetMediaResult(image: image, loadSignal: nil)
+                if let data = try? Data(contentsOf: URL(fileURLWithPath: self.getCachePath(resourceId: resource.resource.resource.id, imageType: .square(width: otherWidth, aspectRatio: aspectRatio)))), let image = loadImage(data: data) {
+                    return GetMediaResult(image: image, blurredImage: blurredImage, loadSignal: nil)
                 }
             } else {
-                if let data = try? Data(contentsOf: URL(fileURLWithPath: self.getCachePath(resourceId: resource.resource.resource.id, imageType: .square(width: otherWidth)))), let image = loadImage(data: data) {
-                    blurredImage = image
+                if let data = try? Data(contentsOf: URL(fileURLWithPath: self.getCachePath(resourceId: resource.resource.resource.id, imageType: .square(width: otherWidth, aspectRatio: aspectRatio)))), let image = loadImage(data: data) {
+                    resultImage = image
                 }
             }
         }
 
-        if blurredImage == nil {
+        if resultImage == nil {
             if let data = try? Data(contentsOf: URL(fileURLWithPath: self.getCachePath(resourceId: resource.resource.resource.id, imageType: .blurredThumbnail))), let image = loadImage(data: data) {
-                blurredImage = image
+                resultImage = image
             } else if let data = immediateThumbnailData.flatMap(decodeTinyThumbnail), let image = loadImage(data: data) {
                 if let blurredImageValue = generateBlurredThumbnail(image: image) {
-                    blurredImage = blurredImageValue
+                    resultImage = blurredImageValue
+                }
+            }
+        }
+        
+        return GetMediaResult(image: resultImage, blurredImage: blurredImage, loadSignal: self.getLoadSignal(width: width, aspectRatio: aspectRatio, userLocation: userLocation, userContentType: .image, resource: resource.resource, resourceSizeLimit: resource.size))
+    }
+
+    public func getImage(message: Message, media: Media, width: Int, possibleWidths: [Int], includeBlurred: Bool = false, synchronous: Bool) -> GetMediaResult? {
+        if synchronous {
+            return self.getImageSynchronous(message: message, userLocation: .peer(message.id.peerId), media: media, width: width, aspectRatio: 1.0, possibleWidths: possibleWidths, includeBlurred: includeBlurred)
+        } else {
+            var immediateThumbnailData: Data?
+            if let image = media as? TelegramMediaImage {
+                immediateThumbnailData = image.immediateThumbnailData
+            } else if let file = media as? TelegramMediaFile {
+                immediateThumbnailData = file.immediateThumbnailData
+            }
+            var blurredImage: UIImage?
+            if includeBlurred, let data = immediateThumbnailData.flatMap(decodeTinyThumbnail), let image = loadImage(data: data), let blurredImageValue = generateBlurredThumbnail(image: image, adjustSaturation: true) {
+                blurredImage = blurredImageValue
+            }
+            return GetMediaResult(image: nil, blurredImage: blurredImage, loadSignal: Signal { subscriber in
+                let result = self.getImageSynchronous(message: message, userLocation: .peer(message.id.peerId), media: media, width: width, aspectRatio: 1.0, possibleWidths: possibleWidths, includeBlurred: includeBlurred)
+                guard let result = result else {
+                    subscriber.putNext(nil)
+                    subscriber.putCompletion()
+
+                    return EmptyDisposable
+                }
+
+                if let image = result.image {
+                    subscriber.putNext(image)
+                }
+
+                if let signal = result.loadSignal {
+                    return signal.start(next: subscriber.putNext, error: subscriber.putError, completed: subscriber.putCompletion)
+                } else {
+                    subscriber.putCompletion()
+
+                    return EmptyDisposable
+                }
+            }
+            |> runOn(.concurrentDefaultQueue()))
+        }
+    }
+    
+    private func getImageSynchronous(peer: PeerReference, story: EngineStoryItem, userLocation: MediaResourceUserLocation, media: Media, width: Int, aspectRatio: CGFloat, possibleWidths: [Int], includeBlurred: Bool) -> GetMediaResult? {
+        var immediateThumbnailData: Data?
+        var resource: (resource: MediaResourceReference, size: Int64)?
+        if let image = media as? TelegramMediaImage {
+            immediateThumbnailData = image.immediateThumbnailData
+            resource = self.getResource(peer: peer, story: story, image: image, width: width)
+        } else if let file = media as? TelegramMediaFile {
+            immediateThumbnailData = file.immediateThumbnailData
+            resource = self.getResource(peer: peer, story: story, file: file, width: width)
+        }
+
+        guard let resource = resource else {
+            return nil
+        }
+        
+        
+        var blurredImage: UIImage?
+        if includeBlurred, let data = immediateThumbnailData.flatMap(decodeTinyThumbnail), let image = loadImage(data: data), let blurredImageValue = generateBlurredThumbnail(image: image, adjustSaturation: true) {
+            blurredImage = blurredImageValue
+        }
+        
+        var resultImage: UIImage?
+        for otherWidth in possibleWidths.reversed() {
+            if otherWidth == width {
+                if let data = try? Data(contentsOf: URL(fileURLWithPath: self.getCachePath(resourceId: resource.resource.resource.id, imageType: .square(width: otherWidth, aspectRatio: aspectRatio)))), let image = loadImage(data: data) {
+                    return GetMediaResult(image: image, blurredImage: blurredImage, loadSignal: nil)
+                }
+            } else {
+                if let data = try? Data(contentsOf: URL(fileURLWithPath: self.getCachePath(resourceId: resource.resource.resource.id, imageType: .square(width: otherWidth, aspectRatio: aspectRatio)))), let image = loadImage(data: data) {
+                    resultImage = image
                 }
             }
         }
 
-        return GetMediaResult(image: blurredImage, loadSignal: self.getLoadSignal(width: width, resource: resource.resource, resourceSizeLimit: resource.size))
+        if resultImage == nil {
+            if let data = try? Data(contentsOf: URL(fileURLWithPath: self.getCachePath(resourceId: resource.resource.resource.id, imageType: .blurredThumbnail))), let image = loadImage(data: data) {
+                resultImage = image
+            } else if let data = immediateThumbnailData.flatMap(decodeTinyThumbnail), let image = loadImage(data: data) {
+                if let blurredImageValue = generateBlurredThumbnail(image: image) {
+                    resultImage = blurredImageValue
+                }
+            }
+        }
+        
+        return GetMediaResult(image: resultImage, blurredImage: blurredImage, loadSignal: self.getLoadSignal(width: width, aspectRatio: aspectRatio, userLocation: userLocation, userContentType: .image, resource: resource.resource, resourceSizeLimit: resource.size))
+    }
+    
+    private func getAvatarImageSynchronous(peer: PeerReference, resource: MediaResourceReference, immediateThumbnail: Data?, size: Int, includeBlurred: Bool) -> GetMediaResult? {
+        let immediateThumbnailData: Data? = immediateThumbnail
+        
+        var blurredImage: UIImage?
+        if includeBlurred, let data = immediateThumbnailData.flatMap(decodeTinyThumbnail), let image = loadImage(data: data), let blurredImageValue = generateBlurredThumbnail(image: image, adjustSaturation: true) {
+            blurredImage = blurredImageValue
+        }
+        
+        var resultImage: UIImage?
+        if let data = try? Data(contentsOf: URL(fileURLWithPath: self.getCachePath(resourceId: resource.resource.id, imageType: .square(width: size, aspectRatio: 1.0)))), let image = loadImage(data: data) {
+            return GetMediaResult(image: image, blurredImage: blurredImage, loadSignal: nil)
+        }
+
+        if resultImage == nil {
+            if let data = try? Data(contentsOf: URL(fileURLWithPath: self.getCachePath(resourceId: resource.resource.id, imageType: .blurredThumbnail))), let image = loadImage(data: data) {
+                resultImage = image
+            } else if let data = immediateThumbnailData.flatMap(decodeTinyThumbnail), let image = loadImage(data: data) {
+                if let blurredImageValue = generateBlurredThumbnail(image: image) {
+                    resultImage = blurredImageValue
+                }
+            }
+        }
+        
+        return GetMediaResult(image: resultImage, blurredImage: blurredImage, loadSignal: self.getLoadSignal(width: size, aspectRatio: 1.0, userLocation: .other, userContentType: .avatar, resource: resource, resourceSizeLimit: 1 * 1024 * 1024))
     }
 
-    public func getImage(message: Message, media: Media, width: Int, possibleWidths: [Int], synchronous: Bool) -> GetMediaResult? {
+
+    public func getImage(peer: PeerReference, story: EngineStoryItem, media: Media, width: Int, aspectRatio: CGFloat, possibleWidths: [Int], includeBlurred: Bool = false, synchronous: Bool) -> GetMediaResult? {
         if synchronous {
-            return self.getImageSynchronous(message: message, media: media, width: width, possibleWidths: possibleWidths)
+            return self.getImageSynchronous(peer: peer, story: story, userLocation: .peer(peer.id), media: media, width: width, aspectRatio: aspectRatio, possibleWidths: possibleWidths, includeBlurred: includeBlurred)
         } else {
-            return GetMediaResult(image: nil, loadSignal: Signal { subscriber in
-                let result = self.getImageSynchronous(message: message, media: media, width: width, possibleWidths: possibleWidths)
+            var immediateThumbnailData: Data?
+            if let image = media as? TelegramMediaImage {
+                immediateThumbnailData = image.immediateThumbnailData
+            } else if let file = media as? TelegramMediaFile {
+                immediateThumbnailData = file.immediateThumbnailData
+            }
+            var blurredImage: UIImage?
+            if includeBlurred, let data = immediateThumbnailData.flatMap(decodeTinyThumbnail), let image = loadImage(data: data), let blurredImageValue = generateBlurredThumbnail(image: image, adjustSaturation: true) {
+                blurredImage = blurredImageValue
+            }
+            return GetMediaResult(image: nil, blurredImage: blurredImage, loadSignal: Signal { subscriber in
+                let result = self.getImageSynchronous(peer: peer, story: story, userLocation: .peer(peer.id), media: media, width: width, aspectRatio: aspectRatio, possibleWidths: possibleWidths, includeBlurred: includeBlurred)
+                guard let result = result else {
+                    subscriber.putNext(nil)
+                    subscriber.putCompletion()
+
+                    return EmptyDisposable
+                }
+
+                if let image = result.image {
+                    subscriber.putNext(image)
+                }
+
+                if let signal = result.loadSignal {
+                    return signal.start(next: subscriber.putNext, error: subscriber.putError, completed: subscriber.putCompletion)
+                } else {
+                    subscriber.putCompletion()
+
+                    return EmptyDisposable
+                }
+            }
+            |> runOn(.concurrentDefaultQueue()))
+        }
+    }
+    
+    public func getAvatarImage(peer: PeerReference, resource: MediaResourceReference, immediateThumbnail: Data?, size: Int, includeBlurred: Bool = false, synchronous: Bool) -> GetMediaResult? {
+        if synchronous {
+            return self.getAvatarImageSynchronous(peer: peer, resource: resource, immediateThumbnail: immediateThumbnail, size: size, includeBlurred: includeBlurred)
+        } else {
+            var blurredImage: UIImage?
+            if includeBlurred, let data = immediateThumbnail.flatMap(decodeTinyThumbnail), let image = loadImage(data: data), let blurredImageValue = generateBlurredThumbnail(image: image, adjustSaturation: true) {
+                blurredImage = blurredImageValue
+            }
+            return GetMediaResult(image: nil, blurredImage: blurredImage, loadSignal: Signal { subscriber in
+                let result = self.getAvatarImageSynchronous(peer: peer, resource: resource, immediateThumbnail: immediateThumbnail, size: size, includeBlurred: includeBlurred)
                 guard let result = result else {
                     subscriber.putNext(nil)
                     subscriber.putCompletion()

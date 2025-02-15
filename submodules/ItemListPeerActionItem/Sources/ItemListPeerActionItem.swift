@@ -22,19 +22,23 @@ public enum ItemListPeerActionItemColor {
 public class ItemListPeerActionItem: ListViewItem, ItemListItem {
     let presentationData: ItemListPresentationData
     let icon: UIImage?
+    let iconSignal: Signal<UIImage?, NoError>?
     let title: String
+    let additionalBadgeIcon: UIImage?
     public let alwaysPlain: Bool
     let hasSeparator: Bool
     let editing: Bool
     let height: ItemListPeerActionItemHeight
     let color: ItemListPeerActionItemColor
     public let sectionId: ItemListSectionId
-    let action: (() -> Void)?
+    public let action: (() -> Void)?
     
-    public init(presentationData: ItemListPresentationData, icon: UIImage?, title: String, alwaysPlain: Bool = false, hasSeparator: Bool = true, sectionId: ItemListSectionId, height: ItemListPeerActionItemHeight = .peerList, color: ItemListPeerActionItemColor = .accent, editing: Bool = false, action: (() -> Void)?) {
+    public init(presentationData: ItemListPresentationData, icon: UIImage?, iconSignal: Signal<UIImage?, NoError>? = nil, title: String, additionalBadgeIcon: UIImage? = nil, alwaysPlain: Bool = false, hasSeparator: Bool = true, sectionId: ItemListSectionId, height: ItemListPeerActionItemHeight = .peerList, color: ItemListPeerActionItemColor = .accent, editing: Bool = false, action: (() -> Void)?) {
         self.presentationData = presentationData
         self.icon = icon
+        self.iconSignal = iconSignal
         self.title = title
+        self.additionalBadgeIcon = additionalBadgeIcon
         self.alwaysPlain = alwaysPlain
         self.hasSeparator = hasSeparator
         self.editing = editing
@@ -50,6 +54,9 @@ public class ItemListPeerActionItem: ListViewItem, ItemListItem {
             var neighbors = itemListNeighbors(item: self, topItem: previousItem as? ItemListItem, bottomItem: nextItem as? ItemListItem)
             if self.alwaysPlain {
                 neighbors.top = .sameSection(alwaysPlain: false)
+            }
+            if self.alwaysPlain {
+                neighbors.bottom = .sameSection(alwaysPlain: false)
             }
             let (layout, apply) = node.asyncLayout()(self, params, neighbors)
             
@@ -79,6 +86,9 @@ public class ItemListPeerActionItem: ListViewItem, ItemListItem {
                     if self.alwaysPlain {
                         neighbors.top = .sameSection(alwaysPlain: false)
                     }
+                    if self.alwaysPlain {
+                        neighbors.bottom = .sameSection(alwaysPlain: false)
+                    }
                     let (layout, apply) = makeLayout(self, params, neighbors)
                     Queue.mainQueue().async {
                         completion(layout, { _ in
@@ -100,7 +110,7 @@ public class ItemListPeerActionItem: ListViewItem, ItemListItem {
     }
 }
 
-class ItemListPeerActionItemNode: ListViewItemNode {
+public final class ItemListPeerActionItemNode: ListViewItemNode {
     private let backgroundNode: ASDisplayNode
     private let topStripeNode: ASDisplayNode
     private let bottomStripeNode: ASDisplayNode
@@ -109,12 +119,15 @@ class ItemListPeerActionItemNode: ListViewItemNode {
     
     private let iconNode: ASImageNode
     private let titleNode: TextNode
+    private var additionalLabelBadgeNode: ASImageNode?
     
     private let activateArea: AccessibilityAreaNode
     
     private var item: ItemListPeerActionItem?
     
-    init() {
+    private let iconDisposable = MetaDisposable()
+    
+    public init() {
         self.backgroundNode = ASDisplayNode()
         self.backgroundNode.isLayerBacked = true
         
@@ -149,7 +162,11 @@ class ItemListPeerActionItemNode: ListViewItemNode {
         self.addSubnode(self.activateArea)
     }
     
-    func asyncLayout() -> (_ item: ItemListPeerActionItem, _ params: ListViewItemLayoutParams, _ neighbors: ItemListNeighbors) -> (ListViewItemNodeLayout, (Bool) -> Void) {
+    deinit {
+        self.iconDisposable.dispose()
+    }
+    
+    public func asyncLayout() -> (_ item: ItemListPeerActionItem, _ params: ListViewItemLayoutParams, _ neighbors: ItemListNeighbors) -> (ListViewItemNodeLayout, (Bool) -> Void) {
         let makeTitleLayout = TextNode.asyncLayout(self.titleNode)
         
         let currentItem = self.item
@@ -169,9 +186,9 @@ class ItemListPeerActionItemNode: ListViewItemNode {
             switch item.height {
                 case .generic:
                     iconOffset = 1.0
-                    verticalInset = 11.0
+                    verticalInset = 12.0
                     verticalOffset = 0.0
-                    leftInset = (item.icon == nil ? 16.0 : 59.0) + params.leftInset
+                    leftInset = (item.icon == nil && item.iconSignal == nil ? 16.0 : 59.0) + params.leftInset
                 case .peerList:
                     iconOffset = 3.0
                     verticalInset = 14.0
@@ -232,6 +249,15 @@ class ItemListPeerActionItemNode: ListViewItemNode {
                     strongSelf.iconNode.image = item.icon
                     if let image = item.icon {
                         transition.updateFrame(node: strongSelf.iconNode, frame: CGRect(origin: CGPoint(x: params.leftInset + editingOffset + floor((leftInset - params.leftInset - image.size.width) / 2.0) + iconOffset, y: floor((contentSize.height - image.size.height) / 2.0)), size: image.size))
+                    } else if let iconSignal = item.iconSignal {
+                        let imageSize = CGSize(width: 28.0, height: 28.0)
+                        strongSelf.iconDisposable.set((iconSignal
+                        |> deliverOnMainQueue).start(next: { [weak self] image in
+                            if let strongSelf = self, let image {
+                                strongSelf.iconNode.image = image
+                            }
+                        }))
+                        transition.updateFrame(node: strongSelf.iconNode, frame: CGRect(origin: CGPoint(x: params.leftInset + editingOffset + floor((leftInset - params.leftInset - imageSize.width) / 2.0) + iconOffset, y: floor((contentSize.height - imageSize.height) / 2.0)), size: imageSize))
                     }
                     
                     if strongSelf.backgroundNode.supernode == nil {
@@ -279,15 +305,37 @@ class ItemListPeerActionItemNode: ListViewItemNode {
                     strongSelf.topStripeNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: layoutSize.width, height: separatorHeight))
                     transition.updateFrame(node: strongSelf.bottomStripeNode, frame: CGRect(origin: CGPoint(x: bottomStripeInset, y: contentSize.height + bottomStripeOffset), size: CGSize(width: layoutSize.width - bottomStripeInset, height: separatorHeight)))
                     
-                    transition.updateFrame(node: strongSelf.titleNode, frame: CGRect(origin: CGPoint(x: leftInset + editingOffset, y: verticalInset + verticalOffset), size: titleLayout.size))
+                    let titleFrame = CGRect(origin: CGPoint(x: leftInset + editingOffset, y: verticalInset + verticalOffset), size: titleLayout.size)
+                    transition.updateFrame(node: strongSelf.titleNode, frame: titleFrame)
                     
                     strongSelf.highlightedBackgroundNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -UIScreenPixel), size: CGSize(width: params.width, height: layout.contentSize.height + UIScreenPixel + UIScreenPixel))
+                    
+                    if let additionalBadgeIcon = item.additionalBadgeIcon {
+                        let additionalLabelBadgeNode: ASImageNode
+                        if let current = strongSelf.additionalLabelBadgeNode {
+                            additionalLabelBadgeNode = current
+                        } else {
+                            additionalLabelBadgeNode = ASImageNode()
+                            additionalLabelBadgeNode.isUserInteractionEnabled = false
+                            strongSelf.additionalLabelBadgeNode = additionalLabelBadgeNode
+                            strongSelf.addSubnode(additionalLabelBadgeNode)
+                        }
+                        additionalLabelBadgeNode.image = additionalBadgeIcon
+                        
+                        let additionalLabelSize = additionalBadgeIcon.size
+                        additionalLabelBadgeNode.frame = CGRect(origin: CGPoint(x: titleFrame.maxX + 6.0, y: floor((contentSize.height - additionalLabelSize.height) / 2.0)), size: additionalLabelSize)
+                    } else {
+                        if let additionalLabelBadgeNode = strongSelf.additionalLabelBadgeNode {
+                            strongSelf.additionalLabelBadgeNode = nil
+                            additionalLabelBadgeNode.removeFromSupernode()
+                        }
+                    }
                 }
             })
         }
     }
     
-    override func setHighlighted(_ highlighted: Bool, at point: CGPoint, animated: Bool) {
+    public override func setHighlighted(_ highlighted: Bool, at point: CGPoint, animated: Bool) {
         super.setHighlighted(highlighted, at: point, animated: animated)
         
         if highlighted {
@@ -325,11 +373,11 @@ class ItemListPeerActionItemNode: ListViewItemNode {
         }
     }
     
-    override func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
+    public override func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.4)
     }
     
-    override func animateRemoved(_ currentTimestamp: Double, duration: Double) {
+    public override func animateRemoved(_ currentTimestamp: Double, duration: Double) {
         self.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.15, removeOnCompletion: false)
     }
 }

@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import AsyncDisplayKit
 import Display
 import TelegramPresentationData
 import ListSectionHeaderNode
@@ -19,9 +20,10 @@ public enum ChatListSearchItemHeaderType {
     case mapAddress
     case nearbyVenues
     case chats
+    case channels
     case chatTypes
     case faq
-    case messages
+    case messages(location: String?)
     case groupMembers
     case activeVoiceChats
     case recentCalls
@@ -30,6 +32,8 @@ public enum ChatListSearchItemHeaderType {
     case downloading
     case recentDownloads
     case topics
+    case publicPosts
+    case text(String, AnyHashable)
     
     fileprivate func title(strings: PresentationStrings) -> String {
         switch self {
@@ -61,12 +65,18 @@ public enum ChatListSearchItemHeaderType {
                 return strings.Map_PlacesNearby
             case .chats:
                 return strings.Cache_ByPeerHeader
+            case .channels:
+                return strings.ChatList_ChannelsSection
             case .chatTypes:
                 return strings.ChatList_ChatTypesSection
             case .faq:
                 return strings.Settings_FrequentlyAskedQuestions
-            case .messages:
-                return strings.DialogList_SearchSectionMessages
+            case let .messages(location):
+                if let location {
+                    return strings.DialogList_SearchSectionMessagesIn(location).string
+                } else {
+                    return strings.DialogList_SearchSectionMessages
+                }
             case .groupMembers:
                 return strings.Group_GroupMembersHeader
             case .activeVoiceChats:
@@ -83,6 +93,10 @@ public enum ChatListSearchItemHeaderType {
                 return strings.DownloadList_DownloadedHeader
             case .topics:
                 return strings.DialogList_SearchSectionTopics
+            case .publicPosts:
+                return strings.DialogList_SearchSectionPublicPosts
+            case let .text(text, _):
+                return text
         }
     }
     
@@ -116,12 +130,18 @@ public enum ChatListSearchItemHeaderType {
                 return .nearbyVenues
             case .chats:
                 return .chats
+            case .channels:
+                return .channels
             case .chatTypes:
                 return .chatTypes
             case .faq:
                 return .faq
-            case .messages:
-                return .messages
+            case let .messages(location):
+                if let _ = location {
+                    return .messagesWithLocation
+                } else {
+                    return .messages
+                }
             case .groupMembers:
                 return .groupMembers
             case .activeVoiceChats:
@@ -138,11 +158,15 @@ public enum ChatListSearchItemHeaderType {
                 return .recentDownloads
             case .topics:
                 return .topics
+            case .publicPosts:
+                return .publicPosts
+            case let .text(_, id):
+                return .text(id)
         }
     }
 }
 
-private enum ChatListSearchItemHeaderId: Int32 {
+private enum ChatListSearchItemHeaderId: Hashable {
     case localPeers
     case members
     case contacts
@@ -157,9 +181,11 @@ private enum ChatListSearchItemHeaderId: Int32 {
     case mapAddress
     case nearbyVenues
     case chats
+    case channels
     case chatTypes
     case faq
     case messages
+    case messagesWithLocation
     case photos
     case links
     case files
@@ -172,6 +198,8 @@ private enum ChatListSearchItemHeaderId: Int32 {
     case downloading
     case recentDownloads
     case topics
+    case publicPosts
+    case text(AnyHashable)
 }
 
 public final class ChatListSearchItemHeader: ListViewItemHeader {
@@ -182,13 +210,13 @@ public final class ChatListSearchItemHeader: ListViewItemHeader {
     public let theme: PresentationTheme
     public let strings: PresentationStrings
     public let actionTitle: String?
-    public let action: (() -> Void)?
+    public let action: ((ASDisplayNode) -> Void)?
     
     public let height: CGFloat = 28.0
     
-    public init(type: ChatListSearchItemHeaderType, theme: PresentationTheme, strings: PresentationStrings, actionTitle: String? = nil, action: (() -> Void)? = nil) {
+    public init(type: ChatListSearchItemHeaderType, theme: PresentationTheme, strings: PresentationStrings, actionTitle: String? = nil, action: ((ASDisplayNode) -> Void)? = nil) {
         self.type = type
-        self.id = ListViewItemNode.HeaderId(space: 0, id: Int64(self.type.id.rawValue))
+        self.id = ListViewItemNode.HeaderId(space: 0, id: Int64(self.type.id.hashValue))
         self.theme = theme
         self.strings = strings
         self.actionTitle = actionTitle
@@ -217,13 +245,13 @@ public final class ChatListSearchItemHeaderNode: ListViewItemHeaderNode {
     private var theme: PresentationTheme
     private var strings: PresentationStrings
     private var actionTitle: String?
-    private var action: (() -> Void)?
+    private var action: ((ASDisplayNode) -> Void)?
     
     private var validLayout: (size: CGSize, leftInset: CGFloat, rightInset: CGFloat)?
     
     private let sectionHeaderNode: ListSectionHeaderNode
     
-    public init(type: ChatListSearchItemHeaderType, theme: PresentationTheme, strings: PresentationStrings, actionTitle: String?, action: (() -> Void)?) {
+    public init(type: ChatListSearchItemHeaderType, theme: PresentationTheme, strings: PresentationStrings, actionTitle: String?, action: ((ASDisplayNode) -> Void)?) {
         self.type = type
         self.theme = theme
         self.strings = strings
@@ -246,7 +274,7 @@ public final class ChatListSearchItemHeaderNode: ListViewItemHeaderNode {
         self.sectionHeaderNode.updateTheme(theme: theme)
     }
     
-    public func update(type: ChatListSearchItemHeaderType, actionTitle: String?, action: (() -> Void)?) {
+    public func update(type: ChatListSearchItemHeaderType, actionTitle: String?, action: ((ASDisplayNode) -> Void)?) {
         self.actionTitle = actionTitle
         self.action = action
         

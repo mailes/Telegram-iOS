@@ -36,7 +36,11 @@ func unreadMessages(account: Account) -> Signal<[INMessage], NoError> {
     |> mapToSignal { view -> Signal<[INMessage], NoError> in
         var signals: [Signal<[INMessage], NoError>] = []
         for entry in view.0.entries {
-            if case let .MessageEntry(index, _, readState, isMuted, _, _, _, _, _, _, _) = entry {
+            if case let .MessageEntry(entryData) = entry {
+                let index = entryData.index
+                let readState = entryData.readState
+                let isMuted = entryData.isRemovedFromTotalUnreadCount
+                
                 if index.messageIndex.id.peerId.namespace != Namespaces.Peer.CloudUser {
                     continue
                 }
@@ -49,7 +53,7 @@ func unreadMessages(account: Account) -> Signal<[INMessage], NoError> {
                 }
                 
                 if !isMuted && hasUnread {
-                    signals.append(account.postbox.aroundMessageHistoryViewForLocation(.peer(peerId: index.messageIndex.id.peerId, threadId: nil), anchor: .upperBound, ignoreMessagesInTimestampRange: nil, count: 10, fixedCombinedReadStates: fixedCombinedReadStates, topTaggedMessageIdNamespaces: Set(), tagMask: nil, appendMessagesFromTheSameGroup: false, namespaces: .not(Namespaces.Message.allScheduled), orderStatistics: .combinedLocation)
+                    signals.append(account.postbox.aroundMessageHistoryViewForLocation(.peer(peerId: index.messageIndex.id.peerId, threadId: nil), anchor: .upperBound, ignoreMessagesInTimestampRange: nil, ignoreMessageIds: Set(), count: 10, fixedCombinedReadStates: fixedCombinedReadStates, topTaggedMessageIdNamespaces: Set(), tag: nil, appendMessagesFromTheSameGroup: false, namespaces: .not(Namespaces.Message.allNonRegular), orderStatistics: .combinedLocation)
                     |> take(1)
                     |> map { view -> [INMessage] in
                         var messages: [INMessage] = []

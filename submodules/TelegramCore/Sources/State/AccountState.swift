@@ -30,10 +30,18 @@ extension SentAuthorizationCodeType {
                 self = .flashCall(pattern: pattern)
             case let .sentCodeTypeMissedCall(prefix, length):
                 self = .missedCall(numberPrefix: prefix, length: length)
-            case let .sentCodeTypeEmailCode(flags, emailPattern, length, nextPhoneLoginDate):
-                self = .email(emailPattern: emailPattern, length: length, nextPhoneLoginDate: nextPhoneLoginDate, appleSignInAllowed: (flags & (1 << 0)) != 0, setup: false)
+            case let .sentCodeTypeEmailCode(flags, emailPattern, length, resetAvailablePeriod, resetPendingDate):
+                self = .email(emailPattern: emailPattern, length: length, resetAvailablePeriod: resetAvailablePeriod, resetPendingDate: resetPendingDate, appleSignInAllowed: (flags & (1 << 0)) != 0, setup: false)
             case let .sentCodeTypeSetUpEmailRequired(flags):
                 self = .emailSetupRequired(appleSignInAllowed: (flags & (1 << 0)) != 0)
+            case let .sentCodeTypeFragmentSms(url, length):
+                self = .fragment(url: url, length: length)
+            case let .sentCodeTypeFirebaseSms(_, _, _, _, _, pushTimeout, length):
+                self = .firebase(pushTimeout: pushTimeout, length: length)
+            case let .sentCodeTypeSmsWord(_, beginning):
+                self = .word(startsWith: beginning)
+            case let .sentCodeTypeSmsPhrase(_, beginning):
+                self = .phrase(startsWith: beginning)
         }
     }
 }
@@ -49,6 +57,8 @@ extension AuthorizationCodeNextType {
                 self = .flashCall
             case .codeTypeMissedCall:
                 self = .missedCall
+            case .codeTypeFragmentSms:
+                self = .fragment
         }
     }
 }

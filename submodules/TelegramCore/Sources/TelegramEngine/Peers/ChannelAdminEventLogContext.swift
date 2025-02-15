@@ -3,6 +3,7 @@ import SwiftSignalKit
 
 public struct ChannelAdminEventLogEntry: Comparable {
     public let stableId: UInt32
+    public let headerStableId: UInt32
     public let event: AdminLogEvent
     public let peers: [PeerId: Peer]
     
@@ -80,11 +81,13 @@ public final class ChannelAdminEventLogContext {
     
     private let postbox: Postbox
     private let network: Network
+    private let accountPeerId: PeerId
     private let peerId: PeerId
     
     private var filter: ChannelAdminEventLogFilter = ChannelAdminEventLogFilter()
     
     private var nextStableId: UInt32 = 1
+    private var headerStableIds: [AdminLogEventId: UInt32] = [:]
     private var stableIds: [AdminLogEventId: UInt32] = [:]
     
     private var entries: ([ChannelAdminEventLogEntry], ChannelAdminEventLogFilter) = ([], ChannelAdminEventLogFilter())
@@ -96,10 +99,11 @@ public final class ChannelAdminEventLogContext {
     
     private let loadMoreDisposable = MetaDisposable()
     
-    init(postbox: Postbox, network: Network, peerId: PeerId) {
+    init(postbox: Postbox, network: Network, peerId: PeerId, accountPeerId: PeerId) {
         self.postbox = postbox
         self.network = network
         self.peerId = peerId
+        self.accountPeerId = accountPeerId
     }
     
     deinit {
@@ -164,7 +168,7 @@ public final class ChannelAdminEventLogContext {
         }
         
         self.loadingMoreEarlier = true
-        self.loadMoreDisposable.set((channelAdminLogEvents(postbox: self.postbox, network: self.network, peerId: self.peerId, maxId: maxId, minId: AdminLogEventId.min, limit: 100, query: self.filter.query, filter: self.filter.events, admins: self.filter.adminPeerIds)
+        self.loadMoreDisposable.set((channelAdminLogEvents(accountPeerId: self.accountPeerId, postbox: self.postbox, network: self.network, peerId: self.peerId, maxId: maxId, minId: AdminLogEventId.min, limit: 100, query: self.filter.query, filter: self.filter.events, admins: self.filter.adminPeerIds)
         |> deliverOn(self.queue)).start(next: { [weak self] result in
             if let strongSelf = self {
                 var events = result.events.sorted()
@@ -182,13 +186,13 @@ public final class ChannelAdminEventLogContext {
                     }
                     
                     var entries: [ChannelAdminEventLogEntry] = events.map { event in
-                        return ChannelAdminEventLogEntry(stableId: strongSelf.stableIdForEventId(event.id), event: event, peers: result.peers)
+                        return ChannelAdminEventLogEntry(stableId: strongSelf.stableIdForEventId(event.id), headerStableId: strongSelf.headerStableIdForEventId(event.id), event: event, peers: result.peers)
                     }
                     entries.append(contentsOf: strongSelf.entries.0)
                     strongSelf.entries = (entries, strongSelf.filter)
                 } else {
                     let entries: [ChannelAdminEventLogEntry] = events.map { event in
-                        return ChannelAdminEventLogEntry(stableId: strongSelf.stableIdForEventId(event.id), event: event, peers: result.peers)
+                        return ChannelAdminEventLogEntry(stableId: strongSelf.stableIdForEventId(event.id), headerStableId: strongSelf.headerStableIdForEventId(event.id), event: event, peers: result.peers)
                     }
                     strongSelf.entries = (entries, strongSelf.filter)
                 }
@@ -211,6 +215,17 @@ public final class ChannelAdminEventLogContext {
             let value = self.nextStableId
             self.nextStableId += 1
             self.stableIds[id] = value
+            return value
+        }
+    }
+    
+    private func headerStableIdForEventId(_ id: AdminLogEventId) -> UInt32 {
+        if let value = self.headerStableIds[id] {
+            return value
+        } else {
+            let value = self.nextStableId
+            self.nextStableId += 1
+            self.headerStableIds[id] = value
             return value
         }
     }

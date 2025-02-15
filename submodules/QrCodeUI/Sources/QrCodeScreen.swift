@@ -38,6 +38,7 @@ public final class QrCodeScreen: ViewController {
     public enum Subject {
         case peer(peer: EnginePeer)
         case invite(invite: ExportedInvitation, isGroup: Bool)
+        case chatFolder(slug: String)
         
         var link: String {
             switch self {
@@ -45,6 +46,12 @@ public final class QrCodeScreen: ViewController {
                     return "https://t.me/\(peer.addressName ?? "")"
                 case let .invite(invite, _):
                     return invite.link ?? ""
+                case let .chatFolder(slug):
+                    if slug.hasPrefix("https://") {
+                        return slug
+                    } else {
+                        return "https://t.me/addlist/\(slug)"
+                    }
             }
         }
         
@@ -53,6 +60,8 @@ public final class QrCodeScreen: ViewController {
                 case .peer:
                     return "Q"
                 case .invite:
+                    return "Q"
+                case .chatFolder:
                     return "Q"
             }
         }
@@ -173,7 +182,7 @@ public final class QrCodeScreen: ViewController {
         self.controllerNode.containerLayoutUpdated(layout, navigationBarHeight: self.navigationLayout(layout: layout).navigationFrame.maxY, transition: transition)
     }
 
-    class Node: ViewControllerTracingNode, UIScrollViewDelegate {
+    class Node: ViewControllerTracingNode, ASScrollViewDelegate {
         private let context: AccountContext
         private let subject: QrCodeScreen.Subject
         private var presentationData: PresentationData
@@ -233,6 +242,9 @@ public final class QrCodeScreen: ViewController {
                 case let .invite(_, isGroup):
                     title = self.presentationData.strings.InviteLink_QRCode_Title
                     text = isGroup ? self.presentationData.strings.InviteLink_QRCode_Info : self.presentationData.strings.InviteLink_QRCode_InfoChannel
+                case .chatFolder:
+                    title = self.presentationData.strings.InviteLink_QRCodeFolder_Title
+                    text = self.presentationData.strings.InviteLink_QRCodeFolder_Text
                 default:
                     title = ""
                     text = ""
@@ -267,7 +279,7 @@ public final class QrCodeScreen: ViewController {
             self.dimNode.view.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(self.dimTapGesture(_:))))
             self.addSubnode(self.dimNode)
             
-            self.wrappingScrollNode.view.delegate = self
+            self.wrappingScrollNode.view.delegate = self.wrappedScrollViewDelegate
             self.addSubnode(self.wrappingScrollNode)
             
             self.wrappingScrollNode.addSubnode(self.backgroundNode)

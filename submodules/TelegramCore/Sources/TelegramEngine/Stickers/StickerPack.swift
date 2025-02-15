@@ -5,19 +5,31 @@ import SwiftSignalKit
 import MtProtoKit
 
 func telegramStickerPackThumbnailRepresentationFromApiSizes(datacenterId: Int32, thumbVersion: Int32?, sizes: [Api.PhotoSize]) -> (immediateThumbnail: Data?, representations: [TelegramMediaImageRepresentation]) {
+    func stickerTypeHint(for type: String) -> TelegramMediaImageRepresentation.TypeHint {
+        switch type {
+        case "s":
+            return .generic
+        case "a":
+            return .animated
+        case "v":
+            return .video
+        default:
+            return .generic
+        }
+    }
     var immediateThumbnailData: Data?
     var representations: [TelegramMediaImageRepresentation] = []
     for size in sizes {
         switch size {
-            case let .photoCachedSize(_, w, h, _):
+            case let .photoCachedSize(type, w, h, _):
                 let resource = CloudStickerPackThumbnailMediaResource(datacenterId: datacenterId, thumbVersion: thumbVersion, volumeId: nil, localId: nil)
-            representations.append(TelegramMediaImageRepresentation(dimensions: PixelDimensions(width: w, height: h), resource: resource, progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false))
-            case let .photoSize(_, w, h, _):
+                representations.append(TelegramMediaImageRepresentation(dimensions: PixelDimensions(width: w, height: h), resource: resource, progressiveSizes: [], immediateThumbnailData: nil, typeHint: stickerTypeHint(for: type)))
+            case let .photoSize(type, w, h, _):
                 let resource = CloudStickerPackThumbnailMediaResource(datacenterId: datacenterId, thumbVersion: thumbVersion, volumeId: nil, localId: nil)
-                representations.append(TelegramMediaImageRepresentation(dimensions: PixelDimensions(width: w, height: h), resource: resource, progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false))
-            case let .photoSizeProgressive(_, w, h, sizes):
+                representations.append(TelegramMediaImageRepresentation(dimensions: PixelDimensions(width: w, height: h), resource: resource, progressiveSizes: [], immediateThumbnailData: nil, typeHint: stickerTypeHint(for: type)))
+            case let .photoSizeProgressive(type, w, h, sizes):
                 let resource = CloudStickerPackThumbnailMediaResource(datacenterId: datacenterId, thumbVersion: thumbVersion, volumeId: nil, localId: nil)
-                representations.append(TelegramMediaImageRepresentation(dimensions: PixelDimensions(width: w, height: h), resource: resource, progressiveSizes: sizes, immediateThumbnailData: nil, hasVideo: false))
+                representations.append(TelegramMediaImageRepresentation(dimensions: PixelDimensions(width: w, height: h), resource: resource, progressiveSizes: sizes, immediateThumbnailData: nil, typeHint: stickerTypeHint(for: type)))
             case let .photoPathSize(_, data):
                 immediateThumbnailData = data.makeData()
             case .photoStrippedSize:
@@ -40,14 +52,17 @@ extension StickerPackCollectionInfo {
                 if (flags & (1 << 3)) != 0 {
                     setFlags.insert(.isMasks)
                 }
-                if (flags & (1 << 5)) != 0 {
-                    setFlags.insert(.isAnimated)
-                }
-                if (flags & (1 << 6)) != 0 {
-                    setFlags.insert(.isVideo)
-                }
                 if (flags & (1 << 7)) != 0 {
                     setFlags.insert(.isEmoji)
+                }
+                if (flags & (1 << 9)) != 0 {
+                    setFlags.insert(.isCustomTemplateEmoji)
+                }
+                if (flags & (1 << 10)) != 0 {
+                    setFlags.insert(.isAvailableAsChannelStatus)
+                }
+                if (flags & (1 << 11)) != 0 {
+                    setFlags.insert(.isCreator)
                 }
                 
                 var thumbnailRepresentation: TelegramMediaImageRepresentation?
@@ -75,9 +90,10 @@ func _internal_stickerPacksAttachedToMedia(account: Account, media: AnyMediaRefe
     } else {
         return .single([])
     }
+    let accountPeerId = account.peerId
     return account.network.request(Api.functions.messages.getAttachedStickers(media: inputMedia))
     |> `catch` { _ -> Signal<[Api.StickerSetCovered], MTRpcError> in
-        return revalidateMediaResourceReference(postbox: account.postbox, network: account.network, revalidationContext: account.mediaReferenceRevalidationContext, info: TelegramCloudMediaResourceFetchInfo(reference: resourceReference, preferBackgroundReferenceRevalidation: false, continueInBackground: false), resource: resourceReference.resource)
+        return revalidateMediaResourceReference(accountPeerId: accountPeerId, postbox: account.postbox, network: account.network, revalidationContext: account.mediaReferenceRevalidationContext, info: TelegramCloudMediaResourceFetchInfo(reference: resourceReference, preferBackgroundReferenceRevalidation: false, continueInBackground: false), resource: resourceReference.resource)
         |> mapError { _ -> MTRpcError in
             return MTRpcError(errorCode: 500, errorDescription: "Internal")
         }
@@ -103,7 +119,7 @@ func _internal_stickerPacksAttachedToMedia(account: Account, media: AnyMediaRefe
     |> map { result -> [StickerPackReference] in
         return result.map { pack in
             switch pack {
-            case let .stickerSetCovered(set, _), let .stickerSetMultiCovered(set, _), let .stickerSetFullCovered(set, _, _, _):
+            case let .stickerSetCovered(set, _), let .stickerSetMultiCovered(set, _), let .stickerSetFullCovered(set, _, _, _), let .stickerSetNoCovered(set):
                 let info = StickerPackCollectionInfo(apiSet: set, namespace: Namespaces.ItemCollection.CloudStickerPacks)
                 return .id(id: info.id.id, accessHash: info.accessHash)
             }

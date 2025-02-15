@@ -395,7 +395,7 @@ static id<LegacyComponentsContext> _defaultContext = nil;
     _currentSizeClass = UIUserInterfaceSizeClassCompact;
     
     __weak TGViewController *weakSelf = self;
-    _sizeClassDisposable = [[_context sizeClassSignal] startWithNext:^(NSNumber *next) {
+    _sizeClassDisposable = [[_context sizeClassSignal] startStrictWithNext:^(NSNumber *next) {
         __strong TGViewController *strongSelf = weakSelf;
         if (strongSelf != nil) {
             if (strongSelf->_currentSizeClass != [next integerValue]) {
@@ -405,7 +405,7 @@ static id<LegacyComponentsContext> _defaultContext = nil;
                 }
             }
         }
-    }];
+    } file:__FILE_NAME__ line:__LINE__];
     initializedSizeClass = true;
     
     if ([self respondsToSelector:@selector(setAutomaticallyAdjustsScrollViewInsets:)])
@@ -521,12 +521,10 @@ static id<LegacyComponentsContext> _defaultContext = nil;
 
 - (bool)inFormSheet
 {
-    if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPhone)
+    if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPhone) {
         return false;
-    else
-    {
-        if ([self.navigationController isKindOfClass:[TGNavigationController class]])
-        {
+    } else {
+        if ([self.navigationController isKindOfClass:[TGNavigationController class]]) {
             switch (((TGNavigationController *)self.navigationController).presentationStyle)
             {
                 case TGNavigationControllerPresentationStyleInFormSheet:

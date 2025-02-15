@@ -14,7 +14,7 @@ public final class GalleryVideoDecoration: UniversalVideoDecoration {
     
     private var contentNode: (ASDisplayNode & UniversalVideoContentNode)?
     
-    private var validLayoutSize: CGSize?
+    private var validLayout: (size: CGSize, actualSize: CGSize)?
     
     public init() {
         self.contentContainerNode = ASDisplayNode()
@@ -34,9 +34,9 @@ public final class GalleryVideoDecoration: UniversalVideoDecoration {
             if let contentNode = contentNode {
                 if contentNode.supernode !== self.contentContainerNode {
                     self.contentContainerNode.addSubnode(contentNode)
-                    if let validLayoutSize = self.validLayoutSize {
-                        contentNode.frame = CGRect(origin: CGPoint(), size: validLayoutSize)
-                        contentNode.updateLayout(size: validLayoutSize, transition: .immediate)
+                    if let validLayout = self.validLayout {
+                        contentNode.frame = CGRect(origin: CGPoint(), size: validLayout.size)
+                        contentNode.updateLayout(size: validLayout.size, actualSize: validLayout.actualSize, transition: .immediate)
                     }
                 }
             }
@@ -51,7 +51,9 @@ public final class GalleryVideoDecoration: UniversalVideoDecoration {
             let boundingSize: CGSize = CGSize(width: max(corners.topLeft.radius, corners.bottomLeft.radius) + max(corners.topRight.radius, corners.bottomRight.radius), height: max(corners.topLeft.radius, corners.topRight.radius) + max(corners.bottomLeft.radius, corners.bottomRight.radius))
             let size: CGSize = CGSize(width: boundingSize.width + corners.extendedEdges.left + corners.extendedEdges.right, height: boundingSize.height + corners.extendedEdges.top + corners.extendedEdges.bottom)
             let arguments = TransformImageArguments(corners: corners, imageSize: size, boundingSize: boundingSize, intrinsicInsets: UIEdgeInsets())
-            let context = DrawingContext(size: size, clear: true)
+            guard let context = DrawingContext(size: size, clear: true) else {
+                return
+            }
             context.withContext { ctx in
                 ctx.setFillColor(UIColor.black.cgColor)
                 ctx.fill(arguments.drawingRect)
@@ -92,8 +94,8 @@ public final class GalleryVideoDecoration: UniversalVideoDecoration {
     public func updateContentNodeSnapshot(_ snapshot: UIView?) {
     }
     
-    public func updateLayout(size: CGSize, transition: ContainedViewLayoutTransition) {
-        self.validLayoutSize = size
+    public func updateLayout(size: CGSize, actualSize: CGSize, transition: ContainedViewLayoutTransition) {
+        self.validLayout = (size, actualSize)
         
         let bounds = CGRect(origin: CGPoint(), size: size)
         if let backgroundNode = self.backgroundNode {
@@ -108,7 +110,7 @@ public final class GalleryVideoDecoration: UniversalVideoDecoration {
         }
         if let contentNode = self.contentNode {
             transition.updateFrame(node: contentNode, frame: CGRect(origin: CGPoint(), size: size))
-            contentNode.updateLayout(size: size, transition: transition)
+            contentNode.updateLayout(size: size, actualSize: actualSize, transition: transition)
         }
     }
     

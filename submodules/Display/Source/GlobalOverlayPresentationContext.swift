@@ -3,7 +3,7 @@ import UIKit
 import AsyncDisplayKit
 import SwiftSignalKit
 
-func isViewVisibleInHierarchy(_ view: UIView, _ initial: Bool = true) -> Bool {
+public func isViewVisibleInHierarchy(_ view: UIView, _ initial: Bool = true) -> Bool {
     guard let window = view.window else {
         return false
     }
@@ -24,10 +24,10 @@ func isViewVisibleInHierarchy(_ view: UIView, _ initial: Bool = true) -> Bool {
 }
 
 public final class HierarchyTrackingNode: ASDisplayNode {
-    private let f: (Bool) -> Void
+    public var updated: (Bool) -> Void
     
-    public init(_ f: @escaping (Bool) -> Void) {
-        self.f = f
+    public init(_ f: @escaping (Bool) -> Void = { _ in }) {
+        self.updated = f
         
         super.init()
         
@@ -37,13 +37,13 @@ public final class HierarchyTrackingNode: ASDisplayNode {
     override public func didEnterHierarchy() {
         super.didEnterHierarchy()
         
-        self.f(true)
+        self.updated(true)
     }
     
     override public func didExitHierarchy() {
         super.didExitHierarchy()
         
-        self.f(false)
+        self.updated(false)
     }
 }
 

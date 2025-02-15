@@ -21,7 +21,15 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <limits>
+#include <string>
+
+#include "absl/base/config.h"
+
+#if ABSL_INTERNAL_HAS_CXA_DEMANGLE
+#include <cxxabi.h>
+#endif
 
 namespace absl {
 ABSL_NAMESPACE_BEGIN
@@ -151,12 +159,12 @@ static const AbbrevPair kSubstitutionList[] = {
 // State needed for demangling.  This struct is copied in almost every stack
 // frame, so every byte counts.
 typedef struct {
-  int mangled_idx;                   // Cursor of mangled name.
-  int out_cur_idx;                   // Cursor of output string.
-  int prev_name_idx;                 // For constructors/destructors.
-  signed int prev_name_length : 16;  // For constructors/destructors.
-  signed int nest_level : 15;        // For nested names.
-  unsigned int append : 1;           // Append flag.
+  int mangled_idx;                     // Cursor of mangled name.
+  int out_cur_idx;                     // Cursor of output string.
+  int prev_name_idx;                   // For constructors/destructors.
+  unsigned int prev_name_length : 16;  // For constructors/destructors.
+  signed int nest_level : 15;          // For nested names.
+  unsigned int append : 1;             // Append flag.
   // Note: for some reason MSVC can't pack "bool append : 1" into the same int
   // with the above two fields, so we use an int instead.  Amusingly it can pack
   // "signed bool" as expected, but relying on that to continue to be a legal
@@ -235,8 +243,8 @@ static size_t StrLen(const char *str) {
 }
 
 // Returns true if "str" has at least "n" characters remaining.
-static bool AtLeastNumCharsRemaining(const char *str, int n) {
-  for (int i = 0; i < n; ++i) {
+static bool AtLeastNumCharsRemaining(const char *str, size_t n) {
+  for (size_t i = 0; i < n; ++i) {
     if (str[i] == '\0') {
       return false;
     }
@@ -253,18 +261,20 @@ static bool StrPrefix(const char *str, const char *prefix) {
   return prefix[i] == '\0';  // Consumed everything in "prefix".
 }
 
-static void InitState(State *state, const char *mangled, char *out,
-                      int out_size) {
+static void InitState(State* state,
+                      const char* mangled,
+                      char* out,
+                      size_t out_size) {
   state->mangled_begin = mangled;
   state->out = out;
-  state->out_end_idx = out_size;
+  state->out_end_idx = static_cast<int>(out_size);
   state->recursion_depth = 0;
   state->steps = 0;
 
   state->parse_state.mangled_idx = 0;
   state->parse_state.out_cur_idx = 0;
   state->parse_state.prev_name_idx = 0;
-  state->parse_state.prev_name_length = -1;
+  state->parse_state.prev_name_length = 0;
   state->parse_state.nest_level = -1;
   state->parse_state.append = true;
 }
@@ -356,8 +366,8 @@ static bool ZeroOrMore(ParseFunc parse_func, State *state) {
 // Append "str" at "out_cur_idx".  If there is an overflow, out_cur_idx is
 // set to out_end_idx+1.  The output string is ensured to
 // always terminate with '\0' as long as there is no overflow.
-static void Append(State *state, const char *const str, const int length) {
-  for (int i = 0; i < length; ++i) {
+static void Append(State *state, const char *const str, const size_t length) {
+  for (size_t i = 0; i < length; ++i) {
     if (state->parse_state.out_cur_idx + 1 <
         state->out_end_idx) {  // +1 for '\0'
       state->out[state->parse_state.out_cur_idx++] = str[i];
@@ -420,7 +430,7 @@ static bool EndsWith(State *state, const char chr) {
 
 // Append "str" with some tweaks, iff "append" state is true.
 static void MaybeAppendWithLength(State *state, const char *const str,
-                                  const int length) {
+                                  const size_t length) {
   if (state->parse_state.append && length > 0) {
     // Append a space if the output buffer ends with '<' and "str"
     // starts with '<' to avoid <<<.
@@ -432,14 +442,14 @@ static void MaybeAppendWithLength(State *state, const char *const str,
     if (state->parse_state.out_cur_idx < state->out_end_idx &&
         (IsAlpha(str[0]) || str[0] == '_')) {
       state->parse_state.prev_name_idx = state->parse_state.out_cur_idx;
-      state->parse_state.prev_name_length = length;
+      state->parse_state.prev_name_length = static_cast<unsigned int>(length);
     }
     Append(state, str, length);
   }
 }
 
 // Appends a positive decimal number to the output if appending is enabled.
-static bool MaybeAppendDecimal(State *state, unsigned int val) {
+static bool MaybeAppendDecimal(State *state, int val) {
   // Max {32-64}-bit unsigned int is 20 digits.
   constexpr size_t kMaxLength = 20;
   char buf[kMaxLength];
@@ -451,12 +461,12 @@ static bool MaybeAppendDecimal(State *state, unsigned int val) {
     // one-past-the-end and manipulate one character before the pointer.
     char *p = &buf[kMaxLength];
     do {  // val=0 is the only input that should write a leading zero digit.
-      *--p = (val % 10) + '0';
+      *--p = static_cast<char>((val % 10) + '0');
       val /= 10;
     } while (p > buf && val != 0);
 
     // 'p' landed on the last character we set.  How convenient.
-    Append(state, p, kMaxLength - (p - buf));
+    Append(state, p, kMaxLength - static_cast<size_t>(p - buf));
   }
 
   return true;
@@ -466,7 +476,7 @@ static bool MaybeAppendDecimal(State *state, unsigned int val) {
 // Returns true so that it can be placed in "if" conditions.
 static bool MaybeAppend(State *state, const char *const str) {
   if (state->parse_state.append) {
-    int length = StrLen(str);
+    size_t length = StrLen(str);
     MaybeAppendWithLength(state, str, length);
   }
   return true;
@@ -521,10 +531,10 @@ static void MaybeCancelLastSeparator(State *state) {
 
 // Returns true if the identifier of the given length pointed to by
 // "mangled_cur" is anonymous namespace.
-static bool IdentifierIsAnonymousNamespace(State *state, int length) {
+static bool IdentifierIsAnonymousNamespace(State *state, size_t length) {
   // Returns true if "anon_prefix" is a proper prefix of "mangled_cur".
   static const char anon_prefix[] = "_GLOBAL__N_";
-  return (length > static_cast<int>(sizeof(anon_prefix) - 1) &&
+  return (length > (sizeof(anon_prefix) - 1) &&
           StrPrefix(RemainingInput(state), anon_prefix));
 }
 
@@ -542,12 +552,13 @@ static bool ParseUnnamedTypeName(State *state);
 static bool ParseNumber(State *state, int *number_out);
 static bool ParseFloatNumber(State *state);
 static bool ParseSeqId(State *state);
-static bool ParseIdentifier(State *state, int length);
+static bool ParseIdentifier(State *state, size_t length);
 static bool ParseOperatorName(State *state, int *arity);
 static bool ParseSpecialName(State *state);
 static bool ParseCallOffset(State *state);
 static bool ParseNVOffset(State *state);
 static bool ParseVOffset(State *state);
+static bool ParseAbiTags(State *state);
 static bool ParseCtorDtorName(State *state);
 static bool ParseDecltype(State *state);
 static bool ParseType(State *state);
@@ -559,6 +570,7 @@ static bool ParseClassEnumType(State *state);
 static bool ParseArrayType(State *state);
 static bool ParsePointerToMemberType(State *state);
 static bool ParseTemplateParam(State *state);
+static bool ParseTemplateParamDecl(State *state);
 static bool ParseTemplateTemplateParam(State *state);
 static bool ParseTemplateArgs(State *state);
 static bool ParseTemplateArg(State *state);
@@ -567,6 +579,7 @@ static bool ParseUnresolvedName(State *state);
 static bool ParseExpression(State *state);
 static bool ParseExprPrimary(State *state);
 static bool ParseExprCastValue(State *state);
+static bool ParseQRequiresClauseExpr(State *state);
 static bool ParseLocalName(State *state);
 static bool ParseLocalNameSuffix(State *state);
 static bool ParseDiscriminator(State *state);
@@ -601,7 +614,7 @@ static bool ParseSubstitution(State *state, bool accept_std);
 //
 // Reference:
 // - Itanium C++ ABI
-//   <https://mentorembedded.github.io/cxx-abi/abi.html#mangling>
+//   <https://itanium-cxx-abi.github.io/cxx-abi/abi.html#mangling>
 
 // <mangled-name> ::= _Z <encoding>
 static bool ParseMangledName(State *state) {
@@ -611,22 +624,34 @@ static bool ParseMangledName(State *state) {
 }
 
 // <encoding> ::= <(function) name> <bare-function-type>
+//                [`Q` <requires-clause expr>]
 //            ::= <(data) name>
 //            ::= <special-name>
+//
+// NOTE: Based on http://shortn/_Hoq9qG83rx
 static bool ParseEncoding(State *state) {
   ComplexityGuard guard(state);
   if (guard.IsTooComplex()) return false;
-  // Implementing the first two productions together as <name>
-  // [<bare-function-type>] avoids exponential blowup of backtracking.
+  // Since the first two productions both start with <name>, attempt
+  // to parse it only once to avoid exponential blowup of backtracking.
   //
-  // Since Optional(...) can't fail, there's no need to copy the state for
-  // backtracking.
-  if (ParseName(state) && Optional(ParseBareFunctionType(state))) {
+  // We're careful about exponential blowup because <encoding> recursively
+  // appears in other productions downstream of its first two productions,
+  // which means that every call to `ParseName` would possibly indirectly
+  // result in two calls to `ParseName` etc.
+  if (ParseName(state)) {
+    if (!ParseBareFunctionType(state)) {
+      return true;  // <(data) name>
+    }
+
+    // Parsed: <(function) name> <bare-function-type>
+    // Pending: [`Q` <requires-clause expr>]
+    ParseQRequiresClauseExpr(state);  // restores state on failure
     return true;
   }
 
   if (ParseSpecialName(state)) {
-    return true;
+    return true;  // <special-name>
   }
   return false;
 }
@@ -741,17 +766,42 @@ static bool ParsePrefix(State *state) {
   return true;
 }
 
-// <unqualified-name> ::= <operator-name>
-//                    ::= <ctor-dtor-name>
-//                    ::= <source-name>
-//                    ::= <local-source-name> // GCC extension; see below.
-//                    ::= <unnamed-type-name>
+// <unqualified-name> ::= <operator-name> [<abi-tags>]
+//                    ::= <ctor-dtor-name> [<abi-tags>]
+//                    ::= <source-name> [<abi-tags>]
+//                    ::= <local-source-name> [<abi-tags>]
+//                    ::= <unnamed-type-name> [<abi-tags>]
+//
+// <local-source-name> is a GCC extension; see below.
 static bool ParseUnqualifiedName(State *state) {
   ComplexityGuard guard(state);
   if (guard.IsTooComplex()) return false;
-  return (ParseOperatorName(state, nullptr) || ParseCtorDtorName(state) ||
-          ParseSourceName(state) || ParseLocalSourceName(state) ||
-          ParseUnnamedTypeName(state));
+  if (ParseOperatorName(state, nullptr) || ParseCtorDtorName(state) ||
+      ParseSourceName(state) || ParseLocalSourceName(state) ||
+      ParseUnnamedTypeName(state)) {
+    return ParseAbiTags(state);
+  }
+  return false;
+}
+
+// <abi-tags> ::= <abi-tag> [<abi-tags>]
+// <abi-tag>  ::= B <source-name>
+static bool ParseAbiTags(State *state) {
+  ComplexityGuard guard(state);
+  if (guard.IsTooComplex()) return false;
+
+  while (ParseOneCharToken(state, 'B')) {
+    ParseState copy = state->parse_state;
+    MaybeAppend(state, "[abi:");
+
+    if (!ParseSourceName(state)) {
+      state->parse_state = copy;
+      return false;
+    }
+    MaybeAppend(state, "]");
+  }
+
+  return true;
 }
 
 // <source-name> ::= <positive length number> <identifier>
@@ -760,7 +810,8 @@ static bool ParseSourceName(State *state) {
   if (guard.IsTooComplex()) return false;
   ParseState copy = state->parse_state;
   int length = -1;
-  if (ParseNumber(state, &length) && ParseIdentifier(state, length)) {
+  if (ParseNumber(state, &length) &&
+      ParseIdentifier(state, static_cast<size_t>(length))) {
     return true;
   }
   state->parse_state = copy;
@@ -838,7 +889,7 @@ static bool ParseNumber(State *state, int *number_out) {
   uint64_t number = 0;
   for (; *p != '\0'; ++p) {
     if (IsDigit(*p)) {
-      number = number * 10 + (*p - '0');
+      number = number * 10 + static_cast<uint64_t>(*p - '0');
     } else {
       break;
     }
@@ -853,7 +904,7 @@ static bool ParseNumber(State *state, int *number_out) {
     state->parse_state.mangled_idx += p - RemainingInput(state);
     if (number_out != nullptr) {
       // Note: possibly truncate "number".
-      *number_out = number;
+      *number_out = static_cast<int>(number);
     }
     return true;
   }
@@ -897,10 +948,10 @@ static bool ParseSeqId(State *state) {
 }
 
 // <identifier> ::= <unqualified source code identifier> (of given length)
-static bool ParseIdentifier(State *state, int length) {
+static bool ParseIdentifier(State *state, size_t length) {
   ComplexityGuard guard(state);
   if (guard.IsTooComplex()) return false;
-  if (length < 0 || !AtLeastNumCharsRemaining(RemainingInput(state), length)) {
+  if (!AtLeastNumCharsRemaining(RemainingInput(state), length)) {
     return false;
   }
   if (IdentifierIsAnonymousNamespace(state, length)) {
@@ -1246,32 +1297,39 @@ static bool ParseCVQualifiers(State *state) {
 }
 
 // <builtin-type> ::= v, etc.  # single-character builtin types
-//                ::= u <source-name>
+//                ::= u <source-name> [I <type> E]
 //                ::= Dd, etc.  # two-character builtin types
 //
 // Not supported:
 //                ::= DF <number> _ # _FloatN (N bits)
 //
+// NOTE: [I <type> E] is a vendor extension (http://shortn/_FrINpH1XC5).
 static bool ParseBuiltinType(State *state) {
   ComplexityGuard guard(state);
   if (guard.IsTooComplex()) return false;
-  const AbbrevPair *p;
-  for (p = kBuiltinTypeList; p->abbrev != nullptr; ++p) {
+
+  for (const AbbrevPair *p = kBuiltinTypeList; p->abbrev != nullptr; ++p) {
     // Guaranteed only 1- or 2-character strings in kBuiltinTypeList.
     if (p->abbrev[1] == '\0') {
       if (ParseOneCharToken(state, p->abbrev[0])) {
         MaybeAppend(state, p->real_name);
-        return true;
+        return true;  // ::= v, etc.  # single-character builtin types
       }
     } else if (p->abbrev[2] == '\0' && ParseTwoCharToken(state, p->abbrev)) {
       MaybeAppend(state, p->real_name);
-      return true;
+      return true;  // ::= Dd, etc.  # two-character builtin types
     }
   }
 
   ParseState copy = state->parse_state;
   if (ParseOneCharToken(state, 'u') && ParseSourceName(state)) {
-    return true;
+    copy = state->parse_state;
+    if (ParseOneCharToken(state, 'I') && ParseType(state) &&
+        ParseOneCharToken(state, 'E')) {
+      return true;  // ::= u <source-name> I <type> E
+    }
+    state->parse_state = copy;
+    return true;  // ::= u <source-name>
   }
   state->parse_state = copy;
   return false;
@@ -1376,21 +1434,83 @@ static bool ParsePointerToMemberType(State *state) {
 
 // <template-param> ::= T_
 //                  ::= T <parameter-2 non-negative number> _
+//                  ::= TL <level-1> __
+//                  ::= TL <level-1> _ <parameter-2 non-negative number> _
 static bool ParseTemplateParam(State *state) {
   ComplexityGuard guard(state);
   if (guard.IsTooComplex()) return false;
   if (ParseTwoCharToken(state, "T_")) {
     MaybeAppend(state, "?");  // We don't support template substitutions.
-    return true;
+    return true;              // ::= T_
   }
 
   ParseState copy = state->parse_state;
   if (ParseOneCharToken(state, 'T') && ParseNumber(state, nullptr) &&
       ParseOneCharToken(state, '_')) {
     MaybeAppend(state, "?");  // We don't support template substitutions.
+    return true;              // ::= T <parameter-2 non-negative number> _
+  }
+  state->parse_state = copy;
+
+  if (ParseTwoCharToken(state, "TL") && ParseNumber(state, nullptr)) {
+    if (ParseTwoCharToken(state, "__")) {
+      MaybeAppend(state, "?");  // We don't support template substitutions.
+      return true;              // ::= TL <level-1> __
+    }
+
+    if (ParseOneCharToken(state, '_') && ParseNumber(state, nullptr) &&
+        ParseOneCharToken(state, '_')) {
+      MaybeAppend(state, "?");  // We don't support template substitutions.
+      return true;  // ::= TL <level-1> _ <parameter-2 non-negative number> _
+    }
+  }
+  state->parse_state = copy;
+  return false;
+}
+
+// <template-param-decl>
+//   ::= Ty                                  # template type parameter
+//   ::= Tk <concept name> [<template-args>] # constrained type parameter
+//   ::= Tn <type>                           # template non-type parameter
+//   ::= Tt <template-param-decl>* E         # template template parameter
+//   ::= Tp <template-param-decl>            # template parameter pack
+//
+// NOTE: <concept name> is just a <name>: http://shortn/_MqJVyr0fc1
+// TODO(b/324066279): Implement optional suffix for `Tt`:
+// [Q <requires-clause expr>]
+static bool ParseTemplateParamDecl(State *state) {
+  ComplexityGuard guard(state);
+  if (guard.IsTooComplex()) return false;
+  ParseState copy = state->parse_state;
+
+  if (ParseTwoCharToken(state, "Ty")) {
     return true;
   }
   state->parse_state = copy;
+
+  if (ParseTwoCharToken(state, "Tk") && ParseName(state) &&
+      Optional(ParseTemplateArgs(state))) {
+    return true;
+  }
+  state->parse_state = copy;
+
+  if (ParseTwoCharToken(state, "Tn") && ParseType(state)) {
+    return true;
+  }
+  state->parse_state = copy;
+
+  if (ParseTwoCharToken(state, "Tt") &&
+      ZeroOrMore(ParseTemplateParamDecl, state) &&
+      ParseOneCharToken(state, 'E')) {
+    return true;
+  }
+  state->parse_state = copy;
+
+  if (ParseTwoCharToken(state, "Tp") && ParseTemplateParamDecl(state)) {
+    return true;
+  }
+  state->parse_state = copy;
+
   return false;
 }
 
@@ -1404,13 +1524,14 @@ static bool ParseTemplateTemplateParam(State *state) {
           ParseSubstitution(state, /*accept_std=*/false));
 }
 
-// <template-args> ::= I <template-arg>+ E
+// <template-args> ::= I <template-arg>+ [Q <requires-clause expr>] E
 static bool ParseTemplateArgs(State *state) {
   ComplexityGuard guard(state);
   if (guard.IsTooComplex()) return false;
   ParseState copy = state->parse_state;
   DisableAppend(state);
   if (ParseOneCharToken(state, 'I') && OneOrMore(ParseTemplateArg, state) &&
+      Optional(ParseQRequiresClauseExpr(state)) &&
       ParseOneCharToken(state, 'E')) {
     RestoreAppend(state, copy.append);
     MaybeAppend(state, "<>");
@@ -1420,7 +1541,8 @@ static bool ParseTemplateArgs(State *state) {
   return false;
 }
 
-// <template-arg>  ::= <type>
+// <template-arg>  ::= <template-param-decl> <template-arg>
+//                 ::= <type>
 //                 ::= <expr-primary>
 //                 ::= J <template-arg>* E        # argument pack
 //                 ::= X <expression> E
@@ -1523,6 +1645,12 @@ static bool ParseTemplateArg(State *state) {
     return true;
   }
   state->parse_state = copy;
+
+  if (ParseTemplateParamDecl(state) && ParseTemplateArg(state)) {
+    return true;
+  }
+  state->parse_state = copy;
+
   return false;
 }
 
@@ -1819,6 +1947,40 @@ static bool ParseExprCastValue(State *state) {
   return false;
 }
 
+// Parses `Q <requires-clause expr>`.
+// If parsing fails, applies backtracking to `state`.
+//
+// This function covers two symbols instead of one for convenience,
+// because in LLVM's Itanium ABI mangling grammar, <requires-clause expr>
+// always appears after Q.
+//
+// Does not emit the parsed `requires` clause to simplify the implementation.
+// In other words, these two functions' mangled names will demangle identically:
+//
+// template <typename T>
+// int foo(T) requires IsIntegral<T>;
+//
+// vs.
+//
+// template <typename T>
+// int foo(T);
+static bool ParseQRequiresClauseExpr(State *state) {
+  ComplexityGuard guard(state);
+  if (guard.IsTooComplex()) return false;
+  ParseState copy = state->parse_state;
+  DisableAppend(state);
+
+  // <requires-clause expr> is just an <expression>: http://shortn/_9E1Ul0rIM8
+  if (ParseOneCharToken(state, 'Q') && ParseExpression(state)) {
+    RestoreAppend(state, copy.append);
+    return true;
+  }
+
+  // also restores append
+  state->parse_state = copy;
+  return false;
+}
+
 // <local-name> ::= Z <(function) encoding> E <(entity) name> [<discriminator>]
 //              ::= Z <(function) encoding> E s [<discriminator>]
 //
@@ -1947,11 +2109,27 @@ static bool Overflowed(const State *state) {
 }
 
 // The demangler entry point.
-bool Demangle(const char *mangled, char *out, int out_size) {
+bool Demangle(const char* mangled, char* out, size_t out_size) {
   State state;
   InitState(&state, mangled, out, out_size);
   return ParseTopLevelMangledName(&state) && !Overflowed(&state) &&
          state.parse_state.out_cur_idx > 0;
+}
+
+std::string DemangleString(const char* mangled) {
+  std::string out;
+  int status = 0;
+  char* demangled = nullptr;
+#if ABSL_INTERNAL_HAS_CXA_DEMANGLE
+  demangled = abi::__cxa_demangle(mangled, nullptr, nullptr, &status);
+#endif
+  if (status == 0 && demangled != nullptr) {
+    out.append(demangled);
+    free(demangled);
+  } else {
+    out.append(mangled);
+  }
+  return out;
 }
 
 }  // namespace debugging_internal

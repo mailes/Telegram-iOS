@@ -6,6 +6,7 @@ import ImageIO
 import TelegramCore
 import TinyThumbnail
 import FastBlur
+import Postbox
 
 private let roundCorners = { () -> UIImage in
     let diameter: CGFloat = 60.0
@@ -27,8 +28,12 @@ public enum PeerAvatarImageType {
 }
 
 public func peerAvatarImageData(account: Account, peerReference: PeerReference?, authorOfMessage: MessageReference?, representation: TelegramMediaImageRepresentation?, synchronousLoad: Bool) -> Signal<(Data, PeerAvatarImageType)?, NoError>? {
+    return peerAvatarImageData(postbox: account.postbox, network: account.network, peerReference: peerReference, authorOfMessage: authorOfMessage, representation: representation, synchronousLoad: synchronousLoad)
+}
+
+public func peerAvatarImageData(postbox: Postbox, network: Network, peerReference: PeerReference?, authorOfMessage: MessageReference?, representation: TelegramMediaImageRepresentation?, synchronousLoad: Bool) -> Signal<(Data, PeerAvatarImageType)?, NoError>? {
     if let smallProfileImage = representation {
-        let resourceData = account.postbox.mediaBox.resourceData(smallProfileImage.resource, attemptSynchronously: synchronousLoad)
+        let resourceData = postbox.mediaBox.resourceData(smallProfileImage.resource, attemptSynchronously: synchronousLoad)
         let imageData = resourceData
         |> take(1)
         |> mapToSignal { maybeData -> Signal<(Data, PeerAvatarImageType)?, NoError> in
@@ -65,11 +70,11 @@ public func peerAvatarImageData(account: Account, peerReference: PeerReference?,
                     })
                     var fetchedDataDisposable: Disposable?
                     if let peerReference = peerReference {
-                        fetchedDataDisposable = fetchedMediaResource(mediaBox: account.postbox.mediaBox, reference: .avatar(peer: peerReference, resource: smallProfileImage.resource), statsCategory: .generic).start()
+                        fetchedDataDisposable = fetchedMediaResource(mediaBox: postbox.mediaBox, userLocation: .other, userContentType: .avatar, reference: .avatar(peer: peerReference, resource: smallProfileImage.resource), statsCategory: .generic).start()
                     } else if let authorOfMessage = authorOfMessage {
-                        fetchedDataDisposable = fetchedMediaResource(mediaBox: account.postbox.mediaBox, reference: .messageAuthorAvatar(message: authorOfMessage, resource: smallProfileImage.resource), statsCategory: .generic).start()
+                        fetchedDataDisposable = fetchedMediaResource(mediaBox: postbox.mediaBox, userLocation: .other, userContentType: .avatar, reference: .messageAuthorAvatar(message: authorOfMessage, resource: smallProfileImage.resource), statsCategory: .generic).start()
                     } else {
-                        fetchedDataDisposable = fetchedMediaResource(mediaBox: account.postbox.mediaBox, reference: .standalone(resource: smallProfileImage.resource), statsCategory: .generic).start()
+                        fetchedDataDisposable = fetchedMediaResource(mediaBox: postbox.mediaBox, userLocation: .other, userContentType: .avatar, reference: .standalone(resource: smallProfileImage.resource), statsCategory: .generic).start()
                     }
                     return ActionDisposable {
                         resourceDataDisposable.dispose()
@@ -84,10 +89,45 @@ public func peerAvatarImageData(account: Account, peerReference: PeerReference?,
     }
 }
 
-public func peerAvatarCompleteImage(account: Account, peer: EnginePeer, size: CGSize, round: Bool = true, font: UIFont = avatarPlaceholderFont(size: 13.0), drawLetters: Bool = true, fullSize: Bool = false, blurred: Bool = false) -> Signal<UIImage?, NoError> {
+public func peerAvatarCompleteImage(account: Account, peer: EnginePeer, forceProvidedRepresentation: Bool = false, representation: TelegramMediaImageRepresentation? = nil, size: CGSize, round: Bool = true, font: UIFont = avatarPlaceholderFont(size: 13.0), drawLetters: Bool = true, fullSize: Bool = false, blurred: Bool = false) -> Signal<UIImage?, NoError> {
+    return peerAvatarCompleteImage(
+        postbox: account.postbox,
+        network: account.network,
+        peer: peer,
+        forceProvidedRepresentation: forceProvidedRepresentation,
+        representation: representation,
+        size: size,
+        round: round,
+        font: font,
+        drawLetters: drawLetters,
+        fullSize: fullSize,
+        blurred: blurred
+    )
+}
+
+public func peerAvatarCompleteImage(postbox: Postbox, network: Network, peer: EnginePeer, forceProvidedRepresentation: Bool = false, representation: TelegramMediaImageRepresentation? = nil, size: CGSize, round: Bool = true, font: UIFont = avatarPlaceholderFont(size: 13.0), drawLetters: Bool = true, fullSize: Bool = false, blurred: Bool = false) -> Signal<UIImage?, NoError> {
     let iconSignal: Signal<UIImage?, NoError>
-    if let signal = peerAvatarImage(account: account, peerReference: PeerReference(peer._asPeer()), authorOfMessage: nil, representation: peer.profileImageRepresentations.first, displayDimensions: size, clipStyle: round ? .round : .none, blurred: blurred, inset: 0.0, emptyColor: nil, synchronousLoad: fullSize) {
-        if fullSize, let fullSizeSignal = peerAvatarImage(account: account, peerReference: PeerReference(peer._asPeer()), authorOfMessage: nil, representation: peer.profileImageRepresentations.last, displayDimensions: size, emptyColor: nil, synchronousLoad: true) {
+    
+    let clipStyle: AvatarNodeClipStyle
+    if round {
+        if case let .channel(channel) = peer, channel.isForum {
+            clipStyle = .roundedRect
+        } else {
+            clipStyle = .round
+        }
+    } else {
+        clipStyle = .none
+    }
+    
+    let thumbnailRepresentation: TelegramMediaImageRepresentation?
+    if forceProvidedRepresentation {
+        thumbnailRepresentation = representation
+    } else {
+        thumbnailRepresentation = peer.profileImageRepresentations.first
+    }
+    
+    if let signal = peerAvatarImage(postbox: postbox, network: network, peerReference: PeerReference(peer._asPeer()), authorOfMessage: nil, representation: thumbnailRepresentation, displayDimensions: size, clipStyle: clipStyle, blurred: blurred, inset: 0.0, emptyColor: nil, synchronousLoad: fullSize) {
+        if fullSize, let fullSizeSignal = peerAvatarImage(postbox: postbox, network: network, peerReference: PeerReference(peer._asPeer()), authorOfMessage: nil, representation: peer.profileImageRepresentations.last, displayDimensions: size, emptyColor: nil, synchronousLoad: true) {
             iconSignal = combineLatest(.single(nil) |> then(signal), .single(nil) |> then(fullSizeSignal))
             |> mapToSignal { thumbnailImage, fullSizeImage -> Signal<UIImage?, NoError> in
                 if let fullSizeImage = fullSizeImage {
@@ -116,7 +156,7 @@ public func peerAvatarCompleteImage(account: Account, peer: EnginePeer, size: CG
         iconSignal = Signal { subscriber in
             let image = generateImage(size, rotatedContext: { size, context in
                 context.clear(CGRect(origin: CGPoint(), size: size))
-                drawPeerAvatarLetters(context: context, size: CGSize(width: size.width, height: size.height), round: round, font: font, letters: displayLetters, peerId: peerId)
+                drawPeerAvatarLetters(context: context, size: CGSize(width: size.width, height: size.height), round: round, font: font, letters: displayLetters, peerId: peerId, nameColor: peer.nameColor)
                 if blurred {
                     context.setFillColor(UIColor(rgb: 0x000000, alpha: 0.5).cgColor)
                     context.fill(CGRect(origin: CGPoint(), size: size))
@@ -131,8 +171,26 @@ public func peerAvatarCompleteImage(account: Account, peer: EnginePeer, size: CG
     return iconSignal
 }
 
-public func peerAvatarImage(account: Account, peerReference: PeerReference?, authorOfMessage: MessageReference?, representation: TelegramMediaImageRepresentation?, displayDimensions: CGSize = CGSize(width: 60.0, height: 60.0), clipStyle: AvatarNodeClipStyle = .round, blurred: Bool = false, inset: CGFloat = 0.0, emptyColor: UIColor? = nil, synchronousLoad: Bool = false, provideUnrounded: Bool = false) -> Signal<(UIImage, UIImage)?, NoError>? {
-    if let imageData = peerAvatarImageData(account: account, peerReference: peerReference, authorOfMessage: authorOfMessage, representation: representation, synchronousLoad: synchronousLoad) {
+public func peerAvatarImage(account: Account, peerReference: PeerReference?, authorOfMessage: MessageReference?, representation: TelegramMediaImageRepresentation?, displayDimensions: CGSize = CGSize(width: 60.0, height: 60.0), clipStyle: AvatarNodeClipStyle = .round, blurred: Bool = false, inset: CGFloat = 0.0, emptyColor: UIColor? = nil, synchronousLoad: Bool = false, provideUnrounded: Bool = false, cutoutRect: CGRect? = nil) -> Signal<(UIImage, UIImage)?, NoError>? {
+    return peerAvatarImage(
+        postbox: account.postbox,
+        network: account.network,
+        peerReference: peerReference,
+        authorOfMessage: authorOfMessage,
+        representation: representation,
+        displayDimensions: displayDimensions,
+        clipStyle: clipStyle,
+        blurred: blurred,
+        inset: inset,
+        emptyColor: emptyColor,
+        synchronousLoad: synchronousLoad,
+        provideUnrounded: synchronousLoad,
+        cutoutRect: cutoutRect
+    )
+}
+    
+public func peerAvatarImage(postbox: Postbox, network: Network, peerReference: PeerReference?, authorOfMessage: MessageReference?, representation: TelegramMediaImageRepresentation?, displayDimensions: CGSize = CGSize(width: 60.0, height: 60.0), clipStyle: AvatarNodeClipStyle = .round, blurred: Bool = false, inset: CGFloat = 0.0, emptyColor: UIColor? = nil, synchronousLoad: Bool = false, provideUnrounded: Bool = false, cutoutRect: CGRect? = nil) -> Signal<(UIImage, UIImage)?, NoError>? {
+    if let imageData = peerAvatarImageData(postbox: postbox, network: network, peerReference: peerReference, authorOfMessage: authorOfMessage, representation: representation, synchronousLoad: synchronousLoad) {
         return imageData
         |> mapToSignal { data -> Signal<(UIImage, UIImage)?, NoError> in
             let generate = deferred { () -> Signal<(UIImage, UIImage)?, NoError> in
@@ -166,28 +224,31 @@ public func peerAvatarImage(account: Account, peerReference: PeerReference?, aut
                             }
                             if shouldBlur {
                                 let imageContextSize = size.width > 200.0 ? CGSize(width: 192.0, height: 192.0) : CGSize(width: 64.0, height: 64.0)
-                                let imageContext = DrawingContext(size: imageContextSize, scale: 1.0, clear: true)
-                                imageContext.withFlippedContext { c in
-                                    c.draw(dataImage, in: CGRect(origin: CGPoint(), size: imageContextSize))
+                                if let imageContext = DrawingContext(size: imageContextSize, scale: 1.0, clear: true) {
+                                    imageContext.withFlippedContext { c in
+                                        c.draw(dataImage, in: CGRect(origin: CGPoint(), size: imageContextSize))
+                                        
+                                        context.setBlendMode(.saturation)
+                                        context.setFillColor(UIColor(rgb: 0xffffff, alpha: 1.0).cgColor)
+                                        context.fill(CGRect(origin: CGPoint(), size: size))
+                                        context.setBlendMode(.copy)
+                                    }
                                     
-                                    context.setBlendMode(.saturation)
-                                    context.setFillColor(UIColor(rgb: 0xffffff, alpha: 1.0).cgColor)
-                                    context.fill(CGRect(origin: CGPoint(), size: size))
-                                    context.setBlendMode(.copy)
+                                    telegramFastBlurMore(Int32(imageContext.size.width * imageContext.scale), Int32(imageContext.size.height * imageContext.scale), Int32(imageContext.bytesPerRow), imageContext.bytes)
+                                    if size.width > 200.0 {
+                                        telegramFastBlurMore(Int32(imageContext.size.width * imageContext.scale), Int32(imageContext.size.height * imageContext.scale), Int32(imageContext.bytesPerRow), imageContext.bytes)
+                                        telegramFastBlurMore(Int32(imageContext.size.width * imageContext.scale), Int32(imageContext.size.height * imageContext.scale), Int32(imageContext.bytesPerRow), imageContext.bytes)
+                                        telegramFastBlurMore(Int32(imageContext.size.width * imageContext.scale), Int32(imageContext.size.height * imageContext.scale), Int32(imageContext.bytesPerRow), imageContext.bytes)
+                                        telegramFastBlurMore(Int32(imageContext.size.width * imageContext.scale), Int32(imageContext.size.height * imageContext.scale), Int32(imageContext.bytesPerRow), imageContext.bytes)
+                                    }
+                                    
+                                    dataImage = imageContext.generateImage()!.cgImage!
                                 }
-
-                                telegramFastBlurMore(Int32(imageContext.size.width * imageContext.scale), Int32(imageContext.size.height * imageContext.scale), Int32(imageContext.bytesPerRow), imageContext.bytes)
-                                if size.width > 200.0 {
-                                    telegramFastBlurMore(Int32(imageContext.size.width * imageContext.scale), Int32(imageContext.size.height * imageContext.scale), Int32(imageContext.bytesPerRow), imageContext.bytes)
-                                    telegramFastBlurMore(Int32(imageContext.size.width * imageContext.scale), Int32(imageContext.size.height * imageContext.scale), Int32(imageContext.bytesPerRow), imageContext.bytes)
-                                    telegramFastBlurMore(Int32(imageContext.size.width * imageContext.scale), Int32(imageContext.size.height * imageContext.scale), Int32(imageContext.bytesPerRow), imageContext.bytes)
-                                    telegramFastBlurMore(Int32(imageContext.size.width * imageContext.scale), Int32(imageContext.size.height * imageContext.scale), Int32(imageContext.bytesPerRow), imageContext.bytes)
-                                }
-                                
-                                dataImage = imageContext.generateImage()!.cgImage!
                             }
                             
-                            context.draw(dataImage, in: CGRect(origin: CGPoint(), size: displayDimensions).insetBy(dx: inset, dy: inset))
+                            let filledSize = CGSize(width: dataImage.width, height: dataImage.height).aspectFilled(displayDimensions)
+                            
+                            context.draw(dataImage, in: CGRect(origin: CGPoint(x: floor((displayDimensions.width - filledSize.width) / 2.0), y: floor((displayDimensions.height - filledSize.height) / 2.0)), size: filledSize).insetBy(dx: inset, dy: inset))
                             if blurred {
                                 context.setBlendMode(.normal)
                                 context.setFillColor(UIColor(rgb: 0x000000, alpha: 0.45).cgColor)
@@ -235,6 +296,12 @@ public func peerAvatarImage(account: Account, peerReference: PeerReference?, aut
                             context.addPath(UIBezierPath(roundedRect: CGRect(x: 0.0, y: 0.0, width: displayDimensions.width, height: displayDimensions.height).insetBy(dx: inset, dy: inset), cornerRadius: floor(displayDimensions.width * 0.25)).cgPath)
                             context.fillPath()
                         }
+                    }
+                    
+                    if let cutoutRect {
+                        context.setBlendMode(.copy)
+                        context.setFillColor(UIColor.clear.cgColor)
+                        context.fillEllipse(in: cutoutRect.offsetBy(dx: 0.0, dy: size.height - cutoutRect.maxY - cutoutRect.height))
                     }
                 })
                 let unroundedImage: UIImage?
@@ -286,4 +353,145 @@ public func peerAvatarImage(account: Account, peerReference: PeerReference?, aut
     } else {
         return nil
     }
+}
+
+public func drawPeerAvatarLetters(context: CGContext, size: CGSize, round: Bool = true, font: UIFont, letters: [String], peerId: EnginePeer.Id, nameColor: PeerNameColor?) {
+    if round {
+        context.beginPath()
+        context.addEllipse(in: CGRect(x: 0.0, y: 0.0, width: size.width, height:
+            size.height))
+        context.clip()
+    }
+    
+    let colorIndex: Int
+    if peerId.namespace == .max {
+        colorIndex = -1
+    } else {
+        colorIndex = Int(clamping: abs(peerId.id._internalGetInt64Value()))
+    }
+    
+    let colorsArray: NSArray
+    if colorIndex == -1 {
+        colorsArray = AvatarNode.grayscaleColors.map(\.cgColor) as NSArray
+    } else {
+        var index = colorIndex % AvatarNode.gradientColors.count
+        if let nameColor {
+            index = Int(nameColor.rawValue) % AvatarNode.gradientColors.count
+        }
+        colorsArray = AvatarNode.gradientColors[index].map(\.cgColor) as NSArray
+    }
+    
+    var locations: [CGFloat] = [1.0, 0.0]
+    
+    let colorSpace = CGColorSpaceCreateDeviceRGB()
+    let gradient = CGGradient(colorsSpace: colorSpace, colors: colorsArray, locations: &locations)!
+    
+    context.drawLinearGradient(gradient, start: CGPoint(), end: CGPoint(x: 0.0, y: size.height), options: CGGradientDrawingOptions())
+    
+    context.resetClip()
+    
+    context.setBlendMode(.normal)
+    
+    let string = letters.count == 0 ? "" : (letters[0] + (letters.count == 1 ? "" : letters[1]))
+    let attributedString = NSAttributedString(string: string, attributes: [NSAttributedString.Key.font: font, NSAttributedString.Key.foregroundColor: UIColor.white])
+    
+    let line = CTLineCreateWithAttributedString(attributedString)
+    let lineBounds = CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)
+    
+    let lineOffset = CGPoint(x: string == "B" ? 1.0 : 0.0, y: 0.0)
+    let lineOrigin = CGPoint(x: floorToScreenPixels(-lineBounds.origin.x + (size.width - lineBounds.size.width) / 2.0) + lineOffset.x, y: floorToScreenPixels(-lineBounds.origin.y + (size.height - lineBounds.size.height) / 2.0))
+    
+    context.translateBy(x: size.width / 2.0, y: size.height / 2.0)
+    context.scaleBy(x: 1.0, y: -1.0)
+    context.translateBy(x: -size.width / 2.0, y: -size.height / 2.0)
+    
+    let textPosition = context.textPosition
+    context.translateBy(x: lineOrigin.x, y: lineOrigin.y)
+    CTLineDraw(line, context)
+    context.translateBy(x: -lineOrigin.x, y: -lineOrigin.y)
+    context.textPosition = textPosition
+}
+
+
+public enum AvatarBackgroundColor {
+    case blue
+    case yellow
+    case green
+    case purple
+    case red
+    case violet
+}
+
+public func generateAvatarImage(size: CGSize, icon: UIImage?, iconScale: CGFloat = 1.0, cornerRadius: CGFloat? = nil, circleCorners: Bool = false, color: AvatarBackgroundColor, customColors: [UIColor]? = nil, diagonal: Bool = false) -> UIImage? {
+    return generateImage(size, rotatedContext: { size, context in
+        context.clear(CGRect(origin: CGPoint(), size: size))
+        context.beginPath()
+        if let cornerRadius {
+            if circleCorners {
+                let roundedRect = CGPath(roundedRect: CGRect(origin: .zero, size: size), cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
+                context.addPath(roundedRect)
+            } else {
+                let roundedRect = UIBezierPath(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: cornerRadius)
+                context.addPath(roundedRect.cgPath)
+            }
+        } else {
+            context.addEllipse(in: CGRect(x: 0.0, y: 0.0, width: size.width, height: size.height))
+        }
+        context.clip()
+        
+        let colorIndex: Int
+        switch color {
+        case .blue:
+            colorIndex = 5
+        case .yellow:
+            colorIndex = 1
+        case .green:
+            colorIndex = 3
+        case .purple:
+            colorIndex = 2
+        case .red:
+            colorIndex = 0
+        case .violet:
+            colorIndex = 6
+        }
+        
+        let colorsArray: NSArray
+        if let customColors {
+            colorsArray = customColors.map(\.cgColor) as NSArray
+        } else {
+            if colorIndex == -1 {
+                colorsArray = AvatarNode.grayscaleColors.map(\.cgColor) as NSArray
+            } else {
+                colorsArray = AvatarNode.gradientColors[colorIndex % AvatarNode.gradientColors.count].map(\.cgColor) as NSArray
+            }
+        }
+                
+        var locations: [CGFloat] = []
+        let delta = 1.0 / CGFloat(colorsArray.count - 1)
+        for i in 0 ..< colorsArray.count {
+            locations.append(1.0 - delta * CGFloat(i))
+        }
+        
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let gradient = CGGradient(colorsSpace: colorSpace, colors: colorsArray, locations: &locations)!
+        
+        if diagonal {
+            context.drawLinearGradient(gradient, start: CGPoint(x: size.width, y: 0.0), end: CGPoint(x: 0.0, y: size.height), options: CGGradientDrawingOptions())
+        } else {
+            context.drawLinearGradient(gradient, start: CGPoint(), end: CGPoint(x: 0.0, y: size.height), options: CGGradientDrawingOptions())
+        }
+        context.resetClip()
+        
+        context.setBlendMode(.normal)
+        
+        context.translateBy(x: size.width / 2.0, y: size.height / 2.0)
+        context.scaleBy(x: 1.0, y: -1.0)
+        context.translateBy(x: -size.width / 2.0, y: -size.height / 2.0)
+        
+        if let icon = icon {
+            let iconSize = CGSize(width: icon.size.width * iconScale, height: icon.size.height * iconScale)
+            let iconFrame = CGRect(origin: CGPoint(x: floor((size.width - iconSize.width) / 2.0), y: floor((size.height - iconSize.height) / 2.0)), size: iconSize)
+            context.draw(icon.cgImage!, in: iconFrame)
+        }
+    })
 }

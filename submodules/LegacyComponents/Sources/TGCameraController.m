@@ -170,8 +170,12 @@ static CGPoint TGCameraControllerClampPointToScreenSize(__unused id self, __unus
         
         _items = [[NSMutableArray alloc] init];
         
-        if (_intent != TGCameraControllerGenericIntent)
+        if (_intent != TGCameraControllerGenericIntent) {
             _allowCaptions = false;
+        }
+        if (_intent == TGCameraControllerGenericVideoOnlyIntent || _intent == TGCameraControllerGenericPhotoOnlyIntent) {
+            _allowCaptions = false;
+        }
         _saveEditedPhotos = saveEditedPhotos;
         _saveCapturedMedia = saveCapturedMedia;
         
@@ -303,12 +307,12 @@ static CGPoint TGCameraControllerClampPointToScreenSize(__unused id self, __unus
     
     if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPhone)
     {
-        _interfaceView = [[TGCameraMainPhoneView alloc] initWithFrame:screenBounds avatar:_intent == TGCameraControllerAvatarIntent hasUltrawideCamera:_camera.hasUltrawideCamera hasTelephotoCamera:_camera.hasTelephotoCamera];
+        _interfaceView = [[TGCameraMainPhoneView alloc] initWithFrame:screenBounds avatar:_intent == TGCameraControllerAvatarIntent videoModeByDefault:_intent == TGCameraControllerGenericVideoOnlyIntent hasUltrawideCamera:_camera.hasUltrawideCamera hasTelephotoCamera:_camera.hasTelephotoCamera camera:_camera];
         [_interfaceView setInterfaceOrientation:interfaceOrientation animated:false];
     }
     else
     {
-        _interfaceView = [[TGCameraMainTabletView alloc] initWithFrame:screenBounds avatar:_intent == TGCameraControllerAvatarIntent hasUltrawideCamera:_camera.hasUltrawideCamera hasTelephotoCamera:_camera.hasTelephotoCamera];
+        _interfaceView = [[TGCameraMainTabletView alloc] initWithFrame:screenBounds avatar:_intent == TGCameraControllerAvatarIntent videoModeByDefault:_intent == TGCameraControllerGenericVideoOnlyIntent hasUltrawideCamera:_camera.hasUltrawideCamera hasTelephotoCamera:_camera.hasTelephotoCamera camera:_camera];
         [_interfaceView setInterfaceOrientation:interfaceOrientation animated:false];
         
         CGSize referenceSize = [self referenceViewSizeForOrientation:interfaceOrientation];
@@ -451,8 +455,12 @@ static CGPoint TGCameraControllerClampPointToScreenSize(__unused id self, __unus
         }
     };
     
-    if (_intent != TGCameraControllerGenericIntent && _intent != TGCameraControllerAvatarIntent)
+    if (_intent != TGCameraControllerGenericIntent && _intent != TGCameraControllerAvatarIntent) {
         [_interfaceView setHasModeControl:false];
+    }
+    if (_intent == TGCameraControllerGenericVideoOnlyIntent || _intent == TGCameraControllerGenericPhotoOnlyIntent) {
+        [_interfaceView setHasModeControl:false];
+    }
 
     if (@available(iOS 11.0, *)) {
         _backgroundView.accessibilityIgnoresInvertColors = true;
@@ -502,7 +510,7 @@ static CGPoint TGCameraControllerClampPointToScreenSize(__unused id self, __unus
         strongSelf->_interfaceView.shutterReleased(true);
     };
     
-    _buttonHandler = [[PGCameraVolumeButtonHandler alloc] initWithUpButtonPressedBlock:buttonPressed upButtonReleasedBlock:buttonReleased downButtonPressedBlock:buttonPressed downButtonReleasedBlock:buttonReleased];
+    _buttonHandler = [[PGCameraVolumeButtonHandler alloc] initWithIsCameraSpecific:true eventView:self.view upButtonPressedBlock:buttonPressed upButtonReleasedBlock:buttonReleased downButtonPressedBlock:buttonPressed downButtonReleasedBlock:buttonReleased];
     
     [self _configureCamera];
 }
@@ -798,29 +806,29 @@ static CGPoint TGCameraControllerClampPointToScreenSize(__unused id self, __unus
         }
     };
     
-    _camera.captureSession.crossfadeNeeded = ^{
-        __strong TGCameraController *strongSelf = weakSelf;
-        if (strongSelf != nil)
-        {
-            if (strongSelf->_crossfadingForZoom) {
-                return;
-            }
-            strongSelf->_crossfadingForZoom = true;
-            
-            [strongSelf->_camera captureNextFrameCompletion:^(UIImage *image)
-            {
-                TGDispatchOnMainThread(^
-                {
-                    [strongSelf->_previewView beginTransitionWithSnapshotImage:image animated:false];
-                    
-                    TGDispatchAfter(0.15, dispatch_get_main_queue(), ^{
-                        [strongSelf->_previewView endTransitionAnimated:true];
-                        strongSelf->_crossfadingForZoom = false;
-                    });
-                });
-            }];
-        };
-    };
+//    _camera.captureSession.crossfadeNeeded = ^{
+//        __strong TGCameraController *strongSelf = weakSelf;
+//        if (strongSelf != nil)
+//        {
+//            if (strongSelf->_crossfadingForZoom) {
+//                return;
+//            }
+//            strongSelf->_crossfadingForZoom = true;
+//            
+//            [strongSelf->_camera captureNextFrameCompletion:^(UIImage *image)
+//            {
+//                TGDispatchOnMainThread(^
+//                {
+//                    [strongSelf->_previewView beginTransitionWithSnapshotImage:image animated:false];
+//                    
+//                    TGDispatchAfter(0.15, dispatch_get_main_queue(), ^{
+//                        [strongSelf->_previewView endTransitionAnimated:true];
+//                        strongSelf->_crossfadingForZoom = false;
+//                    });
+//                });
+//            }];
+//        };
+//    };
 }
 
 #pragma mark - View Life Cycle
@@ -1527,8 +1535,8 @@ static CGPoint TGCameraControllerClampPointToScreenSize(__unused id self, __unus
             }
         }];
         
-        bool hasCamera = !self.inhibitMultipleCapture && (((_intent == TGCameraControllerGenericIntent || _intent == TGCameraControllerGenericPhotoOnlyIntent) && !_shortcut) || (_intent == TGCameraControllerPassportMultipleIntent));
-        TGMediaPickerGalleryModel *model = [[TGMediaPickerGalleryModel alloc] initWithContext:windowContext items:galleryItems focusItem:focusItem selectionContext:_items.count > 1 ? selectionContext : nil editingContext:editingContext hasCaptions:self.allowCaptions allowCaptionEntities:self.allowCaptionEntities hasTimer:self.hasTimer onlyCrop:_intent == TGCameraControllerPassportIntent || _intent == TGCameraControllerPassportIdIntent || _intent == TGCameraControllerPassportMultipleIntent inhibitDocumentCaptions:self.inhibitDocumentCaptions hasSelectionPanel:true hasCamera:hasCamera recipientName:self.recipientName];
+        bool hasCamera = !self.inhibitMultipleCapture && (((_intent == TGCameraControllerGenericIntent || _intent == TGCameraControllerGenericPhotoOnlyIntent || _intent == TGCameraControllerGenericVideoOnlyIntent) && !_shortcut) || (_intent == TGCameraControllerPassportMultipleIntent));
+        TGMediaPickerGalleryModel *model = [[TGMediaPickerGalleryModel alloc] initWithContext:windowContext items:galleryItems focusItem:focusItem selectionContext:_items.count > 1 ? selectionContext : nil editingContext:editingContext hasCaptions:self.allowCaptions allowCaptionEntities:self.allowCaptionEntities hasTimer:self.hasTimer onlyCrop:_intent == TGCameraControllerPassportIntent || _intent == TGCameraControllerPassportIdIntent || _intent == TGCameraControllerPassportMultipleIntent inhibitDocumentCaptions:self.inhibitDocumentCaptions hasSelectionPanel:true hasCamera:hasCamera recipientName:self.recipientName isScheduledMessages:false];
         model.inhibitMute = self.inhibitMute;
         model.controller = galleryController;
         model.stickersContext = self.stickersContext;
@@ -1560,7 +1568,7 @@ static CGPoint TGCameraControllerClampPointToScreenSize(__unused id self, __unus
                 }
             }
             
-            TGMediaPickerSendActionSheetController *controller = [[TGMediaPickerSendActionSheetController alloc] initWithContext:strongSelf->_context isDark:true sendButtonFrame:strongModel.interfaceView.doneButtonFrame canSendSilently:strongSelf->_hasSilentPosting canSchedule:effectiveHasSchedule reminder:strongSelf->_reminder hasTimer:strongSelf->_hasTimer];
+            TGMediaPickerSendActionSheetController *controller = [[TGMediaPickerSendActionSheetController alloc] initWithContext:strongSelf->_context isDark:true sendButtonFrame:strongModel.interfaceView.doneButtonFrame canSendSilently:strongSelf->_hasSilentPosting canSendWhenOnline:effectiveHasSchedule canSchedule:effectiveHasSchedule reminder:strongSelf->_reminder hasTimer:strongSelf->_hasTimer];
             controller.send = ^{
                 __strong TGCameraController *strongSelf = weakSelf;
                 __strong TGMediaPickerGalleryModel *strongModel = weakModel;
@@ -1610,6 +1618,32 @@ static CGPoint TGCameraControllerClampPointToScreenSize(__unused id self, __unus
                 
                 if (strongSelf.finishedWithResults != nil)
                     strongSelf.finishedWithResults(strongController, strongSelf->_selectionContext, strongSelf->_editingContext, item.asset, true, 0);
+                
+                [strongSelf _dismissTransitionForResultController:strongController];
+            };
+            controller.sendWhenOnline = ^{
+                __strong TGCameraController *strongSelf = weakSelf;
+                __strong TGMediaPickerGalleryModel *strongModel = weakModel;
+                
+                if (strongSelf == nil || strongModel == nil)
+                    return;
+                
+                __strong TGModernGalleryController *strongController = weakGalleryController;
+                if (strongController == nil)
+                    return;
+                
+                if ([item isKindOfClass:[TGMediaPickerGalleryVideoItem class]])
+                {
+                    TGMediaPickerGalleryVideoItemView *itemView = (TGMediaPickerGalleryVideoItemView *)[strongController itemViewForItem:item];
+                    [itemView stop];
+                    [itemView setPlayButtonHidden:true animated:true];
+                }
+                
+                if (strongSelf->_selectionContext.allowGrouping)
+                    [[NSUserDefaults standardUserDefaults] setObject:@(!strongSelf->_selectionContext.grouping) forKey:@"TG_mediaGroupingDisabled_v0"];
+                
+                if (strongSelf.finishedWithResults != nil)
+                    strongSelf.finishedWithResults(strongController, strongSelf->_selectionContext, strongSelf->_editingContext, item.asset, false, 0x7ffffffe);
                 
                 [strongSelf _dismissTransitionForResultController:strongController];
             };
@@ -1978,7 +2012,7 @@ static CGPoint TGCameraControllerClampPointToScreenSize(__unused id self, __unus
     if (_intent == TGCameraControllerSignupAvatarIntent) {
         intent = TGPhotoEditorControllerSignupAvatarIntent;
     }
-    TGPhotoEditorController *controller = [[TGPhotoEditorController alloc] initWithContext:windowContext item:input intent:(TGPhotoEditorControllerFromCameraIntent | intent) adjustments:nil caption:nil screenImage:image availableTabs:[TGPhotoEditorController defaultTabsForAvatarIntent] selectedTab:TGPhotoEditorCropTab];
+    TGPhotoEditorController *controller = [[TGPhotoEditorController alloc] initWithContext:windowContext item:input intent:(TGPhotoEditorControllerFromCameraIntent | intent) adjustments:nil caption:nil screenImage:image availableTabs:[TGPhotoEditorController defaultTabsForAvatarIntent:_intent != TGCameraControllerSignupAvatarIntent] selectedTab:TGPhotoEditorCropTab];
     controller.stickersContext = _stickersContext;
     __weak TGPhotoEditorController *weakController = controller;
     controller.beginTransitionIn = ^UIView *(CGRect *referenceFrame, __unused UIView **parentView)
@@ -1996,7 +2030,7 @@ static CGPoint TGCameraControllerClampPointToScreenSize(__unused id self, __unus
         return imageView;
     };
     
-    controller.beginTransitionOut = ^UIView *(CGRect *referenceFrame, __unused UIView **parentView)
+    controller.beginTransitionOut = ^UIView *(CGRect *referenceFrame, __unused UIView **parentView, __unused bool saving)
     {
         __strong TGCameraController *strongSelf = weakSelf;
         if (strongSelf == nil)
@@ -2014,7 +2048,7 @@ static CGPoint TGCameraControllerClampPointToScreenSize(__unused id self, __unus
         return strongSelf->_previewView;
     };
     
-    controller.didFinishEditing = ^(PGPhotoEditorValues *editorValues, UIImage *resultImage, __unused UIImage *thumbnailImage, bool hasChanges)
+    controller.didFinishEditing = ^(PGPhotoEditorValues *editorValues, UIImage *resultImage, __unused UIImage *thumbnailImage, bool hasChanges, void(^commit)(void))
     {
         if (!hasChanges)
             return;
@@ -2064,10 +2098,12 @@ static CGPoint TGCameraControllerClampPointToScreenSize(__unused id self, __unus
                 [strongController updateStatusBarAppearanceForDismiss];
                 [strongSelf _dismissTransitionForResultController:(TGOverlayController *)strongController];
             }
+            
+            commit();
         });
     };
     
-    controller.didFinishEditingVideo = ^(AVAsset *asset, id<TGMediaEditAdjustments> adjustments, UIImage *resultImage, UIImage *thumbnailImage, bool hasChanges) {
+    controller.didFinishEditingVideo = ^(AVAsset *asset, id<TGMediaEditAdjustments> adjustments, UIImage *resultImage, UIImage *thumbnailImage, bool hasChanges, void(^commit)(void)) {
         if (!hasChanges)
             return;
         
@@ -2086,6 +2122,8 @@ static CGPoint TGCameraControllerClampPointToScreenSize(__unused id self, __unus
                 [strongController updateStatusBarAppearanceForDismiss];
                 [strongSelf _dismissTransitionForResultController:(TGOverlayController *)strongController];
             }
+            
+            commit();
         });
     };
     
@@ -2369,13 +2407,23 @@ static CGPoint TGCameraControllerClampPointToScreenSize(__unused id self, __unus
     
     self.view.hidden = true;
     
+    __weak TGCameraController *weakSelf = self;
+    __weak TGOverlayController *weakResultController = resultController;
+    
     [resultController.view.layer animatePositionFrom:resultController.view.layer.position to:CGPointMake(resultController.view.layer.position.x, resultController.view.layer.position.y + resultController.view.bounds.size.height) duration:0.3 timingFunction:kCAMediaTimingFunctionSpring removeOnCompletion:false completion:^(__unused bool finished) {
-        if (resultController.customDismissSelf) {
-            resultController.customDismissSelf();
-        } else {
-            [resultController dismiss];
+        TGCameraController *strongSelf = weakSelf;
+        TGOverlayController *strongResultController = weakResultController;
+        
+        if (strongResultController) {
+            if (strongResultController.customDismissSelf) {
+                strongResultController.customDismissSelf();
+            } else {
+                [strongResultController dismiss];
+            }
         }
-        [self dismiss];
+        if (strongSelf) {
+            [strongSelf dismiss];
+        }
     }];
 }
 
@@ -2695,9 +2743,15 @@ static CGPoint TGCameraControllerClampPointToScreenSize(__unused id self, __unus
         {
             case PGCameraModeVideo:
             {
-                if (widescreenWidth == 926.0f)
+                if (widescreenWidth == 956.0f)
+                    return CGRectMake(0, 82, screenSize.width, screenSize.height - 82 - 83);
+                else if (widescreenWidth == 932.0f)
+                    return CGRectMake(0, 82, screenSize.width, screenSize.height - 82 - 83);
+                else if (widescreenWidth == 926.0f)
                     return CGRectMake(0, 82, screenSize.width, screenSize.height - 82 - 83);
                 else if (widescreenWidth == 896.0f)
+                    return CGRectMake(0, 77, screenSize.width, screenSize.height - 77 - 83);
+                else if (widescreenWidth == 874.0f)
                     return CGRectMake(0, 77, screenSize.width, screenSize.height - 77 - 83);
                 else if (widescreenWidth == 812.0f)
                     return CGRectMake(0, 77, screenSize.width, screenSize.height - 77 - 68);
@@ -2722,13 +2776,17 @@ static CGPoint TGCameraControllerClampPointToScreenSize(__unused id self, __unus
             
             default:
             {
-                if (widescreenWidth == 932.0f)
+                if (widescreenWidth == 956.0f)
+                    return CGRectMake(0, 136, screenSize.width, screenSize.height - 136 - 234);
+                else if (widescreenWidth == 932.0f)
                     return CGRectMake(0, 136, screenSize.width, screenSize.height - 136 - 223);
                 else if (widescreenWidth == 926.0f)
                     return CGRectMake(0, 121, screenSize.width, screenSize.height - 121 - 234);
                 else if (widescreenWidth == 896.0f)
                     return CGRectMake(0, 121, screenSize.width, screenSize.height - 121 - 223);
-                if (widescreenWidth == 852.0f)
+                else if (widescreenWidth == 874.0f)
+                    return CGRectMake(0, 121, screenSize.width, screenSize.height - 135 - 202);
+                else if (widescreenWidth == 852.0f)
                     return CGRectMake(0, 136, screenSize.width, screenSize.height - 136 - 192);
                 else if (widescreenWidth == 844.0f)
                     return CGRectMake(0, 77, screenSize.width, screenSize.height - 77 - 191);
@@ -2965,14 +3023,7 @@ static CGPoint TGCameraControllerClampPointToScreenSize(__unused id self, __unus
                 if (adjustments.paintingData.stickers.count > 0)
                     dict[@"stickers"] = adjustments.paintingData.stickers;
                 
-                bool animated = false;
-                for (TGPhotoPaintEntity *entity in adjustments.paintingData.entities) {
-                    if (entity.animated) {
-                        animated = true;
-                        break;
-                    }
-                }
-                
+                bool animated = adjustments.paintingData.hasAnimation;
                 if (animated) {
                     dict[@"isAnimation"] = @true;
                     if ([adjustments isKindOfClass:[PGPhotoEditorValues class]]) {

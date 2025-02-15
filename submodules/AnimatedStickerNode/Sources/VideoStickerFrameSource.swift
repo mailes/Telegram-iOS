@@ -100,7 +100,7 @@ private final class VideoStickerFrameSourceCache {
             return true
         }
        
-        self.file.seek(position: 0)
+        let _ = self.file.seek(position: 0)
         var frameRate: Int32 = 0
         if self.file.read(&frameRate, 4) != 4 {
             return false
@@ -113,7 +113,7 @@ private final class VideoStickerFrameSourceCache {
         }
         self.frameRate = frameRate
         
-        self.file.seek(position: 4)
+        let _ = self.file.seek(position: 4)
         
         var frameCount: Int32 = 0
         if self.file.read(&frameCount, 4) != 4 {
@@ -144,7 +144,7 @@ private final class VideoStickerFrameSourceCache {
             return .notFound
         }
         
-        self.file.seek(position: Int64(8 + index * 4 * 2))
+        let _ = self.file.seek(position: Int64(8 + index * 4 * 2))
         var offset: Int32 = 0
         var length: Int32 = 0
         if self.file.read(&offset, 4) != 4 {
@@ -167,11 +167,11 @@ private final class VideoStickerFrameSourceCache {
     }
     
     func storeFrameRateAndCount(frameRate: Int, frameCount: Int) {
-        self.file.seek(position: 0)
+        let _ = self.file.seek(position: 0)
         var frameRate = Int32(frameRate)
         let _ = self.file.write(&frameRate, count: 4)
        
-        self.file.seek(position: 4)
+        let _ = self.file.seek(position: 4)
         var frameCount = Int32(frameCount)
         let _ = self.file.write(&frameCount, count: 4)
     }
@@ -203,12 +203,12 @@ private final class VideoStickerFrameSourceCache {
                     return
                 }
                 
-                strongSelf.file.seek(position: Int64(8 + index * 4 * 2))
+                let _ = strongSelf.file.seek(position: Int64(8 + index * 4 * 2))
                 var offset = Int32(currentSize)
                 var length = Int32(compressedData.count)
                 let _ = strongSelf.file.write(&offset, count: 4)
                 let _ = strongSelf.file.write(&length, count: 4)
-                strongSelf.file.seek(position: Int64(currentSize))
+                let _ = strongSelf.file.seek(position: Int64(currentSize))
                 compressedData.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) -> Void in
                     if let baseAddress = buffer.baseAddress {
                         let _ = strongSelf.file.write(baseAddress, count: Int(length))
@@ -226,7 +226,7 @@ private final class VideoStickerFrameSourceCache {
         
         switch rangeResult {
         case let .range(range):
-            self.file.seek(position: Int64(range.lowerBound))
+            let _ = self.file.seek(position: Int64(range.lowerBound))
             let length = range.upperBound - range.lowerBound
             let compressedData = self.file.readData(count: length)
             if compressedData.count != length {
@@ -277,7 +277,7 @@ public func makeVideoStickerDirectFrameSource(queue: Queue, path: String, width:
     return VideoStickerDirectFrameSource(queue: queue, path: path, width: width, height: height, cachePathPrefix: cachePathPrefix, unpremultiplyAlpha: unpremultiplyAlpha)
 }
 
-final class VideoStickerDirectFrameSource: AnimatedStickerFrameSource {
+public final class VideoStickerDirectFrameSource: AnimatedStickerFrameSource {
     private let queue: Queue
     private let path: String
     private let width: Int
@@ -285,13 +285,14 @@ final class VideoStickerDirectFrameSource: AnimatedStickerFrameSource {
     private let cache: VideoStickerFrameSourceCache?
     private let image: UIImage?
     private let bytesPerRow: Int
-    var frameCount: Int
-    let frameRate: Int
+    public var frameCount: Int
+    public let frameRate: Int
+    public var duration: Double
     fileprivate var currentFrame: Int
     
     private let source: SoftwareVideoSource?
     
-    var frameIndex: Int {
+    public var frameIndex: Int {
         if self.frameCount == 0 {
             return 0
         } else {
@@ -299,7 +300,7 @@ final class VideoStickerDirectFrameSource: AnimatedStickerFrameSource {
         }
     }
     
-    init?(queue: Queue, path: String, width: Int, height: Int, cachePathPrefix: String?, unpremultiplyAlpha: Bool = true) {
+    public init?(queue: Queue, path: String, width: Int, height: Int, cachePathPrefix: String?, unpremultiplyAlpha: Bool = true) {
         self.queue = queue
         self.path = path
         self.width = width
@@ -316,17 +317,24 @@ final class VideoStickerDirectFrameSource: AnimatedStickerFrameSource {
             self.image = nil
             self.frameRate = Int(cache.frameRate)
             self.frameCount = Int(cache.frameCount)
+            if self.frameRate > 0 {
+                self.duration = Double(self.frameCount) / Double(self.frameRate)
+            } else {
+                self.duration = 0.0
+            }
         } else if let data = try? Data(contentsOf: URL(fileURLWithPath: path)), let image = WebP.convert(fromWebP: data) {
             self.source = nil
             self.image = image
             self.frameRate = 1
             self.frameCount = 1
+            self.duration = 0.0
         } else {
             let source = SoftwareVideoSource(path: path, hintVP9: true, unpremultiplyAlpha: unpremultiplyAlpha)
             self.source = source
             self.image = nil
             self.frameRate = min(30, source.getFramerate())
             self.frameCount = 0
+            self.duration = source.reportedDuration.seconds
         }
     }
     
@@ -334,7 +342,7 @@ final class VideoStickerDirectFrameSource: AnimatedStickerFrameSource {
         assert(self.queue.isCurrent())
     }
     
-    func takeFrame(draw: Bool) -> AnimatedStickerFrame? {
+    public func takeFrame(draw: Bool) -> AnimatedStickerFrame? {
         let frameIndex: Int
         if self.frameCount > 0 {
             frameIndex = self.currentFrame % self.frameCount
@@ -345,7 +353,9 @@ final class VideoStickerDirectFrameSource: AnimatedStickerFrameSource {
         self.currentFrame += 1
         if draw {
             if let image = self.image {
-                let context = DrawingContext(size: CGSize(width: self.width, height: self.height), scale: 1.0, opaque: false, clear: true, bytesPerRow: self.bytesPerRow)
+                guard let context = DrawingContext(size: CGSize(width: self.width, height: self.height), scale: 1.0, opaque: false, clear: true, bytesPerRow: self.bytesPerRow) else {
+                    return nil
+                }
                 context.withFlippedContext { c in
                     c.draw(image.cgImage!, in: CGRect(origin: CGPoint(), size: context.size))
                 }
@@ -413,11 +423,11 @@ final class VideoStickerDirectFrameSource: AnimatedStickerFrameSource {
         }
     }
     
-    func skipToEnd() {
+    public func skipToEnd() {
         self.currentFrame = self.frameCount - 1
     }
 
-    func skipToFrameIndex(_ index: Int) {
+    public func skipToFrameIndex(_ index: Int) {
         self.currentFrame = index
     }
 }

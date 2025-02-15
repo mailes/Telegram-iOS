@@ -20,6 +20,8 @@ swift_library(
         "//submodules/RingBuffer:RingBuffer",
         "//submodules/YuvConversion:YuvConversion",
         "//submodules/Utils/RangeSet:RangeSet",
+        "//submodules/TextFormat:TextFormat",
+        "//submodules/ManagedFile",
     ],
     visibility = [
         "//visibility:public",

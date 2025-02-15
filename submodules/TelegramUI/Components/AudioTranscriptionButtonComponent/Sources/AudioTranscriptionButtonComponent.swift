@@ -5,6 +5,7 @@ import AppBundle
 import Display
 import TelegramPresentationData
 import LottieAnimationComponent
+import BundleIconComponent
 
 public final class AudioTranscriptionButtonComponent: Component {
     public enum Theme: Equatable {
@@ -16,8 +17,14 @@ public final class AudioTranscriptionButtonComponent: Component {
                 } else {
                     return false
                 }
-            case let .freeform(lhsFreeform):
-                if case let .freeform(rhsFreeform) = rhs, lhsFreeform == rhsFreeform {
+            case let .custom(lhsBackgroundColor, lhsForegroundColor):
+                if case let .custom(rhsBackgroundColor, rhsForegroundColor) = rhs {
+                    return lhsBackgroundColor == rhsBackgroundColor && lhsForegroundColor == rhsForegroundColor
+                } else {
+                    return false
+                }
+            case let .freeform(lhsFreeform, lhsForeground):
+                if case let .freeform(rhsFreeform, rhsForeground) = rhs, lhsFreeform == rhsFreeform, lhsForeground == rhsForeground {
                     return true
                 } else {
                     return false
@@ -26,13 +33,15 @@ public final class AudioTranscriptionButtonComponent: Component {
         }
         
         case bubble(PresentationThemePartedColors)
-        case freeform((UIColor, Bool))
+        case custom(UIColor, UIColor)
+        case freeform((UIColor, Bool), UIColor)
     }
     
     public enum TranscriptionState {
         case inProgress
         case expanded
         case collapsed
+        case locked
     }
     
     public let theme: AudioTranscriptionButtonComponent.Theme
@@ -64,25 +73,21 @@ public final class AudioTranscriptionButtonComponent: Component {
         
         private let blurredBackgroundNode: NavigationBackgroundNode
         private let backgroundLayer: SimpleLayer
-        private let animationView: ComponentHostView<Empty>
+        private var iconView: ComponentView<Empty>?
+        private var animationView: ComponentView<Empty>?
         
         private var progressAnimationView: ComponentHostView<Empty>?
         
         override init(frame: CGRect) {
             self.blurredBackgroundNode = NavigationBackgroundNode(color: .clear)
             self.backgroundLayer = SimpleLayer()
-            self.animationView = ComponentHostView<Empty>()
             
             super.init(frame: frame)
             
             self.backgroundLayer.masksToBounds = true
             self.backgroundLayer.cornerRadius = 10.0
             self.layer.addSublayer(self.backgroundLayer)
-            
-            self.animationView.isUserInteractionEnabled = false
-            
-            self.addSubview(self.animationView)
-            
+                        
             self.addTarget(self, action: #selector(self.pressed), for: .touchUpInside)
         }
         
@@ -94,7 +99,7 @@ public final class AudioTranscriptionButtonComponent: Component {
             self.component?.pressed()
         }
         
-        func update(component: AudioTranscriptionButtonComponent, availableSize: CGSize, transition: Transition) -> CGSize {
+        func update(component: AudioTranscriptionButtonComponent, availableSize: CGSize, transition: ComponentTransition) -> CGSize {
             let size = CGSize(width: 30.0, height: 30.0)
             
             let foregroundColor: UIColor
@@ -103,8 +108,11 @@ public final class AudioTranscriptionButtonComponent: Component {
             case let .bubble(theme):
                 foregroundColor = theme.bubble.withWallpaper.reactionActiveBackground
                 backgroundColor = theme.bubble.withWallpaper.reactionInactiveBackground
-            case let .freeform(colorAndBlur):
-                foregroundColor = UIColor.white
+            case let .custom(backgroundColorValue, foregroundColorValue):
+                foregroundColor = foregroundColorValue
+                backgroundColor = backgroundColorValue
+            case let .freeform(colorAndBlur, color):
+                foregroundColor = color
                 backgroundColor = .clear
                 if self.blurredBackgroundNode.view.superview == nil {
                     self.insertSubview(self.blurredBackgroundNode.view, at: 0)
@@ -115,58 +123,120 @@ public final class AudioTranscriptionButtonComponent: Component {
             }
             
             if self.component?.transcriptionState != component.transcriptionState {
-                switch component.transcriptionState {
-                case .inProgress:
-                    if self.progressAnimationView == nil {
-                        let progressAnimationView = ComponentHostView<Empty>()
-                        self.progressAnimationView = progressAnimationView
-                        self.addSubview(progressAnimationView)
-                    }
-                default:
-                    if let progressAnimationView = self.progressAnimationView {
-                        self.progressAnimationView = nil
-                        if case .none = transition.animation {
-                            progressAnimationView.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.15, removeOnCompletion: false, completion: { [weak progressAnimationView] _ in
-                                progressAnimationView?.removeFromSuperview()
+                if case .locked = component.transcriptionState {
+                    if let animationView = self.animationView {
+                        self.animationView = nil
+                        if let view = animationView.view {
+                            view.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.2, removeOnCompletion: false, completion: { _ in
+                                view.removeFromSuperview()
                             })
-                        } else {
-                            progressAnimationView.removeFromSuperview()
                         }
                     }
+                    
+                    let iconView: ComponentView<Empty>
+                    if let current = self.iconView {
+                        iconView = current
+                    } else {
+                        iconView = ComponentView<Empty>()
+                        self.iconView = iconView
+                    }
+                    
+                    let iconSize = iconView.update(
+                        transition: transition,
+                        component: AnyComponent(BundleIconComponent(
+                            name: "Chat/Message/TranscriptionLocked",
+                            tintColor: foregroundColor
+                        )),
+                        environment: {},
+                        containerSize: CGSize(width: 30.0, height: 30.0)
+                    )
+                    
+                    if let view = iconView.view {
+                        if view.superview == nil {
+                            view.isUserInteractionEnabled = false
+                            self.addSubview(view)
+                        }
+                        view.frame = CGRect(origin: CGPoint(x: floor((size.width - iconSize.width) / 2.0), y: floor((size.width - iconSize.height) / 2.0)), size: iconSize)
+                    }
+                } else {
+                    if let iconView = self.iconView {
+                        self.iconView = nil
+                        if let view = iconView.view {
+                            view.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.2, removeOnCompletion: false, completion: { _ in
+                                view.removeFromSuperview()
+                            })
+                        }
+                    }
+                    
+                    let animationView: ComponentView<Empty>
+                    if let current = self.animationView {
+                        animationView = current
+                    } else {
+                        animationView = ComponentView<Empty>()
+                        self.animationView = animationView
+                    }
+                    
+                    switch component.transcriptionState {
+                    case .inProgress:
+                        if self.progressAnimationView == nil {
+                            let progressAnimationView = ComponentHostView<Empty>()
+                            self.progressAnimationView = progressAnimationView
+                            self.addSubview(progressAnimationView)
+                        }
+                    default:
+                        if let progressAnimationView = self.progressAnimationView {
+                            self.progressAnimationView = nil
+                            if case .none = transition.animation {
+                                progressAnimationView.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.15, removeOnCompletion: false, completion: { [weak progressAnimationView] _ in
+                                    progressAnimationView?.removeFromSuperview()
+                                })
+                            } else {
+                                progressAnimationView.removeFromSuperview()
+                            }
+                        }
+                    }
+                    
+                    let animationName: String
+                    switch component.transcriptionState {
+                    case .inProgress:
+                        animationName = "voiceToText"
+                    case .collapsed:
+                        animationName = "voiceToText"
+                    case .expanded:
+                        animationName = "textToVoice"
+                    case .locked:
+                        animationName = "voiceToText"
+                    }
+                    let animationSize = animationView.update(
+                        transition: transition,
+                        component: AnyComponent(LottieAnimationComponent(
+                            animation: LottieAnimationComponent.AnimationItem(
+                                name: animationName,
+                                mode: .animateTransitionFromPrevious
+                            ),
+                            colors: [
+                                "icon.Group 3.Stroke 1": foregroundColor,
+                                "icon.Group 1.Stroke 1": foregroundColor,
+                                "icon.Group 4.Stroke 1": foregroundColor,
+                                "icon.Group 2.Stroke 1": foregroundColor,
+                                "Artboard Copy 2 Outlines.Group 5.Stroke 1": foregroundColor,
+                                "Artboard Copy 2 Outlines.Group 1.Stroke 1": foregroundColor,
+                                "Artboard Copy 2 Outlines.Group 4.Stroke 1": foregroundColor,
+                                "Artboard Copy Outlines.Group 1.Stroke 1": foregroundColor,
+                            ],
+                            size: CGSize(width: 30.0, height: 30.0)
+                        )),
+                        environment: {},
+                        containerSize: CGSize(width: 30.0, height: 30.0)
+                    )
+                    if let view = animationView.view {
+                        if view.superview == nil {
+                            view.isUserInteractionEnabled = false
+                            self.addSubview(view)
+                        }
+                        view.frame = CGRect(origin: CGPoint(x: floor((size.width - animationSize.width) / 2.0), y: floor((size.width - animationSize.height) / 2.0)), size: animationSize)
+                    }
                 }
-                
-                let animationName: String
-                switch component.transcriptionState {
-                case .inProgress:
-                    animationName = "voiceToText"
-                case .collapsed:
-                    animationName = "voiceToText"
-                case .expanded:
-                    animationName = "textToVoice"
-                }
-                let animationSize = self.animationView.update(
-                    transition: transition,
-                    component: AnyComponent(LottieAnimationComponent(
-                        animation: LottieAnimationComponent.AnimationItem(
-                            name: animationName,
-                            mode: .animateTransitionFromPrevious
-                        ),
-                        colors: [
-                            "icon.Group 3.Stroke 1": foregroundColor,
-                            "icon.Group 1.Stroke 1": foregroundColor,
-                            "icon.Group 4.Stroke 1": foregroundColor,
-                            "icon.Group 2.Stroke 1": foregroundColor,
-                            "Artboard Copy 2 Outlines.Group 5.Stroke 1": foregroundColor,
-                            "Artboard Copy 2 Outlines.Group 1.Stroke 1": foregroundColor,
-                            "Artboard Copy 2 Outlines.Group 4.Stroke 1": foregroundColor,
-                            "Artboard Copy Outlines.Group 1.Stroke 1": foregroundColor,
-                        ],
-                        size: CGSize(width: 30.0, height: 30.0)
-                    )),
-                    environment: {},
-                    containerSize: CGSize(width: 30.0, height: 30.0)
-                )
-                self.animationView.frame = CGRect(origin: CGPoint(x: floor((size.width - animationSize.width) / 2.0), y: floor((size.width - animationSize.height) / 2.0)), size: animationSize)
             }
             
             self.backgroundLayer.backgroundColor = backgroundColor.cgColor
@@ -203,7 +273,7 @@ public final class AudioTranscriptionButtonComponent: Component {
         return View(frame: CGRect())
     }
     
-    public func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: Transition) -> CGSize {
+    public func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: ComponentTransition) -> CGSize {
         return view.update(component: self, availableSize: availableSize, transition: transition)
     }
 }

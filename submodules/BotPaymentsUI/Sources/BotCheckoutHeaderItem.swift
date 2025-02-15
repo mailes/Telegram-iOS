@@ -8,19 +8,20 @@ import TelegramPresentationData
 import ItemListUI
 import PresentationDataUtils
 import PhotoResources
-import Postbox
 
 class BotCheckoutHeaderItem: ListViewItem, ItemListItem {
     let account: Account
     let theme: PresentationTheme
     let invoice: TelegramMediaInvoice
+    let source: BotPaymentInvoiceSource
     let botName: String
     let sectionId: ItemListSectionId
     
-    init(account: Account, theme: PresentationTheme, invoice: TelegramMediaInvoice, botName: String, sectionId: ItemListSectionId) {
+    init(account: Account, theme: PresentationTheme, invoice: TelegramMediaInvoice, source: BotPaymentInvoiceSource, botName: String, sectionId: ItemListSectionId) {
         self.account = account
         self.theme = theme
         self.invoice = invoice
+        self.source = source
         self.botName = botName
         self.sectionId = sectionId
     }
@@ -166,14 +167,26 @@ class BotCheckoutHeaderItemNode: ListViewItemNode {
             
             var imageApply: (() -> Void)?
             var updatedImageSignal: Signal<(TransformImageArguments) -> DrawingContext?, NoError>?
-            var updatedFetchSignal: Signal<FetchResourceSourceType, FetchResourceError>?
+            var updatedFetchSignal: Signal<Never, NoError>?
             if let photo = item.invoice.photo, let dimensions = photo.dimensions {
                 let arguments = TransformImageArguments(corners: ImageCorners(radius: 4.0), imageSize: dimensions.cgSize.aspectFilled(imageSize), boundingSize: imageSize, intrinsicInsets: UIEdgeInsets(), emptyColor: item.theme.list.mediaPlaceholderColor)
                 imageApply = makeImageLayout(arguments)
                 maxTextWidth = max(1.0, maxTextWidth - imageSize.width - imageTextSpacing)
                 if imageUpdated {
                     updatedImageSignal = chatWebFileImage(account: item.account, file: photo)
-                    updatedFetchSignal = fetchedMediaResource(mediaBox: item.account.postbox.mediaBox, reference: .standalone(resource: photo.resource))
+                    
+                    var userLocation: MediaResourceUserLocation = .other
+                    switch item.source {
+                    case let .message(messageId):
+                        userLocation = .peer(messageId.peerId)
+                    default:
+                        break
+                    }
+                    updatedFetchSignal = fetchedMediaResource(mediaBox: item.account.postbox.mediaBox, userLocation: userLocation, userContentType: .image, reference: .standalone(resource: photo.resource))
+                    |> ignoreValues
+                    |> `catch` { _ -> Signal<Never, NoError> in
+                        return .complete()
+                    }
                 }
             }
             
@@ -181,7 +194,9 @@ class BotCheckoutHeaderItemNode: ListViewItemNode {
             
             let (botNameLayout, botNameApply) = makeBotNameLayout(TextNodeLayoutArguments(attributedString: NSAttributedString(string: item.botName, font: textFont, textColor: item.theme.list.itemSecondaryTextColor), backgroundColor: nil, maximumNumberOfLines: 1, truncationType: .end, constrainedSize: CGSize(width: maxTextWidth, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
             
-            let (textLayout, textApply) = makeTextLayout(TextNodeLayoutArguments(attributedString: NSAttributedString(string: item.invoice.description, font: textFont, textColor: textColor), backgroundColor: nil, maximumNumberOfLines: 0, truncationType: .end, constrainedSize: CGSize(width: maxTextWidth, height: maxTextHeight - titleLayout.size.height - titleTextSpacing - botNameLayout.size.height - textBotNameSpacing), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
+            let textLayoutMaxHeight: CGFloat = maxTextHeight - titleLayout.size.height - titleTextSpacing - botNameLayout.size.height - textBotNameSpacing
+            let textArguments = TextNodeLayoutArguments(attributedString: NSAttributedString(string: item.invoice.description, font: textFont, textColor: textColor), backgroundColor: nil, maximumNumberOfLines: 0, truncationType: .end, constrainedSize: CGSize(width: maxTextWidth, height: textLayoutMaxHeight), alignment: .natural, cutout: nil, insets: UIEdgeInsets())
+            let (textLayout, textApply) = makeTextLayout(textArguments)
             
             let contentHeight: CGFloat
             if let _ = imageApply {
@@ -316,7 +331,7 @@ class BotCheckoutHeaderItemNode: ListViewItemNode {
         }
     }
     
-    override func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
+    override func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.4)
     }
     

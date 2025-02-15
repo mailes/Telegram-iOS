@@ -31,6 +31,24 @@ private func singleMessageType(message: EngineMessage) -> MessageGroupType {
     return .generic
 }
 
+private func singleExtendedMediaType(extendedMedia: TelegramExtendedMedia) -> MessageGroupType {
+    switch extendedMedia {
+    case let .preview(_, _, videoDuration):
+        if let _ = videoDuration {
+            return .videos
+        } else {
+            return .photos
+        }
+    case let .full(fullMedia):
+        if let _ = fullMedia as? TelegramMediaImage {
+            return .photos
+        } else if let file = fullMedia as? TelegramMediaFile, file.isVideo {
+            return .videos
+        }
+    }
+    return .generic
+}
+
 private func messageGroupType(messages: [EngineMessage]) -> MessageGroupType {
     if messages.isEmpty {
         return .generic
@@ -45,10 +63,31 @@ private func messageGroupType(messages: [EngineMessage]) -> MessageGroupType {
     return currentType
 }
 
-public func chatListItemStrings(strings: PresentationStrings, nameDisplayOrder: PresentationPersonNameOrder, dateTimeFormat: PresentationDateTimeFormat, messages: [EngineMessage], chatPeer: EngineRenderedPeer, accountPeerId: EnginePeer.Id, enableMediaEmoji: Bool = true, isPeerGroup: Bool = false) -> (peer: EnginePeer?, hideAuthor: Bool, messageText: String, spoilers: [NSRange]?, customEmojiRanges: [(NSRange, ChatTextInputTextCustomEmojiAttribute)]?) {
+private func paidContentGroupType(paidContent: TelegramMediaPaidContent) -> MessageGroupType {
+    if paidContent.extendedMedia.isEmpty {
+        return .generic
+    }
+    let currentType = singleExtendedMediaType(extendedMedia: paidContent.extendedMedia[0])
+    for i in 1 ..< paidContent.extendedMedia.count {
+        let nextType = singleExtendedMediaType(extendedMedia: paidContent.extendedMedia[i])
+        if nextType != currentType {
+            return .generic
+        }
+    }
+    return currentType
+}
+
+public func chatListItemStrings(strings: PresentationStrings, nameDisplayOrder: PresentationPersonNameOrder, dateTimeFormat: PresentationDateTimeFormat, contentSettings: ContentSettings, messages: [EngineMessage], chatPeer: EngineRenderedPeer, accountPeerId: EnginePeer.Id, enableMediaEmoji: Bool = true, isPeerGroup: Bool = false) -> (peer: EnginePeer?, hideAuthor: Bool, messageText: String, spoilers: [NSRange]?, customEmojiRanges: [(NSRange, ChatTextInputTextCustomEmojiAttribute)]?) {
     let peer: EnginePeer?
     
     let message = messages.last
+    
+    if let restrictionReason = message?._asMessage().restrictionReason(platform: "ios", contentSettings: contentSettings) {
+        return (nil, false, restrictionReason, nil, nil)
+    }
+    if let restrictionReason = chatPeer.chatMainPeer?.restrictionText(platform: "ios", contentSettings: contentSettings) {
+        return (nil, false, restrictionReason, nil, nil)
+    }
     
     var hideAuthor = false
     var messageText: String
@@ -69,42 +108,59 @@ public func chatListItemStrings(strings: PresentationStrings, nameDisplayOrder: 
             }
         }
         
+        
+        let paidContent = message.media.first(where: { $0 is TelegramMediaPaidContent }) as? TelegramMediaPaidContent
+        
         var textIsReady = false
-        if messages.count > 1 {
-            let groupType = messageGroupType(messages: messages)
+        if messages.count > 1 || (paidContent != nil && (paidContent?.extendedMedia.count ?? 0) > 1) {
+            let groupType: MessageGroupType
+            let count: Int32
+            if let paidContent {
+                groupType = paidContentGroupType(paidContent: paidContent)
+                count = Int32(paidContent.extendedMedia.count)
+            } else {
+                groupType = messageGroupType(messages: messages)
+                count = Int32(messages.count)
+            }
             switch groupType {
             case .photos:
                 if !messageText.isEmpty {
                     textIsReady = true
                 } else {
-                    messageText = strings.ChatList_MessagePhotos(Int32(messages.count))
+                    messageText = strings.ChatList_MessagePhotos(count)
                     textIsReady = true
                 }
             case .videos:
                 if !messageText.isEmpty {
                     textIsReady = true
                 } else {
-                    messageText = strings.ChatList_MessageVideos(Int32(messages.count))
+                    messageText = strings.ChatList_MessageVideos(count)
                     textIsReady = true
                 }
             case .music:
                 if !messageText.isEmpty {
                     textIsReady = true
                 } else {
-                    messageText = strings.ChatList_MessageMusic(Int32(messages.count))
+                    messageText = strings.ChatList_MessageMusic(count)
                     textIsReady = true
                 }
             case .files:
                 if !messageText.isEmpty {
                     textIsReady = true
                 } else {
-                    messageText = strings.ChatList_MessageFiles(Int32(messages.count))
+                    messageText = strings.ChatList_MessageFiles(count)
                     textIsReady = true
                 }
             case .generic:
                 var messageTypes = Set<MessageGroupType>()
-                for message in messages {
-                    messageTypes.insert(singleMessageType(message: message))
+                if let paidContent {
+                    for extendedMedia in paidContent.extendedMedia {
+                        messageTypes.insert(singleExtendedMediaType(extendedMedia: extendedMedia))
+                    }
+                } else {
+                    for message in messages {
+                        messageTypes.insert(singleMessageType(message: message))
+                    }
                 }
                 if messageTypes.count == 2 && messageTypes.contains(.photos) && messageTypes.contains(.videos) {
                     if !messageText.isEmpty {
@@ -117,13 +173,31 @@ public func chatListItemStrings(strings: PresentationStrings, nameDisplayOrder: 
         if !textIsReady {
             for media in message.media {
                 switch media {
+                    case let paidContent as TelegramMediaPaidContent:
+                        for extendedMedia in paidContent.extendedMedia {
+                            let type = singleExtendedMediaType(extendedMedia: extendedMedia)
+                            switch type {
+                            case .photos:
+                                if message.text.isEmpty {
+                                    messageText = strings.Message_Photo
+                                } else if enableMediaEmoji {
+                                    messageText = "🖼 \(messageText)"
+                                }
+                            case .videos:
+                                if message.text.isEmpty {
+                                    messageText = strings.Message_Video
+                                } else if enableMediaEmoji {
+                                    messageText = "📹 \(messageText)"
+                                }
+                            default:
+                                break
+                            }
+                        }
                     case _ as TelegramMediaImage:
                         if message.text.isEmpty {
                             messageText = strings.Message_Photo
-                        } else if #available(iOSApplicationExtension 9.0, iOS 9.0, *) {
-                            if enableMediaEmoji {
-                                messageText = "🖼 \(messageText)"
-                            }
+                        } else if enableMediaEmoji {
+                            messageText = "🖼 \(messageText)"
                         }
                     case let fileMedia as TelegramMediaFile:
                         var processed = false
@@ -172,7 +246,7 @@ public func chatListItemStrings(strings: PresentationStrings, nameDisplayOrder: 
                                         processed = true
                                         break inner
                                     }
-                                case let .Video(_, _, flags):
+                                case let .Video(_, _, flags, _, _, _):
                                     if flags.contains(.instantRoundVideo) {
                                         messageText = strings.Message_VideoMessage
                                         processed = true
@@ -181,7 +255,7 @@ public func chatListItemStrings(strings: PresentationStrings, nameDisplayOrder: 
                                         if message.text.isEmpty {
                                             messageText = strings.Message_Video
                                             processed = true
-                                        } else if #available(iOSApplicationExtension 9.0, iOS 9.0, *) {
+                                        } else {
                                             if enableMediaEmoji {
                                                 if !fileMedia.isAnimated {
                                                     messageText = "📹 \(messageText)"
@@ -287,9 +361,51 @@ public func chatListItemStrings(strings: PresentationStrings, nameDisplayOrder: 
                             messageText = text
                         }
                     case let poll as TelegramMediaPoll:
-                        messageText = "📊 \(poll.text)"
+                        let pollPrefix = "📊 "
+                        let entityOffset = (pollPrefix as NSString).length
+                        messageText = "\(pollPrefix)\(poll.text)"
+                        for entity in poll.textEntities {
+                            if case let .CustomEmoji(_, fileId) = entity.type {
+                                if customEmojiRanges == nil {
+                                    customEmojiRanges = []
+                                }
+                                let range = NSRange(location: entityOffset + entity.range.lowerBound, length: entity.range.upperBound - entity.range.lowerBound)
+                                let attribute = ChatTextInputTextCustomEmojiAttribute(interactivelySelectedFromPackId: nil, fileId: fileId, file: message.associatedMedia[EngineMedia.Id(namespace: Namespaces.Media.CloudFile, id: fileId)] as? TelegramMediaFile)
+                                customEmojiRanges?.append((range, attribute))
+                            }
+                        }
                     case let dice as TelegramMediaDice:
                         messageText = dice.emoji
+                    case let story as TelegramMediaStory:
+                        if story.isMention, let peer {
+                            if message.flags.contains(.Incoming) {
+                                messageText = strings.Conversation_StoryMentionTextIncoming(peer.compactDisplayTitle).string
+                            } else {
+                                messageText = strings.Conversation_StoryMentionTextOutgoing(peer.compactDisplayTitle).string
+                            }
+                        } else {
+                            messageText = strings.Notification_Story
+                        }
+                    case _ as TelegramMediaGiveaway:
+                        if let forwardInfo = message.forwardInfo, let author = forwardInfo.author {
+                            messageText = strings.Message_GiveawayStartedOther(EnginePeer(author).compactDisplayTitle).string
+                        } else {
+                            if let author = message.author, case let .channel(channel) = author, case .group = channel.info {
+                                messageText = strings.Message_GiveawayStartedGroup
+                            } else {
+                                messageText = strings.Message_GiveawayStarted
+                            }
+                        }
+                    case let results as TelegramMediaGiveawayResults:
+                        if results.winnersCount == 0 {
+                            messageText = strings.Message_GiveawayEndedNoWinners
+                        } else {
+                            messageText = strings.Message_GiveawayEndedWinners(results.winnersCount)
+                        }
+                    case let webpage as TelegramMediaWebpage:
+                        if messageText.isEmpty, case let .Loaded(content) = webpage.content {
+                            messageText = content.displayUrl
+                        }
                     default:
                         break
                 }

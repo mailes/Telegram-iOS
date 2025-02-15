@@ -44,7 +44,14 @@ func _internal_requestMessageSelectPollOption(account: Account, messageId: Messa
                                         } else {
                                             kind = .poll(multipleAnswers: (flags & (1 << 2)) != 0)
                                         }
-                                        resultPoll = TelegramMediaPoll(pollId: pollId, publicity: publicity, kind: kind, text: question, options: answers.map(TelegramMediaPollOption.init(apiOption:)), correctAnswers: nil, results: TelegramMediaPollResults(apiResults: results), isClosed: (flags & (1 << 0)) != 0, deadlineTimeout: closePeriod)
+                                        let questionText: String
+                                        let questionEntities: [MessageTextEntity]
+                                        switch question {
+                                        case let .textWithEntities(text, entities):
+                                            questionText = text
+                                            questionEntities = messageTextEntitiesFromApiEntities(entities)
+                                        }
+                                        resultPoll = TelegramMediaPoll(pollId: pollId, publicity: publicity, kind: kind, text: questionText, textEntities: questionEntities, options: answers.map(TelegramMediaPollOption.init(apiOption:)), correctAnswers: nil, results: TelegramMediaPollResults(apiResults: results), isClosed: (flags & (1 << 0)) != 0, deadlineTimeout: closePeriod)
                                     }
                                 }
                                 
@@ -135,7 +142,7 @@ func _internal_requestClosePoll(postbox: Postbox, network: Network, stateManager
             pollMediaFlags |= 1 << 1
         }
         
-        return network.request(Api.functions.messages.editMessage(flags: flags, peer: inputPeer, id: messageId.id, message: nil, media: .inputMediaPoll(flags: pollMediaFlags, poll: .poll(id: poll.pollId.id, flags: pollFlags, question: poll.text, answers: poll.options.map({ $0.apiOption }), closePeriod: poll.deadlineTimeout, closeDate: nil), correctAnswers: correctAnswers, solution: mappedSolution, solutionEntities: mappedSolutionEntities), replyMarkup: nil, entities: nil, scheduleDate: nil))
+        return network.request(Api.functions.messages.editMessage(flags: flags, peer: inputPeer, id: messageId.id, message: nil, media: .inputMediaPoll(flags: pollMediaFlags, poll: .poll(id: poll.pollId.id, flags: pollFlags, question: .textWithEntities(text: poll.text, entities: apiEntitiesFromMessageTextEntities(poll.textEntities, associatedPeers: SimpleDictionary())), answers: poll.options.map({ $0.apiOption }), closePeriod: poll.deadlineTimeout, closeDate: nil), correctAnswers: correctAnswers, solution: mappedSolution, solutionEntities: mappedSolutionEntities), replyMarkup: nil, entities: nil, scheduleDate: nil, quickReplyShortcutId: nil))
         |> map(Optional.init)
         |> `catch` { _ -> Signal<Api.Updates?, NoError> in
             return .single(nil)
@@ -250,6 +257,7 @@ private final class PollResultsOptionContext {
         let messageId = self.messageId
         let opaqueIdentifier = self.opaqueIdentifier
         let account = self.account
+        let accountPeerId = account.peerId
         let nextOffset = self.nextOffset
         let populateCache = self.populateCache
         self.disposable.set((self.account.postbox.transaction { transaction -> Api.InputPeer? in
@@ -272,24 +280,19 @@ private final class PollResultsOptionContext {
                             return ([], 0, nil)
                         }
                         switch result {
-                        case let .votesList(_, count, votes, users, nextOffset):
-                            var peers: [Peer] = []
-                            for apiUser in users {
-                                peers.append(TelegramUser(user: apiUser))
-                            }
-                            updatePeers(transaction: transaction, peers: peers, update: { _, updated in
-                                return updated
-                            })
+                        case let .votesList(_, count, votes, chats, users, nextOffset):
+                            let parsedPeers = AccumulatedPeers(transaction: transaction, chats: chats, users: users)
+                            updatePeers(transaction: transaction, accountPeerId: accountPeerId, peers: parsedPeers)
                             var resultPeers: [RenderedPeer] = []
                             for vote in votes {
                                 let peerId: PeerId
                                 switch vote {
-                                case let .messageUserVote(userId, _, _):
-                                    peerId = PeerId(namespace: Namespaces.Peer.CloudUser, id: PeerId.Id._internalFromInt64Value(userId))
-                                case let .messageUserVoteInputOption(userId, _):
-                                    peerId = PeerId(namespace: Namespaces.Peer.CloudUser, id: PeerId.Id._internalFromInt64Value(userId))
-                                case let .messageUserVoteMultiple(userId, _, _):
-                                    peerId = PeerId(namespace: Namespaces.Peer.CloudUser, id: PeerId.Id._internalFromInt64Value(userId))
+                                case let .messagePeerVote(peerIdValue, _, _):
+                                    peerId = peerIdValue.peerId
+                                case let .messagePeerVoteInputOption(peerIdValue, _):
+                                    peerId = peerIdValue.peerId
+                                case let .messagePeerVoteMultiple(peerIdValue, _, _):
+                                    peerId = peerIdValue.peerId
                                 }
                                 if let peer = transaction.getPeer(peerId) {
                                     resultPeers.append(RenderedPeer(peer: peer))

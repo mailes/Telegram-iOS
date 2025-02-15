@@ -13,6 +13,7 @@ import TextFormat
 import AccountContext
 import ContextUI
 import StickerPeekUI
+import AccountContext
 
 private struct StickerPackPreviewGridEntry: Comparable, Identifiable {
     let index: Int
@@ -26,8 +27,8 @@ private struct StickerPackPreviewGridEntry: Comparable, Identifiable {
         return lhs.index < rhs.index
     }
     
-    func item(account: Account, interaction: StickerPackPreviewInteraction, theme: PresentationTheme) -> StickerPackPreviewGridItem {
-        return StickerPackPreviewGridItem(account: account, stickerItem: self.stickerItem, interaction: interaction, theme: theme, isPremium: false, isLocked: false, isEmpty: false)
+    func item(context: AccountContext, interaction: StickerPackPreviewInteraction, theme: PresentationTheme) -> StickerPackPreviewGridItem {
+        return StickerPackPreviewGridItem(context: context, stickerItem: self.stickerItem, interaction: interaction, theme: theme, isPremium: false, isLocked: false, isEmpty: false, isEditable: false, isEditing: false)
     }
 }
 
@@ -36,16 +37,16 @@ private struct StickerPackPreviewGridTransaction {
     let insertions: [GridNodeInsertItem]
     let updates: [GridNodeUpdateItem]
     
-    init(previousList: [StickerPackPreviewGridEntry], list: [StickerPackPreviewGridEntry], account: Account, interaction: StickerPackPreviewInteraction, theme: PresentationTheme) {
+    init(previousList: [StickerPackPreviewGridEntry], list: [StickerPackPreviewGridEntry], context: AccountContext, interaction: StickerPackPreviewInteraction, theme: PresentationTheme) {
          let (deleteIndices, indicesAndItems, updateIndices) = mergeListsStableWithUpdates(leftList: previousList, rightList: list)
         
         self.deletions = deleteIndices
-        self.insertions = indicesAndItems.map { GridNodeInsertItem(index: $0.0, item: $0.1.item(account: account, interaction: interaction, theme: theme), previousIndex: $0.2) }
-        self.updates = updateIndices.map { GridNodeUpdateItem(index: $0.0, previousIndex: $0.2, item: $0.1.item(account: account, interaction: interaction, theme: theme)) }
+        self.insertions = indicesAndItems.map { GridNodeInsertItem(index: $0.0, item: $0.1.item(context: context, interaction: interaction, theme: theme), previousIndex: $0.2) }
+        self.updates = updateIndices.map { GridNodeUpdateItem(index: $0.0, previousIndex: $0.2, item: $0.1.item(context: context, interaction: interaction, theme: theme)) }
     }
 }
 
-final class StickerPackPreviewControllerNode: ViewControllerTracingNode, UIScrollViewDelegate {
+final class StickerPackPreviewControllerNode: ViewControllerTracingNode, ASScrollViewDelegate {
     private let context: AccountContext
     private let openShare: (() -> Void)?
     private var presentationData: PresentationData
@@ -143,7 +144,7 @@ final class StickerPackPreviewControllerNode: ViewControllerTracingNode, UIScrol
         
         super.init()
         
-        self.interaction = StickerPackPreviewInteraction(playAnimatedStickers: false, addStickerPack: { _, _ in }, removeStickerPack: { _ in }, emojiSelected: { _, _ in }, emojiLongPressed: { _, _, _, _ in })
+        self.interaction = StickerPackPreviewInteraction(playAnimatedStickers: false, addStickerPack: { _, _ in }, removeStickerPack: { _ in }, emojiSelected: { _, _ in }, emojiLongPressed: { _, _, _, _ in }, addPressed: {})
         
         self.backgroundColor = nil
         self.isOpaque = false
@@ -151,7 +152,7 @@ final class StickerPackPreviewControllerNode: ViewControllerTracingNode, UIScrol
         self.dimNode.view.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(self.dimTapGesture(_:))))
         self.addSubnode(self.dimNode)
         
-        self.wrappingScrollNode.view.delegate = self
+        self.wrappingScrollNode.view.delegate = self.wrappedScrollViewDelegate
         self.addSubnode(self.wrappingScrollNode)
         
         self.wrappingScrollNode.addSubnode(self.cancelButtonNode)
@@ -239,7 +240,7 @@ final class StickerPackPreviewControllerNode: ViewControllerTracingNode, UIScrol
                                     }
                                 })))
                             }
-                            return (itemNode.view, itemNode.bounds, StickerPreviewPeekContent(account: strongSelf.context.account, theme: strongSelf.presentationData.theme, strings: strongSelf.presentationData.strings, item: .pack(item.file), isLocked: item.file.isPremiumSticker && !hasPremium, menu: menuItems, openPremiumIntro: {
+                            return (itemNode.view, itemNode.bounds, StickerPreviewPeekContent(context: strongSelf.context, theme: strongSelf.presentationData.theme, strings: strongSelf.presentationData.strings, item: .pack(item.file), isLocked: item.file.isPremiumSticker && !hasPremium, menu: menuItems, openPremiumIntro: {
                                 
                             }))
                         } else {
@@ -403,7 +404,7 @@ final class StickerPackPreviewControllerNode: ViewControllerTracingNode, UIScrol
                         self.contentTitleNode.attributedText = stringWithAppliedEntities(info.title, entities: entities, baseColor: self.presentationData.theme.actionSheet.primaryTextColor, linkColor: self.presentationData.theme.actionSheet.controlAccentColor, baseFont: font, linkFont: font, boldFont: font, italicFont: font, boldItalicFont: font, fixedFont: font, blockQuoteFont: font, message: nil)
                         animateIn = true
                     }
-                    transaction = StickerPackPreviewGridTransaction(previousList: self.currentItems, list: updatedItems, account: self.context.account, interaction: self.interaction, theme: self.presentationData.theme)
+                    transaction = StickerPackPreviewGridTransaction(previousList: self.currentItems, list: updatedItems, context: self.context, interaction: self.interaction, theme: self.presentationData.theme)
                     self.currentItems = updatedItems
             }
         }
@@ -597,7 +598,7 @@ final class StickerPackPreviewControllerNode: ViewControllerTracingNode, UIScrol
         self.stickerSettings = stickerSettings
         self.stickerPackUpdated = true
         
-        self.interaction.playAnimatedStickers = stickerSettings.loopAnimatedStickers
+        self.interaction.playAnimatedStickers = self.context.sharedContext.energyUsageSettings.loopStickers
         
         if let _ = self.containerLayout {
             self.dequeueUpdateStickerPack()

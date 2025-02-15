@@ -14,6 +14,8 @@ import LegacyMediaPickerUI
 import WallpaperResources
 import AccountContext
 import MediaResources
+import ThemeAccentColorScreen
+import GenerateThemeName
 
 private final class EditThemeControllerArguments {
     let context: AccountContext
@@ -283,7 +285,7 @@ private func editThemeControllerEntries(presentationData: PresentationData, stat
     entries.append(.slugInfo(presentationData.theme, infoText))
     
     entries.append(.chatPreviewHeader(presentationData.theme, presentationData.strings.EditTheme_Preview.uppercased()))
-    entries.append(.chatPreview(presentationData.theme, previewTheme, previewTheme.chat.defaultWallpaper, presentationData.chatFontSize, presentationData.chatBubbleCorners, presentationData.strings, presentationData.dateTimeFormat, presentationData.nameDisplayOrder, [ChatPreviewMessageItem(outgoing: false, reply: (previewIncomingReplyName, previewIncomingReplyText), text: previewIncomingText), ChatPreviewMessageItem(outgoing: true, reply: nil, text: previewOutgoingText)]))
+    entries.append(.chatPreview(presentationData.theme, previewTheme, previewTheme.chat.defaultWallpaper, presentationData.chatFontSize, presentationData.chatBubbleCorners, presentationData.strings, presentationData.dateTimeFormat, presentationData.nameDisplayOrder, [ChatPreviewMessageItem(outgoing: false, reply: (previewIncomingReplyName, previewIncomingReplyText), text: previewIncomingText, nameColor: .blue, backgroundEmojiId: nil), ChatPreviewMessageItem(outgoing: true, reply: nil, text: previewOutgoingText, nameColor: .blue, backgroundEmojiId: nil)]))
     
     entries.append(.changeColors(presentationData.theme, presentationData.strings.EditTheme_ChangeColors))
     if hasSettings {
@@ -407,7 +409,7 @@ public func editThemeController(context: AccountContext, mode: EditThemeControll
                         |> mapToSignal { wallpaper -> Signal<TelegramWallpaper?, NoError> in
                             if let wallpaper = wallpaper, case let .file(file) = wallpaper.wallpaper {
                                 var convertedRepresentations: [ImageRepresentationWithReference] = []
-                                convertedRepresentations.append(ImageRepresentationWithReference(representation: TelegramMediaImageRepresentation(dimensions: PixelDimensions(width: 100, height: 100), resource: file.file.resource, progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false), reference: .wallpaper(wallpaper: .slug(file.slug), resource: file.file.resource)))
+                                convertedRepresentations.append(ImageRepresentationWithReference(representation: TelegramMediaImageRepresentation(dimensions: PixelDimensions(width: 100, height: 100), resource: file.file.resource, progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false, isPersonal: false), reference: .wallpaper(wallpaper: .slug(file.slug), resource: file.file.resource)))
                                 return wallpaperDatas(account: context.account, accountManager: context.sharedContext.accountManager, fileReference: .standalone(media: file.file), representations: convertedRepresentations, alwaysShowThumbnailFirst: false, thumbnail: false, onlyFullSize: true, autoFetchFullSize: true, synchronousLoad: false)
                                 |> mapToSignal { _, fullSizeData, complete -> Signal<TelegramWallpaper?, NoError> in
                                     guard complete, let fullSizeData = fullSizeData else {
@@ -536,8 +538,8 @@ public func editThemeController(context: AccountContext, mode: EditThemeControll
                 let _ = (combineLatest(queue: Queue.mainQueue(), previewThemePromise.get(), settingsPromise.get())
                 |> take(1)).start(next: { previewTheme, settings in
                     let saveThemeTemplateFile: (String, LocalFileMediaResource, @escaping () -> Void) -> Void = { title, resource, completion in
-                        let file = TelegramMediaFile(fileId: MediaId(namespace: Namespaces.Media.LocalFile, id: resource.fileId), partialReference: nil, resource: resource, previewRepresentations: [], videoThumbnails: [], immediateThumbnailData: nil, mimeType: "application/x-tgtheme-ios", size: nil, attributes: [.FileName(fileName: "\(title).tgios-theme")])
-                        let message = EnqueueMessage.message(text: "", attributes: [], inlineStickers: [:], mediaReference: .standalone(media: file), replyToMessageId: nil, localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: [])
+                        let file = TelegramMediaFile(fileId: MediaId(namespace: Namespaces.Media.LocalFile, id: resource.fileId), partialReference: nil, resource: resource, previewRepresentations: [], videoThumbnails: [], immediateThumbnailData: nil, mimeType: "application/x-tgtheme-ios", size: nil, attributes: [.FileName(fileName: "\(title).tgios-theme")], alternativeRepresentations: [])
+                        let message = EnqueueMessage.message(text: "", attributes: [], inlineStickers: [:], mediaReference: .standalone(media: file), threadId: nil, replyToMessageId: nil, replyToStoryId: nil, localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: [])
 
                         let _ = enqueueMessages(account: context.account, peerId: context.account.peerId, messages: [message]).start()
 

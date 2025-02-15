@@ -11,35 +11,52 @@ import AccountContext
 import AccountContext
 import ItemListUI
 import ChatPresentationInterfaceState
+import ChatControllerInteraction
+import ChatContextQuery
+import ChatInputContextPanelNode
 
-private struct HashtagChatInputContextPanelEntryStableId: Hashable {
-    let text: String
+private enum HashtagChatInputContextPanelEntryStableId: Hashable {
+    case generic
+    case peer
+    case hashtag(String)
 }
 
 private struct HashtagChatInputContextPanelEntry: Comparable, Identifiable {
     let index: Int
     let theme: PresentationTheme
-    let text: String
+    let peer: EnginePeer?
+    let title: String
+    let text: String?
+    let badge: String?
+    let hashtag: String
     let revealed: Bool
+    let isAdditionalRecent: Bool
     
     var stableId: HashtagChatInputContextPanelEntryStableId {
-        return HashtagChatInputContextPanelEntryStableId(text: self.text)
+        switch self.index {
+        case 0:
+            return .generic
+        case 1:
+            return .peer
+        default:
+            return .hashtag(self.title)
+        }
     }
     
     func withUpdatedTheme(_ theme: PresentationTheme) -> HashtagChatInputContextPanelEntry {
-        return HashtagChatInputContextPanelEntry(index: self.index, theme: theme, text: self.text, revealed: self.revealed)
+        return HashtagChatInputContextPanelEntry(index: self.index, theme: theme, peer: peer, title: self.title, text: self.text, badge: self.badge, hashtag: self.hashtag, revealed: self.revealed, isAdditionalRecent: self.isAdditionalRecent)
     }
     
     static func ==(lhs: HashtagChatInputContextPanelEntry, rhs: HashtagChatInputContextPanelEntry) -> Bool {
-        return lhs.index == rhs.index && lhs.text == rhs.text && lhs.theme === rhs.theme && lhs.revealed == rhs.revealed
+        return lhs.index == rhs.index && lhs.peer == rhs.peer && lhs.title == rhs.title && lhs.text == rhs.text && lhs.badge == rhs.badge && lhs.hashtag == rhs.hashtag && lhs.theme === rhs.theme && lhs.revealed == rhs.revealed && lhs.isAdditionalRecent == rhs.isAdditionalRecent
     }
     
     static func <(lhs: HashtagChatInputContextPanelEntry, rhs: HashtagChatInputContextPanelEntry) -> Bool {
         return lhs.index < rhs.index
     }
     
-    func item(account: Account, presentationData: PresentationData, setHashtagRevealed: @escaping (String?) -> Void, hashtagSelected: @escaping (String) -> Void, removeRequested: @escaping (String) -> Void) -> ListViewItem {
-        return HashtagChatInputPanelItem(presentationData: ItemListPresentationData(presentationData), text: self.text, revealed: self.revealed, setHashtagRevealed: setHashtagRevealed, hashtagSelected: hashtagSelected, removeRequested: removeRequested)
+    func item(context: AccountContext, presentationData: PresentationData, setHashtagRevealed: @escaping (String?) -> Void, hashtagSelected: @escaping (String) -> Void, removeRequested: @escaping (String) -> Void) -> ListViewItem {
+        return HashtagChatInputPanelItem(context: context, presentationData: ItemListPresentationData(presentationData), peer: self.peer, title: self.title, text: self.text, badge: self.badge, hashtag: self.hashtag, revealed: self.revealed, isAdditionalRecent: self.isAdditionalRecent, setHashtagRevealed: setHashtagRevealed, hashtagSelected: hashtagSelected, removeRequested: removeRequested)
     }
 }
 
@@ -49,12 +66,12 @@ private struct HashtagChatInputContextPanelTransition {
     let updates: [ListViewUpdateItem]
 }
 
-private func preparedTransition(from fromEntries: [HashtagChatInputContextPanelEntry], to toEntries: [HashtagChatInputContextPanelEntry], account: Account, presentationData: PresentationData, setHashtagRevealed: @escaping (String?) -> Void, hashtagSelected: @escaping (String) -> Void, removeRequested: @escaping (String) -> Void) -> HashtagChatInputContextPanelTransition {
+private func preparedTransition(from fromEntries: [HashtagChatInputContextPanelEntry], to toEntries: [HashtagChatInputContextPanelEntry], context: AccountContext, presentationData: PresentationData, setHashtagRevealed: @escaping (String?) -> Void, hashtagSelected: @escaping (String) -> Void, removeRequested: @escaping (String) -> Void) -> HashtagChatInputContextPanelTransition {
     let (deleteIndices, indicesAndItems, updateIndices) = mergeListsStableWithUpdates(leftList: fromEntries, rightList: toEntries)
     
     let deletions = deleteIndices.map { ListViewDeleteItem(index: $0, directionHint: nil) }
-    let insertions = indicesAndItems.map { ListViewInsertItem(index: $0.0, previousIndex: $0.2, item: $0.1.item(account: account, presentationData: presentationData, setHashtagRevealed: setHashtagRevealed, hashtagSelected: hashtagSelected, removeRequested: removeRequested), directionHint: nil) }
-    let updates = updateIndices.map { ListViewUpdateItem(index: $0.0, previousIndex: $0.2, item: $0.1.item(account: account, presentationData: presentationData, setHashtagRevealed: setHashtagRevealed, hashtagSelected: hashtagSelected, removeRequested: removeRequested), directionHint: nil) }
+    let insertions = indicesAndItems.map { ListViewInsertItem(index: $0.0, previousIndex: $0.2, item: $0.1.item(context: context, presentationData: presentationData, setHashtagRevealed: setHashtagRevealed, hashtagSelected: hashtagSelected, removeRequested: removeRequested), directionHint: nil) }
+    let updates = updateIndices.map { ListViewUpdateItem(index: $0.0, previousIndex: $0.2, item: $0.1.item(context: context, presentationData: presentationData, setHashtagRevealed: setHashtagRevealed, hashtagSelected: hashtagSelected, removeRequested: removeRequested), directionHint: nil) }
     
     return HashtagChatInputContextPanelTransition(deletions: deletions, insertions: insertions, updates: updates)
 }
@@ -64,6 +81,8 @@ final class HashtagChatInputContextPanelNode: ChatInputContextPanelNode {
     private var currentEntries: [HashtagChatInputContextPanelEntry]?
     
     private var currentResults: [String] = []
+    private var currentQuery: String = ""
+    private var currentPeer: EnginePeer?
     private var revealedHashtag: String?
     
     private var enqueuedTransitions: [(HashtagChatInputContextPanelTransition, Bool)] = []
@@ -88,14 +107,75 @@ final class HashtagChatInputContextPanelNode: ChatInputContextPanelNode {
         self.addSubnode(self.listView)
     }
     
-    func updateResults(_ results: [String]) {
+    func updateResults(_ results: [String], query: String, peer: EnginePeer?) {
         self.currentResults = results
+        self.currentQuery = query
+        self.currentPeer = peer
         
         var entries: [HashtagChatInputContextPanelEntry] = []
         var index = 0
         var stableIds = Set<HashtagChatInputContextPanelEntryStableId>()
-        for text in results {
-            let entry = HashtagChatInputContextPanelEntry(index: index, theme: self.theme, text: text, revealed: text == self.revealedHashtag)
+        
+        var isAdditionalRecent = false
+        if let peer, let _ = peer.addressName {
+            isAdditionalRecent = true
+        }
+        if query.count >= 4 {
+            if let peer, let addressName = peer.addressName {
+                let genericEntry = HashtagChatInputContextPanelEntry(
+                    index: 0,
+                    theme: self.theme,
+                    peer: nil,
+                    title: self.strings.Chat_HashtagSuggestion_UseGeneric_Title("#\(query)").string,
+                    text: self.strings.Chat_HashtagSuggestion_UseGeneric_Text,
+                    badge: nil,
+                    hashtag: query,
+                    revealed: false,
+                    isAdditionalRecent: false
+                )
+                stableIds.insert(genericEntry.stableId)
+                entries.append(genericEntry)
+                
+                var isGroup = false
+                if case let .channel(channel) = peer, case .group = channel.info {
+                    isGroup = true
+                }
+                let peerEntry = HashtagChatInputContextPanelEntry(
+                    index: 1,
+                    theme: self.theme,
+                    peer: peer,
+                    title: self.strings.Chat_HashtagSuggestion_UseLocal_Title("#\(query)@\(addressName)").string,
+                    text: isGroup ? self.strings.Chat_HashtagSuggestion_UseLocal_Group_Text : self.strings.Chat_HashtagSuggestion_UseLocal_Channel_Text,
+                    badge: self.strings.ChatList_ContextMenuBadgeNew,
+                    hashtag: "\(query)@\(addressName)",
+                    revealed: false,
+                    isAdditionalRecent: false
+                )
+                stableIds.insert(peerEntry.stableId)
+                entries.append(peerEntry)
+            }
+        }
+        
+        index = 2
+        
+        for hashtag in results {
+            if hashtag == query {
+                continue
+            }
+            if !hashtag.hasPrefix(query) {
+                continue
+            }
+            let entry = HashtagChatInputContextPanelEntry(
+                index: index,
+                theme: self.theme,
+                peer: hashtag.contains("@") ? peer : nil,
+                title: "#\(hashtag)",
+                text: nil,
+                badge: nil,
+                hashtag: hashtag,
+                revealed: hashtag == self.revealedHashtag,
+                isAdditionalRecent: isAdditionalRecent && !hashtag.contains("@")
+            )
             if stableIds.contains(entry.stableId) {
                 continue
             }
@@ -109,10 +189,10 @@ final class HashtagChatInputContextPanelNode: ChatInputContextPanelNode {
     private func prepareTransition(from: [HashtagChatInputContextPanelEntry]? , to: [HashtagChatInputContextPanelEntry]) {
         let firstTime = from == nil
         let presentationData = self.context.sharedContext.currentPresentationData.with { $0 }
-        let transition = preparedTransition(from: from ?? [], to: to, account: self.context.account, presentationData: presentationData, setHashtagRevealed: { [weak self] text in
+        let transition = preparedTransition(from: from ?? [], to: to, context: self.context, presentationData: presentationData, setHashtagRevealed: { [weak self] text in
             if let strongSelf = self {
                 strongSelf.revealedHashtag = text
-                strongSelf.updateResults(strongSelf.currentResults)
+                strongSelf.updateResults(strongSelf.currentResults, query: strongSelf.currentQuery, peer: strongSelf.currentPeer)
             }
         }, hashtagSelected: { [weak self] text in
             if let strongSelf = self, let interfaceInteraction = strongSelf.interfaceInteraction {
@@ -128,8 +208,7 @@ final class HashtagChatInputContextPanelNode: ChatInputContextPanelNode {
                     if let range = hashtagQueryRange {
                         let inputText = NSMutableAttributedString(attributedString: textInputState.inputText)
                         
-                        let replacementText = text + " "
-                        
+                        let replacementText = text
                         inputText.replaceCharacters(in: range, with: replacementText)
                         
                         let selectionPosition = range.lowerBound + (replacementText as NSString).length
@@ -141,7 +220,7 @@ final class HashtagChatInputContextPanelNode: ChatInputContextPanelNode {
             }
         }, removeRequested: { [weak self] text in
             if let strongSelf = self {
-                let _ = strongSelf.context.engine.messages.removeRecentlyUsedHashtag(string: text).start()
+                let _ = strongSelf.context.engine.messages.removeRecentlyUsedHashtag(string: text).startStandalone()
                 strongSelf.revealedHashtag = nil
             }
         })
@@ -169,7 +248,11 @@ final class HashtagChatInputContextPanelNode: ChatInputContextPanelNode {
                 //options.insert(.LowLatency)
             } else {
                 options.insert(.AnimateTopItemPosition)
-                options.insert(.AnimateCrossfade)
+                if transition.insertions.isEmpty && transition.deletions.isEmpty && transition.updates.count <= 2 {
+                    options.insert(.AnimateInsertion)
+                } else {
+                    options.insert(.AnimateCrossfade)
+                }
             }
             
             var insets = UIEdgeInsets()

@@ -25,6 +25,10 @@ func _internal_clearRecentlySearchedPeers(postbox: Postbox) -> Signal<Void, NoEr
 
 public struct RecentlySearchedPeerSubpeerSummary: Equatable {
     public let count: Int
+    
+    public init(count: Int) {
+        self.count = count
+    }
 }
 
 public struct RecentlySearchedPeer: Equatable {
@@ -33,9 +37,17 @@ public struct RecentlySearchedPeer: Equatable {
     public let notificationSettings: TelegramPeerNotificationSettings?
     public let unreadCount: Int32
     public let subpeerSummary: RecentlySearchedPeerSubpeerSummary?
+    
+    public init(peer: RenderedPeer, presence: TelegramUserPresence?, notificationSettings: TelegramPeerNotificationSettings?, unreadCount: Int32, subpeerSummary: RecentlySearchedPeerSubpeerSummary?) {
+        self.peer = peer
+        self.presence = presence
+        self.notificationSettings = notificationSettings
+        self.unreadCount = unreadCount
+        self.subpeerSummary = subpeerSummary
+    }
 }
 
-func _internal_recentlySearchedPeers(postbox: Postbox) -> Signal<[RecentlySearchedPeer], NoError> {
+public func _internal_recentlySearchedPeers(postbox: Postbox) -> Signal<[RecentlySearchedPeer], NoError> {
     return postbox.combinedView(keys: [.orderedItemList(id: Namespaces.OrderedItemList.RecentlySearchedPeerIds)])
     |> mapToSignal { view -> Signal<[RecentlySearchedPeer], NoError> in
         var peerIds: [PeerId] = []
@@ -51,7 +63,7 @@ func _internal_recentlySearchedPeers(postbox: Postbox) -> Signal<[RecentlySearch
         keys.append(contentsOf: peerIds.map({ .peer(peerId: $0, components: .all) }))
         
         return postbox.combinedView(keys: keys)
-        |> map { view -> [RecentlySearchedPeer] in
+        |> mapToSignal { view -> Signal<[RecentlySearchedPeer], NoError> in
             var result: [RecentlySearchedPeer] = []
             var unreadCounts: [PeerId: Int32] = [:]
             if let unreadCountsView = view.views[unreadCountsKey] as? UnreadMessageCountsView {
@@ -62,6 +74,7 @@ func _internal_recentlySearchedPeers(postbox: Postbox) -> Signal<[RecentlySearch
                 }
             }
             
+            var migratedPeerIds: [EnginePeer.Id: EnginePeer.Id] = [:]
             for peerId in peerIds {
                 if let peerView = view.views[.peer(peerId: peerId, components: .all)] as? PeerView {
                     var presence: TelegramUserPresence?
@@ -79,6 +92,10 @@ func _internal_recentlySearchedPeers(postbox: Postbox) -> Signal<[RecentlySearch
                                 unreadCount = 0
                             }
                         }
+                        
+                        if let group = peer as? TelegramGroup, let migrationReference = group.migrationReference {
+                            migratedPeerIds = [group.id: migrationReference.peerId]
+                        }
                     }
                     
                     var subpeerSummary: RecentlySearchedPeerSubpeerSummary?
@@ -91,7 +108,20 @@ func _internal_recentlySearchedPeers(postbox: Postbox) -> Signal<[RecentlySearch
                 }
             }
             
-            return result
+            if !migratedPeerIds.isEmpty {
+                return postbox.transaction { transaction -> Signal<[RecentlySearchedPeer], NoError> in
+                    for (previousPeerId, updatedPeerId) in migratedPeerIds {
+                        transaction.removeOrderedItemListItem(collectionId: Namespaces.OrderedItemList.RecentlySearchedPeerIds, itemId: RecentPeerItemId(previousPeerId).rawValue)
+                        if let entry = CodableEntry(RecentPeerItem(rating: 0.0)) {
+                            transaction.addOrMoveToFirstPositionOrderedItemListItem(collectionId: Namespaces.OrderedItemList.RecentlySearchedPeerIds, item: OrderedItemListEntry(id: RecentPeerItemId(updatedPeerId).rawValue, contents: entry), removeTailIfCountExceeds: 20)
+                        }
+                    }
+                    return .complete()
+                }
+                |> switchToLatest
+            } else {
+                return .single(result)
+            }
         }
     }
 }

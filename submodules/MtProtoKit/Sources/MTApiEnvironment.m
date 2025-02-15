@@ -10,75 +10,6 @@
 
 #import <CommonCrypto/CommonDigest.h>
 
-typedef enum {
-    UIDeviceUnknown,
-    
-    UIDeviceSimulator,
-    
-    UIDevice1GiPhone,
-    UIDevice3GiPhone,
-    UIDevice3GSiPhone,
-    UIDevice4iPhone,
-    UIDevice4SiPhone,
-    UIDevice5iPhone,
-    UIDevice5SiPhone,
-    UIDevice6iPhone,
-    UIDevice6PlusiPhone,
-    UIDevice6SiPhone,
-    UIDevice6SPlusiPhone,
-    UIDevice7iPhone,
-    UIDevice7PlusiPhone,
-    UIDevice8iPhone,
-    UIDevice8PlusiPhone,
-    UIDeviceXiPhone,
-    UIDeviceSEPhone,
-    UIDeviceSE2Phone,
-    UIDeviceXSiPhone,
-    UIDeviceXSMaxiPhone,
-    UIDeviceXRiPhone,
-    UIDevice11iPhone,
-    UIDevice11ProiPhone,
-    UIDevice11ProMaxiPhone,
-    UIDevice12MiniiPhone,
-    UIDevice12iPhone,
-    UIDevice12ProiPhone,
-    UIDevice12ProMaxiPhone,
-    
-    UIDevice1GiPod,
-    UIDevice2GiPod,
-    UIDevice3GiPod,
-    UIDevice4GiPod,
-    UIDevice5GiPod,
-    UIDevice6GiPod,
-    UIDevice7GiPod,
-    
-    UIDevice1GiPad,
-    UIDevice2GiPad,
-    UIDevice3GiPad,
-    UIDevice4GiPad,
-    UIDevice5GiPad,
-    UIDevice6GiPad,
-    
-    UIDeviceiPadPro12_93g,
-    UIDeviceiPadPro11,
-    UIDeviceiPadPro6g,
-    UIDeviceiPadPro10_5,
-    UIDeviceiPadPro12_9,
-    
-    UIDeviceAppleTV2,
-    UIDeviceAppleTV3,
-    UIDeviceAppleTV4,
-    
-    UIDeviceUnknowniPhone,
-    UIDeviceUnknowniPod,
-    UIDeviceUnknowniPad,
-    UIDeviceUnknownAppleTV,
-    UIDeviceIFPGA,
-    
-    UIDeviceOSX
-    
-} UIDevicePlatform;
-
 static NSData * _Nullable parseHexString(NSString * _Nonnull hex) {
     if ([hex length] % 2 != 0) {
         return nil;
@@ -428,7 +359,7 @@ static NSData *base64_decode(NSString *str) {
 @implementation MTApiEnvironment
 
 -(instancetype)init {
-    self = [self initWithResolvedDeviceName:nil];
+    self = [self initWithDeviceModelName:nil];
     if (self != nil)
     {
         
@@ -436,22 +367,16 @@ static NSData *base64_decode(NSString *str) {
     return self;
 }
 
--(id _Nonnull)initWithResolvedDeviceName:(NSDictionary<NSString *, NSString *> * _Nullable)resolvedDeviceName {
+-(id _Nonnull)initWithDeviceModelName:(NSString * _Nullable)deviceModelName {
     self = [super init];
     if (self != nil)
     {
-        if (resolvedDeviceName != nil) {
-            NSString *model = [self platformString];
-            NSString* resolved = resolvedDeviceName[model];
-            if (resolved != nil) {
-                _deviceModel = resolved;
-            } else {
-                _deviceModel = model;
-            }
+        if (deviceModelName != nil) {
+            _deviceModel = deviceModelName;
         } else {
             _deviceModel = [self platformString];
         }
-        _resolvedDeviceName = resolvedDeviceName;
+        _deviceModelName = deviceModelName;
 #if TARGET_OS_IPHONE
         _systemVersion = [[UIDevice currentDevice] systemVersion];
 #else
@@ -601,6 +526,22 @@ NSString *suffix = @"";
         return @"iPhone 14 Pro";
     if ([platform isEqualToString:@"iPhone15,3"])
         return @"iPhone 14 Pro Max";
+    if ([platform isEqualToString:@"iPhone15,4"])
+        return @"iPhone 15";
+    if ([platform isEqualToString:@"iPhone15,5"])
+        return @"iPhone 15 Plus";
+    if ([platform isEqualToString:@"iPhone16,1"])
+        return @"iPhone 15 Pro";
+    if ([platform isEqualToString:@"iPhone16,2"])
+        return @"iPhone 15 Pro Max";
+    if ([platform isEqualToString:@"iPhone17,3"])
+        return @"iPhone 16";
+    if ([platform isEqualToString:@"iPhone17,4"])
+        return @"iPhone 16 Plus";
+    if ([platform isEqualToString:@"iPhone17,1"])
+        return @"iPhone 16 Pro";
+    if ([platform isEqualToString:@"iPhone17,2"])
+        return @"iPhone 16 Pro Max";
     
     if ([platform hasPrefix:@"iPod1"])
         return @"iPod touch 1G";
@@ -717,6 +658,10 @@ NSString *suffix = @"";
         [platform isEqualToString:@"iPad11,7"])
         return @"iPad (8th gen)";
     
+    if ([platform isEqualToString:@"iPad12,1"] ||
+        [platform isEqualToString:@"iPad12,2"])
+        return @"iPad (9th gen)";
+    
     if ([platform isEqualToString:@"iPad13,1"] ||
         [platform isEqualToString:@"iPad13,2"])
         return @"iPad Air (4th gen)";
@@ -737,10 +682,38 @@ NSString *suffix = @"";
         [platform isEqualToString:@"iPad13,17"])
         return @"iPad Air (5th gen)";
     
+    if ([platform isEqualToString:@"iPad13,18"] ||
+        [platform isEqualToString:@"iPad13,19"])
+        return @"iPad (10th gen)";
+    
     if ([platform isEqualToString:@"iPad14,1"] ||
         [platform isEqualToString:@"iPad14,2"])
         return @"iPad mini (6th gen)";
-            
+    
+    if ([platform isEqualToString:@"iPad14,3"] ||
+        [platform isEqualToString:@"iPad14,4"])
+        return @"iPad Pro 11 inch (4th gen)";
+    
+    if ([platform isEqualToString:@"iPad14,5"] ||
+        [platform isEqualToString:@"iPad14,6"])
+        return @"iPad Pro 12.9 inch (6th gen)";
+    
+    if ([platform isEqualToString:@"iPad14,8"] ||
+        [platform isEqualToString:@"iPad14,9"])
+        return @"iPad Air (6th gen)";
+    
+    if ([platform isEqualToString:@"iPad14,10"] ||
+        [platform isEqualToString:@"iPad14,11"])
+        return @"iPad Air (7th gen)";
+    
+    if ([platform isEqualToString:@"iPad16,3"] ||
+        [platform isEqualToString:@"iPad16,4"])
+        return @"iPad Pro 11 inch (5th gen)";
+    
+    if ([platform isEqualToString:@"iPad16,5"] ||
+        [platform isEqualToString:@"iPad16,6"])
+        return @"iPad Pro 12.9 inch (7th gen)";
+    
     if ([platform hasPrefix:@"iPhone"])
         return @"Unknown iPhone";
     if ([platform hasPrefix:@"iPod"])
@@ -791,7 +764,7 @@ NSString *suffix = @"";
 }
 
 - (MTApiEnvironment *)withUpdatedLangPackCode:(NSString *)langPackCode {
-    MTApiEnvironment *result = [[MTApiEnvironment alloc] initWithResolvedDeviceName:_resolvedDeviceName];
+    MTApiEnvironment *result = [[MTApiEnvironment alloc] initWithDeviceModelName:_deviceModelName];
     
     result.apiId = self.apiId;
     result.appVersion = self.appVersion;
@@ -815,7 +788,7 @@ NSString *suffix = @"";
 }
 
 - (instancetype)copyWithZone:(NSZone *)__unused zone {
-    MTApiEnvironment *result =  [[MTApiEnvironment alloc] initWithResolvedDeviceName:_resolvedDeviceName];
+    MTApiEnvironment *result =  [[MTApiEnvironment alloc] initWithDeviceModelName:_deviceModelName];
     
     result.apiId = self.apiId;
     result.appVersion = self.appVersion;
@@ -839,7 +812,7 @@ NSString *suffix = @"";
 }
 
 - (MTApiEnvironment *)withUpdatedSocksProxySettings:(MTSocksProxySettings *)socksProxySettings {
-    MTApiEnvironment *result =  [[MTApiEnvironment alloc] initWithResolvedDeviceName:_resolvedDeviceName];
+    MTApiEnvironment *result =  [[MTApiEnvironment alloc] initWithDeviceModelName:_deviceModelName];
     
     result.apiId = self.apiId;
     result.appVersion = self.appVersion;
@@ -863,7 +836,7 @@ NSString *suffix = @"";
 }
 
 - (MTApiEnvironment *)withUpdatedNetworkSettings:(MTNetworkSettings *)networkSettings {
-    MTApiEnvironment *result =  [[MTApiEnvironment alloc] initWithResolvedDeviceName:_resolvedDeviceName];
+    MTApiEnvironment *result =  [[MTApiEnvironment alloc] initWithDeviceModelName:_deviceModelName];
     
     result.apiId = self.apiId;
     result.appVersion = self.appVersion;
@@ -887,7 +860,7 @@ NSString *suffix = @"";
 }
 
 - (MTApiEnvironment *)withUpdatedSystemCode:(NSData *)systemCode {
-    MTApiEnvironment *result =  [[MTApiEnvironment alloc] initWithResolvedDeviceName:_resolvedDeviceName];
+    MTApiEnvironment *result =  [[MTApiEnvironment alloc] initWithDeviceModelName:_deviceModelName];
     
     result.apiId = self.apiId;
     result.appVersion = self.appVersion;

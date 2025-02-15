@@ -2,9 +2,10 @@ import Foundation
 import UIKit
 import AsyncDisplayKit
 import Display
-import Postbox
 import TelegramCore
 import TelegramPresentationData
+import TextNodeWithEntities
+import AccountContext
 
 private final class ItemNodeDeleteButtonNode: HighlightableButtonNode {
     private let pressed: () -> Void
@@ -56,6 +57,7 @@ private final class ItemNodeDeleteButtonNode: HighlightableButtonNode {
 }
 
 private final class ItemNode: ASDisplayNode {
+    private let context: AccountContext
     private let pressed: (Bool) -> Void
     private let requestedDeletion: () -> Void
     
@@ -64,11 +66,11 @@ private final class ItemNode: ASDisplayNode {
     
     private let extractedBackgroundNode: ASImageNode
     private let titleContainer: ASDisplayNode
-    private let titleNode: ImmediateTextNode
-    private let titleActiveNode: ImmediateTextNode
+    private let titleNode: ImmediateTextNodeWithEntities
+    private let titleActiveNode: ImmediateTextNodeWithEntities
     private let shortTitleContainer: ASDisplayNode
-    private let shortTitleNode: ImmediateTextNode
-    private let shortTitleActiveNode: ImmediateTextNode
+    private let shortTitleNode: ImmediateTextNodeWithEntities
+    private let shortTitleActiveNode: ImmediateTextNodeWithEntities
     private let badgeContainerNode: ASDisplayNode
     private let badgeTextNode: ImmediateTextNode
     private let badgeBackgroundActiveNode: ASImageNode
@@ -76,9 +78,7 @@ private final class ItemNode: ASDisplayNode {
     
     private var deleteButtonNode: ItemNodeDeleteButtonNode?
     private let buttonNode: HighlightTrackingButtonNode
-    
-    private let activateArea: AccessibilityAreaNode
-    
+        
     private var selectionFraction: CGFloat = 0.0
     private(set) var unreadCount: Int = 0
     
@@ -87,10 +87,12 @@ private final class ItemNode: ASDisplayNode {
     private var isDisabled: Bool = false
     
     private var theme: PresentationTheme?
+    private var currentTitle: (ChatFolderTitle, ChatFolderTitle)?
     
     private var pointerInteraction: PointerInteraction?
     
-    init(pressed: @escaping (Bool) -> Void, requestedDeletion: @escaping () -> Void, contextGesture: @escaping (ContextExtractedContentContainingNode, ContextGesture, Bool) -> Void) {
+    init(context: AccountContext, pressed: @escaping (Bool) -> Void, requestedDeletion: @escaping () -> Void, contextGesture: @escaping (ContextExtractedContentContainingNode, ContextGesture, Bool) -> Void) {
+        self.context = context
         self.pressed = pressed
         self.requestedDeletion = requestedDeletion
         
@@ -104,27 +106,31 @@ private final class ItemNode: ASDisplayNode {
         
         self.titleContainer = ASDisplayNode()
         
-        self.titleNode = ImmediateTextNode()
+        self.titleNode = ImmediateTextNodeWithEntities()
         self.titleNode.displaysAsynchronously = false
         self.titleNode.insets = UIEdgeInsets(top: titleInset, left: 0.0, bottom: titleInset, right: 0.0)
+        self.titleNode.resetEmojiToFirstFrameAutomatically = true
         
-        self.titleActiveNode = ImmediateTextNode()
+        self.titleActiveNode = ImmediateTextNodeWithEntities()
         self.titleActiveNode.displaysAsynchronously = false
         self.titleActiveNode.insets = UIEdgeInsets(top: titleInset, left: 0.0, bottom: titleInset, right: 0.0)
         self.titleActiveNode.alpha = 0.0
+        self.titleActiveNode.resetEmojiToFirstFrameAutomatically = true
         
         self.shortTitleContainer = ASDisplayNode()
         
-        self.shortTitleNode = ImmediateTextNode()
+        self.shortTitleNode = ImmediateTextNodeWithEntities()
         self.shortTitleNode.displaysAsynchronously = false
         self.shortTitleNode.alpha = 0.0
         self.shortTitleNode.insets = UIEdgeInsets(top: titleInset, left: 0.0, bottom: titleInset, right: 0.0)
+        self.shortTitleNode.resetEmojiToFirstFrameAutomatically = true
         
-        self.shortTitleActiveNode = ImmediateTextNode()
+        self.shortTitleActiveNode = ImmediateTextNodeWithEntities()
         self.shortTitleActiveNode.displaysAsynchronously = false
         self.shortTitleActiveNode.alpha = 0.0
         self.shortTitleActiveNode.insets = UIEdgeInsets(top: titleInset, left: 0.0, bottom: titleInset, right: 0.0)
         self.shortTitleActiveNode.alpha = 0.0
+        self.shortTitleActiveNode.resetEmojiToFirstFrameAutomatically = true
         
         self.badgeContainerNode = ASDisplayNode()
         
@@ -140,13 +146,9 @@ private final class ItemNode: ASDisplayNode {
         self.badgeBackgroundInactiveNode.displayWithoutProcessing = true
         
         self.buttonNode = HighlightTrackingButtonNode()
-        
-        self.activateArea = AccessibilityAreaNode()
-        
+                
         super.init()
-        
-        self.isAccessibilityElement = true
-        
+                
         self.extractedContainerNode.contentNode.addSubnode(self.extractedBackgroundNode)
         self.extractedContainerNode.contentNode.addSubnode(self.titleContainer)
         self.titleContainer.addSubnode(self.titleNode)
@@ -163,9 +165,8 @@ private final class ItemNode: ASDisplayNode {
         self.containerNode.addSubnode(self.extractedContainerNode)
         self.containerNode.targetNodeForActivationProgress = self.extractedContainerNode.contentNode
         self.addSubnode(self.containerNode)
-    
-        self.addSubnode(self.activateArea)
         
+        self.buttonNode.isExclusiveTouch = true
         self.buttonNode.addTarget(self, action: #selector(self.buttonPressed), forControlEvents: .touchUpInside)
         
         self.containerNode.activated = { [weak self] gesture, _ in
@@ -193,7 +194,7 @@ private final class ItemNode: ASDisplayNode {
     
     override func didLoad() {
         super.didLoad()
-        
+
         self.pointerInteraction = PointerInteraction(view: self.containerNode.view, customInteractionView: nil, style: .insetRectangle(-10.0, 4.0))
     }
     
@@ -201,22 +202,45 @@ private final class ItemNode: ASDisplayNode {
         self.pressed(self.isDisabled)
     }
     
-    func updateText(strings: PresentationStrings, title: String, shortTitle: String, unreadCount: Int, unreadHasUnmuted: Bool, isNoFilter: Bool, selectionFraction: CGFloat, isEditing: Bool, isReordering: Bool, canReorderAllChats: Bool, isDisabled: Bool, presentationData: PresentationData, transition: ContainedViewLayoutTransition) {
+    func updateText(strings: PresentationStrings, title: ChatFolderTitle, shortTitle: ChatFolderTitle, unreadCount: Int, unreadHasUnmuted: Bool, isNoFilter: Bool, selectionFraction: CGFloat, isEditing: Bool, isReordering: Bool, canReorderAllChats: Bool, isDisabled: Bool, presentationData: PresentationData, transition: ContainedViewLayoutTransition) {
         self.isEditing = isEditing
         self.isDisabled = isDisabled
         
+        var themeUpdated = false
         if self.theme !== presentationData.theme {
             self.theme = presentationData.theme
             
             self.badgeBackgroundActiveNode.image = generateStretchableFilledCircleImage(diameter: 18.0, color: presentationData.theme.chatList.unreadBadgeActiveBackgroundColor)
             self.badgeBackgroundInactiveNode.image = generateStretchableFilledCircleImage(diameter: 18.0, color: presentationData.theme.chatList.unreadBadgeInactiveBackgroundColor)
+            
+            themeUpdated = true
         }
         
-        self.activateArea.accessibilityLabel = title
+        var titleUpdated = false
+        if self.currentTitle?.0 != title || self.currentTitle?.1 != shortTitle {
+            self.currentTitle = (title, shortTitle)
+            
+            titleUpdated = true
+        }
+        
+        var unreadCountUpdated = false
+        if self.unreadCount != unreadCount {
+            unreadCountUpdated = true
+            self.unreadCount = unreadCount
+        }
+        
+        self.buttonNode.accessibilityLabel = title.text
         if unreadCount > 0 {
-            self.activateArea.accessibilityValue = strings.VoiceOver_Chat_UnreadMessages(Int32(unreadCount))
+            if self.buttonNode.accessibilityValue == nil || unreadCountUpdated {
+                self.buttonNode.accessibilityValue = strings.VoiceOver_Chat_UnreadMessages(Int32(unreadCount))
+            }
         } else {
-            self.activateArea.accessibilityValue = ""
+            self.buttonNode.accessibilityValue = ""
+        }
+        if selectionFraction == 1.0 {
+            self.buttonNode.accessibilityTraits = [.button, .selected]
+        } else {
+            self.buttonNode.accessibilityTraits = [.button]
         }
         
         self.containerNode.isGestureEnabled = !isEditing && !isReordering
@@ -255,14 +279,39 @@ private final class ItemNode: ASDisplayNode {
         transition.updateAlpha(node: self.shortTitleNode, alpha: deselectionAlpha)
         transition.updateAlpha(node: self.shortTitleActiveNode, alpha: selectionAlpha)
         
-        self.titleNode.attributedText = NSAttributedString(string: title, font: Font.medium(14.0), textColor: presentationData.theme.list.itemSecondaryTextColor)
-        self.titleActiveNode.attributedText = NSAttributedString(string: title, font: Font.medium(14.0), textColor: presentationData.theme.list.itemAccentColor)
-        self.shortTitleNode.attributedText = NSAttributedString(string: shortTitle, font: Font.medium(14.0), textColor: presentationData.theme.list.itemSecondaryTextColor)
-        self.shortTitleActiveNode.attributedText = NSAttributedString(string: shortTitle, font: Font.medium(14.0), textColor: presentationData.theme.list.itemAccentColor)
-        if unreadCount != 0 {
-            self.badgeTextNode.attributedText = NSAttributedString(string: "\(unreadCount)", font: Font.regular(14.0), textColor: presentationData.theme.list.itemCheckColors.foregroundColor)
-            let badgeSelectionFraction: CGFloat = unreadHasUnmuted ? 1.0 : selectionFraction
+        let titleArguments = TextNodeWithEntities.Arguments(
+            context: self.context,
+            cache: self.context.animationCache,
+            renderer: self.context.animationRenderer,
+            placeholderColor: presentationData.theme.list.mediaPlaceholderColor,
+            attemptSynchronous: false
+        )
+        
+        self.titleNode.arguments = titleArguments
+        self.titleActiveNode.arguments = titleArguments
+        self.shortTitleNode.arguments = titleArguments
+        self.shortTitleActiveNode.arguments = titleArguments
+        
+        self.titleNode.visibility = title.enableAnimations
+        self.titleActiveNode.visibility = title.enableAnimations
+        self.shortTitleNode.visibility = title.enableAnimations
+        self.shortTitleActiveNode.visibility = title.enableAnimations
+        
+        if themeUpdated || titleUpdated {
+            //TODO:release
+            self.titleNode.attributedText = title.attributedString(font: Font.medium(14.0), textColor: presentationData.theme.list.itemSecondaryTextColor)
+            self.titleActiveNode.attributedText = title.attributedString(font: Font.medium(14.0), textColor: presentationData.theme.list.itemAccentColor)
             
+            self.shortTitleNode.attributedText = shortTitle.attributedString(font: Font.medium(14.0), textColor: presentationData.theme.list.itemSecondaryTextColor)
+            self.shortTitleActiveNode.attributedText = shortTitle.attributedString(font: Font.medium(14.0), textColor: presentationData.theme.list.itemAccentColor)
+        }
+        
+        if unreadCount != 0 {
+            if themeUpdated || unreadCountUpdated || self.badgeTextNode.attributedText == nil {
+                self.badgeTextNode.attributedText = NSAttributedString(string: "\(unreadCount)", font: Font.regular(14.0), textColor: presentationData.theme.list.itemCheckColors.foregroundColor)
+            }
+            
+            let badgeSelectionFraction: CGFloat = unreadHasUnmuted ? 1.0 : selectionFraction
             let badgeSelectionAlpha: CGFloat = badgeSelectionFraction
             //let badgeDeselectionAlpha: CGFloat = 1.0 - badgeSelectionFraction
             
@@ -338,7 +387,6 @@ private final class ItemNode: ASDisplayNode {
         self.extractedContainerNode.contentNode.frame = CGRect(origin: CGPoint(), size: size)
         self.extractedContainerNode.contentRect = CGRect(origin: CGPoint(x: self.extractedBackgroundNode.frame.minX, y: 0.0), size: CGSize(width:self.extractedBackgroundNode.frame.width, height: size.height))
         self.containerNode.frame = CGRect(origin: CGPoint(), size: size)
-        self.activateArea.frame = CGRect(origin: CGPoint(), size: size)
         
         self.hitTestSlop = UIEdgeInsets(top: 0.0, left: -sideInset, bottom: 0.0, right: -sideInset)
         self.extractedContainerNode.hitTestSlop = self.hitTestSlop
@@ -419,25 +467,37 @@ private final class ItemNode: ASDisplayNode {
                 return deleteButtonNode.view
             }
         }
+        
+        if self.buttonNode.isUserInteractionEnabled {
+            if let result = self.buttonNode.view.hitTest(self.view.convert(point, to: self.buttonNode.view), with: event) {
+                return result
+            }
+        }
+        
         return super.hitTest(point, with: event)
     }
 }
 
-enum ChatListFilterTabEntryId: Hashable {
+public enum ChatListFilterTabEntryId: Hashable {
     case all
     case filter(Int32)
 }
 
-struct ChatListFilterTabEntryUnreadCount: Equatable {
+public struct ChatListFilterTabEntryUnreadCount: Equatable {
     let value: Int
     let hasUnmuted: Bool
+    
+    public init(value: Int, hasUnmuted: Bool) {
+        self.value = value
+        self.hasUnmuted = hasUnmuted
+    }
 }
 
-enum ChatListFilterTabEntry: Equatable {
+public enum ChatListFilterTabEntry: Equatable {
     case all(unreadCount: Int)
-    case filter(id: Int32, text: String, unread: ChatListFilterTabEntryUnreadCount)
+    case filter(id: Int32, text: ChatFolderTitle, unread: ChatListFilterTabEntryUnreadCount)
     
-    var id: ChatListFilterTabEntryId {
+    public var id: ChatListFilterTabEntryId {
         switch self {
         case .all:
             return .all
@@ -446,31 +506,32 @@ enum ChatListFilterTabEntry: Equatable {
         }
     }
     
-    func title(strings: PresentationStrings) -> String {
+    func title(strings: PresentationStrings) -> ChatFolderTitle {
         switch self {
         case .all:
-            return strings.ChatList_Tabs_AllChats
+            return ChatFolderTitle(text: strings.ChatList_Tabs_AllChats, entities: [], enableAnimations: true)
         case let .filter(_, text, _):
             return text
         }
     }
     
-    func shortTitle(strings: PresentationStrings) -> String {
+    func shortTitle(strings: PresentationStrings) -> ChatFolderTitle {
         switch self {
         case .all:
-            return strings.ChatList_Tabs_All
+            return ChatFolderTitle(text: strings.ChatList_Tabs_All, entities: [], enableAnimations: true)
         case let .filter(_, text, _):
             return text
         }
     }
 }
 
-final class ChatListFilterTabContainerNode: ASDisplayNode {
+public final class ChatListFilterTabContainerNode: ASDisplayNode {
+    private let context: AccountContext
     private let scrollNode: ASScrollNode
     private let selectedLineNode: ASImageNode
     private var itemNodes: [ChatListFilterTabEntryId: ItemNode] = [:]
     
-    var tabSelected: ((ChatListFilterTabEntryId, Bool) -> Void)?
+    public var tabSelected: ((ChatListFilterTabEntryId, Bool) -> Void)?
     var tabRequestedDeletion: ((ChatListFilterTabEntryId) -> Void)?
     var addFilter: (() -> Void)?
     var contextGesture: ((Int32?, ContextExtractedContentContainingNode, ContextGesture, Bool) -> Void)?
@@ -499,7 +560,7 @@ final class ChatListFilterTabContainerNode: ASDisplayNode {
         }
     }
     
-    var filtersCount: Int32 {
+    public var filtersCount: Int32 {
         if let (_, _, filters, _, _, _, _, _, _, _) = self.currentParams {
             let filters = filters.filter { filter in
                 if case .all = filter {
@@ -514,7 +575,8 @@ final class ChatListFilterTabContainerNode: ASDisplayNode {
         }
     }
     
-    override init() {
+    public init(context: AccountContext) {
+        self.context = context
         self.scrollNode = ASScrollNode()
         
         self.selectedLineNode = ASImageNode()
@@ -660,12 +722,12 @@ final class ChatListFilterTabContainerNode: ASDisplayNode {
     private var previousSelectedAbsFrame: CGRect?
     private var previousSelectedFrame: CGRect?
     
-    func cancelAnimations() {
+    public func cancelAnimations() {
         self.selectedLineNode.layer.removeAllAnimations()
         self.scrollNode.layer.removeAllAnimations()
     }
     
-    func update(size: CGSize, sideInset: CGFloat, filters: [ChatListFilterTabEntry], selectedFilter: ChatListFilterTabEntryId?, isReordering: Bool, isEditing: Bool, canReorderAllChats: Bool, filtersLimit: Int32?, transitionFraction: CGFloat, presentationData: PresentationData, transition proposedTransition: ContainedViewLayoutTransition) {
+    public func update(size: CGSize, sideInset: CGFloat, filters: [ChatListFilterTabEntry], selectedFilter: ChatListFilterTabEntryId?, isReordering: Bool, isEditing: Bool, canReorderAllChats: Bool, filtersLimit: Int32?, transitionFraction: CGFloat, presentationData: PresentationData, transition proposedTransition: ContainedViewLayoutTransition) {
         let isFirstTime = self.currentParams == nil
         let transition: ContainedViewLayoutTransition = isFirstTime ? .immediate : proposedTransition
         
@@ -746,7 +808,7 @@ final class ChatListFilterTabContainerNode: ASDisplayNode {
             } else {
                 itemNodeTransition = .immediate
                 wasAdded = true
-                itemNode = ItemNode(pressed: { [weak self] disabled in
+                itemNode = ItemNode(context: self.context, pressed: { [weak self] disabled in
                     self?.tabSelected?(filter.id, disabled)
                 }, requestedDeletion: { [weak self] in
                     self?.tabRequestedDeletion?(filter.id)
@@ -799,7 +861,7 @@ final class ChatListFilterTabContainerNode: ASDisplayNode {
                 selectionFraction = 0.0
             }
             
-            itemNode.updateText(strings: presentationData.strings, title: filter.title(strings: presentationData.strings), shortTitle:  i == 0 ? filter.shortTitle(strings: presentationData.strings) : filter.title(strings: presentationData.strings), unreadCount: unreadCount, unreadHasUnmuted: unreadHasUnmuted, isNoFilter: isNoFilter, selectionFraction: selectionFraction, isEditing: isEditing, isReordering: isReordering, canReorderAllChats: canReorderAllChats, isDisabled: isDisabled, presentationData: presentationData, transition: itemNodeTransition)
+            itemNode.updateText(strings: presentationData.strings, title: filter.title(strings: presentationData.strings), shortTitle: i == 0 ? filter.shortTitle(strings: presentationData.strings) : filter.title(strings: presentationData.strings), unreadCount: unreadCount, unreadHasUnmuted: unreadHasUnmuted, isNoFilter: isNoFilter, selectionFraction: selectionFraction, isEditing: isEditing, isReordering: isReordering, canReorderAllChats: canReorderAllChats, isDisabled: isDisabled, presentationData: presentationData, transition: itemNodeTransition)
         }
         var removeKeys: [ChatListFilterTabEntryId] = []
         for (id, _) in self.itemNodes {
@@ -926,7 +988,6 @@ final class ChatListFilterTabContainerNode: ASDisplayNode {
             let lineFrame = CGRect(origin: CGPoint(x: selectedFrame.minX, y: size.height - 3.0), size: CGSize(width: selectedFrame.width, height: 3.0))
             if wasAdded {
                 self.selectedLineNode.frame = lineFrame
-                self.selectedLineNode.alpha = 0.0
             } else {
                 transition.updateFrame(node: self.selectedLineNode, frame: lineFrame)
             }
@@ -950,7 +1011,9 @@ final class ChatListFilterTabContainerNode: ASDisplayNode {
                 }
                 self.scrollNode.bounds = updatedBounds
             }
-            transition.animateHorizontalOffsetAdditive(node: self.scrollNode, offset: previousScrollBounds.minX - self.scrollNode.bounds.minX)
+            if abs(previousScrollBounds.minX - self.scrollNode.bounds.minX) > .ulpOfOne {
+                transition.animateHorizontalOffsetAdditive(node: self.scrollNode, offset: previousScrollBounds.minX - self.scrollNode.bounds.minX)
+            }
             
             self.previousSelectedAbsFrame = selectedFrame.offsetBy(dx: -self.scrollNode.bounds.minX, dy: 0.0)
             self.previousSelectedFrame = selectedFrame

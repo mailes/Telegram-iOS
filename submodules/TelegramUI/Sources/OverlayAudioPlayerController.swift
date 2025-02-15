@@ -59,7 +59,7 @@ final class OverlayAudioPlayerControllerImpl: ViewController, OverlayAudioPlayer
         }, requestShare: { [weak self] messageId in
             if let strongSelf = self {
                 let _ = (strongSelf.context.engine.data.get(TelegramEngine.EngineData.Item.Messages.Message(id: messageId))
-                |> deliverOnMainQueue).start(next: { message in
+                |> deliverOnMainQueue).startStandalone(next: { message in
                     if let strongSelf = self, let message = message {
                         let shareController = ShareController(context: strongSelf.context, subject: .messages([message._asMessage()]), showInChat: { message in
                             if let strongSelf = self {
@@ -74,7 +74,7 @@ final class OverlayAudioPlayerControllerImpl: ViewController, OverlayAudioPlayer
                                         peerIds.map(TelegramEngine.EngineData.Item.Peer.Peer.init)
                                     )
                                 )
-                                |> deliverOnMainQueue).start(next: { [weak self] peerList in
+                                |> deliverOnMainQueue).startStandalone(next: { [weak self] peerList in
                                     if let strongSelf = self {
                                         let peers = peerList.compactMap { $0 }
                                         let presentationData = strongSelf.context.sharedContext.currentPresentationData.with { $0 }
@@ -86,21 +86,39 @@ final class OverlayAudioPlayerControllerImpl: ViewController, OverlayAudioPlayer
                                             savedMessages = true
                                         } else {
                                             if peers.count == 1, let peer = peers.first {
-                                                let peerName = peer.id == strongSelf.context.account.peerId ? presentationData.strings.DialogList_SavedMessages : peer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
+                                                var peerName = peer.id == strongSelf.context.account.peerId ? presentationData.strings.DialogList_SavedMessages : peer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
+                                                peerName = peerName.replacingOccurrences(of: "**", with: "")
                                                 text = presentationData.strings.Conversation_ForwardTooltip_Chat_One(peerName).string
                                             } else if peers.count == 2, let firstPeer = peers.first, let secondPeer = peers.last {
-                                                let firstPeerName = firstPeer.id == strongSelf.context.account.peerId ? presentationData.strings.DialogList_SavedMessages : firstPeer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
-                                                let secondPeerName = secondPeer.id == strongSelf.context.account.peerId ? presentationData.strings.DialogList_SavedMessages : secondPeer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
+                                                var firstPeerName = firstPeer.id == strongSelf.context.account.peerId ? presentationData.strings.DialogList_SavedMessages : firstPeer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
+                                                firstPeerName = firstPeerName.replacingOccurrences(of: "**", with: "")
+                                                var secondPeerName = secondPeer.id == strongSelf.context.account.peerId ? presentationData.strings.DialogList_SavedMessages : secondPeer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
+                                                secondPeerName = secondPeerName.replacingOccurrences(of: "**", with: "")
                                                 text = presentationData.strings.Conversation_ForwardTooltip_TwoChats_One(firstPeerName, secondPeerName).string
                                             } else if let peer = peers.first {
-                                                let peerName = peer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
+                                                var peerName = peer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
+                                                peerName = peerName.replacingOccurrences(of: "**", with: "")
                                                 text = presentationData.strings.Conversation_ForwardTooltip_ManyChats_One(peerName, "\(peers.count - 1)").string
                                             } else {
                                                 text = ""
                                             }
                                         }
                                         
-                                        strongSelf.present(UndoOverlayController(presentationData: presentationData, content: .forward(savedMessages: savedMessages, text: text), elevatedLayout: false, animateInAsReplacement: true, action: { _ in return false }), in: .current)
+                                        strongSelf.present(UndoOverlayController(presentationData: presentationData, content: .forward(savedMessages: savedMessages, text: text), elevatedLayout: false, animateInAsReplacement: true, action: { action in
+                                            if savedMessages, let self, action == .info {
+                                                let _ = (self.context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: self.context.account.peerId))
+                                                |> deliverOnMainQueue).start(next: { [weak self] peer in
+                                                    guard let self, let peer else {
+                                                        return
+                                                    }
+                                                    guard let navigationController = self.navigationController as? NavigationController else {
+                                                        return
+                                                    }
+                                                    self.context.sharedContext.navigateToChatController(NavigateToChatControllerParams(navigationController: navigationController, context: self.context, chatLocation: .peer(peer), forceOpenChat: true))
+                                                })
+                                            }
+                                            return false
+                                        }), in: .current)
                                     }
                                 })
                             }
@@ -116,6 +134,9 @@ final class OverlayAudioPlayerControllerImpl: ViewController, OverlayAudioPlayer
                 strongSelf.dismiss()
             }
         })
+        self.controllerNode.getParentController = { [weak self] in
+            return self
+        }
         
         self.ready.set(self.controllerNode.ready.get())
         

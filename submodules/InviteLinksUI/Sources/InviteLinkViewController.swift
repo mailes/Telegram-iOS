@@ -4,7 +4,6 @@ import SwiftSignalKit
 import TelegramPresentationData
 import AppBundle
 import AsyncDisplayKit
-import Postbox
 import TelegramCore
 import Display
 import AccountContext
@@ -21,18 +20,52 @@ import PresentationDataUtils
 import DirectionalPanGesture
 import UndoUI
 import QrCodeUI
+import TextFormat
+
+private var subscriptionLinkIcon: UIImage? = {
+    return generateImage(CGSize(width: 40.0, height: 40.0), contextGenerator: { size, context in
+        let bounds = CGRect(origin: .zero, size: size)
+        context.clear(bounds)
+        
+        let pathBounds = CGRect(origin: .zero, size: CGSize(width: 40.0, height: 40.0))
+        context.addPath(CGPath(ellipseIn: pathBounds, transform: nil))
+        context.clip()
+        
+        var locations: [CGFloat] = [1.0, 0.0]
+        let colors: [CGColor] = [UIColor(rgb: 0x87d93b).cgColor, UIColor(rgb: 0x31b73b).cgColor]
+        
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let gradient = CGGradient(colorsSpace: colorSpace, colors: colors as CFArray, locations: &locations)!
+        
+        context.drawLinearGradient(gradient, start: CGPoint(x: 0.0, y: 0.0), end: CGPoint(x: 0.0, y: size.height), options: CGGradientDrawingOptions())
+        
+        if let image = generateTintedImage(image: UIImage(bundleImageName: "Item List/SubscriptionLink"), color: .white), let cgImage = image.cgImage {
+            context.draw(cgImage, in: pathBounds)
+        }
+    })
+}()
 
 class InviteLinkViewInteraction {
     let context: AccountContext
     let openPeer: (EnginePeer.Id) -> Void
+    let openSubscription: (StarsSubscriptionPricing, PeerInvitationImportersState.Importer) -> Void
     let copyLink: (ExportedInvitation) -> Void
     let shareLink: (ExportedInvitation) -> Void
     let editLink: (ExportedInvitation) -> Void
     let contextAction: (ExportedInvitation, ASDisplayNode, ContextGesture?) -> Void
     
-    init(context: AccountContext, openPeer: @escaping (EnginePeer.Id) -> Void, copyLink: @escaping (ExportedInvitation) -> Void, shareLink: @escaping (ExportedInvitation) -> Void, editLink: @escaping (ExportedInvitation) -> Void, contextAction: @escaping (ExportedInvitation, ASDisplayNode, ContextGesture?) -> Void) {
+    init(
+        context: AccountContext,
+        openPeer: @escaping (EnginePeer.Id) -> Void,
+        openSubscription: @escaping (StarsSubscriptionPricing, PeerInvitationImportersState.Importer) -> Void,
+        copyLink: @escaping (ExportedInvitation) -> Void,
+        shareLink: @escaping (ExportedInvitation) -> Void,
+        editLink: @escaping (ExportedInvitation) -> Void,
+        contextAction: @escaping (ExportedInvitation, ASDisplayNode, ContextGesture?) -> Void
+    ) {
         self.context = context
         self.openPeer = openPeer
+        self.openSubscription = openSubscription
         self.copyLink = copyLink
         self.shareLink = shareLink
         self.editLink = editLink
@@ -51,6 +84,8 @@ private struct InviteLinkViewTransaction {
 
 private enum InviteLinkViewEntryId: Hashable {
     case link
+    case subscriptionHeader
+    case subscriptionPricing
     case creatorHeader
     case creator
     case requestHeader
@@ -61,17 +96,23 @@ private enum InviteLinkViewEntryId: Hashable {
 
 private enum InviteLinkViewEntry: Comparable, Identifiable {
     case link(PresentationTheme, ExportedInvitation)
+    case subscriptionHeader(PresentationTheme, String)
+    case subscriptionPricing(PresentationTheme, String, String)
     case creatorHeader(PresentationTheme, String)
     case creator(PresentationTheme, PresentationDateTimeFormat, EnginePeer, Int32)
     case requestHeader(PresentationTheme, String, String, Bool)
     case request(Int32, PresentationTheme, PresentationDateTimeFormat, EnginePeer, Int32, Bool)
     case importerHeader(PresentationTheme, String, String, Bool)
-    case importer(Int32, PresentationTheme, PresentationDateTimeFormat, EnginePeer, Int32, Bool)
+    case importer(Int32, PresentationTheme, PresentationDateTimeFormat, EnginePeer, Int32, Bool, Bool, PeerInvitationImportersState.Importer?, StarsSubscriptionPricing?)
     
     var stableId: InviteLinkViewEntryId {
         switch self {
             case .link:
                 return .link
+            case .subscriptionHeader:
+                return .subscriptionHeader
+            case .subscriptionPricing:
+                return .subscriptionPricing
             case .creatorHeader:
                 return .creatorHeader
             case .creator:
@@ -82,7 +123,7 @@ private enum InviteLinkViewEntry: Comparable, Identifiable {
                 return .request(peer.id)
             case .importerHeader:
                 return .importerHeader
-            case let .importer(_, _, _, peer, _, _):
+            case let .importer(_, _, _, peer, _, _, _, _, _):
                 return .importer(peer.id)
         }
     }
@@ -91,6 +132,18 @@ private enum InviteLinkViewEntry: Comparable, Identifiable {
         switch lhs {
             case let .link(lhsTheme, lhsInvitation):
                 if case let .link(rhsTheme, rhsInvitation) = rhs, lhsTheme === rhsTheme, lhsInvitation == rhsInvitation {
+                    return true
+                } else {
+                    return false
+                }
+            case let .subscriptionHeader(lhsTheme, lhsTitle):
+                if case let .subscriptionHeader(rhsTheme, rhsTitle) = rhs, lhsTheme === rhsTheme, lhsTitle == rhsTitle {
+                    return true
+                } else {
+                    return false
+                }
+            case let .subscriptionPricing(lhsTheme, lhsTitle, lhsSubtitle):
+                if case let .subscriptionPricing(rhsTheme, rhsTitle, rhsSubtitle) = rhs, lhsTheme === rhsTheme, lhsTitle == rhsTitle, lhsSubtitle == rhsSubtitle {
                     return true
                 } else {
                     return false
@@ -125,8 +178,8 @@ private enum InviteLinkViewEntry: Comparable, Identifiable {
                 } else {
                     return false
                 }
-            case let .importer(lhsIndex, lhsTheme, lhsDateTimeFormat, lhsPeer, lhsDate, lhsLoading):
-                if case let .importer(rhsIndex, rhsTheme, rhsDateTimeFormat, rhsPeer, rhsDate, rhsLoading) = rhs, lhsIndex == rhsIndex, lhsTheme === rhsTheme, lhsDateTimeFormat == rhsDateTimeFormat, lhsPeer == rhsPeer, lhsDate == rhsDate, lhsLoading == rhsLoading {
+            case let .importer(lhsIndex, lhsTheme, lhsDateTimeFormat, lhsPeer, lhsDate, lhsJoinedViaFolderLink, lhsLoading, lhsImporter, lhsPricing):
+                if case let .importer(rhsIndex, rhsTheme, rhsDateTimeFormat, rhsPeer, rhsDate, rhsJoinedViaFolderLink, rhsLoading, rhsImporter, rhsPricing) = rhs, lhsIndex == rhsIndex, lhsTheme === rhsTheme, lhsDateTimeFormat == rhsDateTimeFormat, lhsPeer == rhsPeer, lhsDate == rhsDate, lhsJoinedViaFolderLink == rhsJoinedViaFolderLink, lhsLoading == rhsLoading, lhsImporter == rhsImporter, lhsPricing == rhsPricing {
                     return true
                 } else {
                     return false
@@ -140,33 +193,47 @@ private enum InviteLinkViewEntry: Comparable, Identifiable {
                 switch rhs {
                     case .link:
                         return false
+                    case .subscriptionHeader, .subscriptionPricing, .creatorHeader, .creator, .requestHeader, .request, .importerHeader, .importer:
+                        return true
+                }
+            case .subscriptionHeader:
+                switch rhs {
+                    case .link, .subscriptionHeader:
+                        return false
+                    case .subscriptionPricing, .creatorHeader, .creator, .requestHeader, .request, .importerHeader, .importer:
+                        return true
+                }
+            case .subscriptionPricing:
+                switch rhs {
+                    case .link, .subscriptionHeader, .subscriptionPricing:
+                        return false
                     case .creatorHeader, .creator, .requestHeader, .request, .importerHeader, .importer:
                         return true
                 }
             case .creatorHeader:
                 switch rhs {
-                    case .link, .creatorHeader:
+                    case .link, .subscriptionHeader, .subscriptionPricing, .creatorHeader:
                         return false
                     case .creator, .requestHeader, .request, .importerHeader, .importer:
                         return true
                 }
             case .creator:
                 switch rhs {
-                    case .link, .creatorHeader, .creator:
+                    case .link, .subscriptionHeader, .subscriptionPricing, .creatorHeader, .creator:
                         return false
                     case .requestHeader, .request, .importerHeader, .importer:
                         return true
             }
             case .requestHeader:
                 switch rhs {
-                    case .link, .creatorHeader, .creator, .requestHeader:
+                    case .link, .subscriptionHeader, .subscriptionPricing, .creatorHeader, .creator, .requestHeader:
                         return false
                     case .request, .importerHeader, .importer:
                         return true
                 }
             case let .request(lhsIndex, _, _, _, _, _):
                 switch rhs {
-                    case .link, .creatorHeader, .creator, .requestHeader:
+                    case .link, .subscriptionHeader, .subscriptionPricing, .creatorHeader, .creator, .requestHeader:
                         return false
                     case let .request(rhsIndex, _, _, _, _, _):
                         return lhsIndex < rhsIndex
@@ -175,16 +242,16 @@ private enum InviteLinkViewEntry: Comparable, Identifiable {
                 }
             case .importerHeader:
                 switch rhs {
-                    case .link, .creatorHeader, .creator, .requestHeader, .request, .importerHeader:
+                    case .link, .subscriptionHeader, .subscriptionPricing, .creatorHeader, .creator, .requestHeader, .request, .importerHeader:
                         return false
                     case .importer:
                         return true
                 }
-            case let .importer(lhsIndex, _, _, _, _, _):
+            case let .importer(lhsIndex, _, _, _, _, _, _, _, _):
                 switch rhs {
-                    case .link, .creatorHeader, .creator, .importerHeader, .request, .requestHeader:
+                    case .link, .subscriptionHeader, .subscriptionPricing, .creatorHeader, .creator, .importerHeader, .request, .requestHeader:
                         return false
-                    case let .importer(rhsIndex, _, _, _, _, _):
+                    case let .importer(rhsIndex, _, _, _, _, _, _, _, _):
                         return lhsIndex < rhsIndex
                 }
         }
@@ -193,7 +260,7 @@ private enum InviteLinkViewEntry: Comparable, Identifiable {
     func item(account: Account, presentationData: PresentationData, interaction: InviteLinkViewInteraction) -> ListViewItem {
         switch self {
             case let .link(_, invite):
-                return ItemListPermanentInviteLinkItem(context: interaction.context, presentationData: ItemListPresentationData(presentationData), invite: invite, count: 0, peers: [], displayButton: !invite.isRevoked, displayImporters: false, buttonColor: nil, sectionId: 0, style: .plain, copyAction: {
+                return ItemListPermanentInviteLinkItem(context: interaction.context, presentationData: ItemListPresentationData(presentationData), invite: invite, count: 0, peers: [], displayButton: !invite.isRevoked, separateButtons: true, displayImporters: false, buttonColor: nil, sectionId: 0, style: .plain, copyAction: {
                     interaction.copyLink(invite)
                 }, shareAction: {
                     if invitationAvailability(invite).isZero {
@@ -201,17 +268,26 @@ private enum InviteLinkViewEntry: Comparable, Identifiable {
                     } else {
                         interaction.shareLink(invite)
                     }
-                }, contextAction: { node, gesture in
+                }, contextAction: invite.link?.hasSuffix("...") == true ? nil : { node, gesture in
                     interaction.contextAction(invite, node, gesture)
                 }, viewAction: {
                 })
+            case let .subscriptionHeader(_, title):
+                return SectionHeaderItem(presentationData: ItemListPresentationData(presentationData), title: title)
+            case let .subscriptionPricing(_, title, subtitle):
+                let attributedTitle = NSMutableAttributedString(string: title, font: Font.semibold(presentationData.listsFontSize.itemListBaseFontSize), textColor: presentationData.theme.list.itemPrimaryTextColor)
+                if let range = attributedTitle.string.range(of: "⭐️") {
+                    attributedTitle.addAttribute(ChatTextInputAttributes.customEmoji, value: ChatTextInputTextCustomEmojiAttribute(interactivelySelectedFromPackId: nil, fileId: 0, file: nil, custom: .stars(tinted: false)), range: NSRange(range, in: attributedTitle.string))
+                    attributedTitle.addAttribute(.baselineOffset, value: -1.0, range: NSRange(range, in: attributedTitle.string))
+                }
+                return ItemListDisclosureItem(presentationData: ItemListPresentationData(presentationData), icon: subscriptionLinkIcon, context: interaction.context, title: "", attributedTitle: attributedTitle, enabled: false, label: subtitle, labelStyle: .detailText, sectionId: 0, style: .plain, disclosureStyle: .none, noInsets: true, action: nil, clearHighlightAutomatically: true, tag: nil, shimmeringIndex: nil)
             case let .creatorHeader(_, title):
                 return SectionHeaderItem(presentationData: ItemListPresentationData(presentationData), title: title)
             case let .creator(_, dateTimeFormat, peer, date):
                 let dateString = stringForFullDate(timestamp: date, strings: presentationData.strings, dateTimeFormat: dateTimeFormat)
-                return ItemListPeerItem(presentationData: ItemListPresentationData(presentationData), dateTimeFormat: dateTimeFormat, nameDisplayOrder: presentationData.nameDisplayOrder, context: interaction.context, peer: peer, height: .generic, nameStyle: .distinctBold, presence: nil, text: .text(dateString, .secondary), label: .none, editing: ItemListPeerItemEditing(editable: false, editing: false, revealed: false), revealOptions: nil, switchValue: nil, enabled: true, selectable: peer.id != account.peerId, sectionId: 0, action: {
+                return ItemListPeerItem(presentationData: ItemListPresentationData(presentationData), dateTimeFormat: dateTimeFormat, nameDisplayOrder: presentationData.nameDisplayOrder, context: interaction.context, peer: peer, height: .peerList, nameStyle: .distinctBold, presence: nil, text: .text(dateString, .secondary), label: .none, editing: ItemListPeerItemEditing(editable: false, editing: false, revealed: false), revealOptions: nil, switchValue: nil, enabled: true, selectable: peer.id != account.peerId, sectionId: 0, action: {
                     interaction.openPeer(peer.id)
-                }, setPeerIdWithRevealedOptions: { _, _ in }, removePeer: { _ in }, hasTopStripe: false, noInsets: true, tag: nil)
+                }, setPeerIdWithRevealedOptions: { _, _ in }, removePeer: { _ in }, hasTopStripe: false, noInsets: true, style: .plain, tag: nil)
             case let .importerHeader(_, title, subtitle, expired), let .requestHeader(_, title, subtitle, expired):
                 let additionalText: SectionHeaderAdditionalText
                 if !subtitle.isEmpty {
@@ -224,11 +300,40 @@ private enum InviteLinkViewEntry: Comparable, Identifiable {
                     additionalText = .none
                 }
                 return SectionHeaderItem(presentationData: ItemListPresentationData(presentationData), title: title, additionalText: additionalText)
-            case let .importer(_, _, dateTimeFormat, peer, date, loading), let .request(_, _, dateTimeFormat, peer, date, loading):
+            case let .importer(_, _, dateTimeFormat, peer, date, joinedViaFolderLink, loading, importer, pricing):
+                let dateString: String
+                if joinedViaFolderLink {
+                    dateString = presentationData.strings.InviteLink_LabelJoinedViaFolder
+                } else {
+                    dateString = stringForFullDate(timestamp: date, strings: presentationData.strings, dateTimeFormat: dateTimeFormat)
+                }
+                
+                let label: ItemListPeerItemLabel
+                if let pricing {
+                    let text = NSMutableAttributedString()
+                    text.append(NSAttributedString(string: "⭐️\(pricing.amount)\n", font: Font.semibold(17.0), textColor: presentationData.theme.list.itemPrimaryTextColor))
+                    text.append(NSAttributedString(string: presentationData.strings.InviteLink_PerMonth, font: Font.regular(13.0), textColor: presentationData.theme.list.itemSecondaryTextColor))
+                    if let range = text.string.range(of: "⭐️") {
+                        text.addAttribute(ChatTextInputAttributes.customEmoji, value: ChatTextInputTextCustomEmojiAttribute(interactivelySelectedFromPackId: nil, fileId: 0, file: nil, custom: .stars(tinted: false)), range: NSRange(range, in: text.string))
+                        text.addAttribute(NSAttributedString.Key.font, value: Font.semibold(15.0), range: NSRange(range, in: text.string))
+                        text.addAttribute(.baselineOffset, value: 3.5, range: NSRange(range, in: text.string))
+                    }
+                    label = .attributedText(text)
+                } else {
+                    label = .none
+                }
+                return ItemListPeerItem(presentationData: ItemListPresentationData(presentationData), dateTimeFormat: dateTimeFormat, nameDisplayOrder: presentationData.nameDisplayOrder, context: interaction.context, peer: peer, height: .peerList, nameStyle: .distinctBold, presence: nil, text: .text(dateString, .secondary), label: label, editing: ItemListPeerItemEditing(editable: false, editing: false, revealed: false), revealOptions: nil, switchValue: nil, enabled: true, selectable: peer.id != account.peerId, sectionId: 0, action: {
+                    if let importer, let pricing {
+                        interaction.openSubscription(pricing, importer)
+                    } else {
+                        interaction.openPeer(peer.id)
+                    }
+                }, setPeerIdWithRevealedOptions: { _, _ in }, removePeer: { _ in }, hasTopStripe: false, noInsets: true, style: .plain, tag: nil, shimmering: loading ? ItemListPeerItemShimmering(alternationIndex: 0) : nil)
+            case let .request(_, _, dateTimeFormat, peer, date, loading):
                 let dateString = stringForFullDate(timestamp: date, strings: presentationData.strings, dateTimeFormat: dateTimeFormat)
-                return ItemListPeerItem(presentationData: ItemListPresentationData(presentationData), dateTimeFormat: dateTimeFormat, nameDisplayOrder: presentationData.nameDisplayOrder, context: interaction.context, peer: peer, height: .generic, nameStyle: .distinctBold, presence: nil, text: .text(dateString, .secondary), label: .none, editing: ItemListPeerItemEditing(editable: false, editing: false, revealed: false), revealOptions: nil, switchValue: nil, enabled: true, selectable: peer.id != account.peerId, sectionId: 0, action: {
+                return ItemListPeerItem(presentationData: ItemListPresentationData(presentationData), dateTimeFormat: dateTimeFormat, nameDisplayOrder: presentationData.nameDisplayOrder, context: interaction.context, peer: peer, height: .peerList, nameStyle: .distinctBold, presence: nil, text: .text(dateString, .secondary), label: .none, editing: ItemListPeerItemEditing(editable: false, editing: false, revealed: false), revealOptions: nil, switchValue: nil, enabled: true, selectable: peer.id != account.peerId, sectionId: 0, action: {
                     interaction.openPeer(peer.id)
-                }, setPeerIdWithRevealedOptions: { _, _ in }, removePeer: { _ in }, hasTopStripe: false, noInsets: true, tag: nil, shimmering: loading ? ItemListPeerItemShimmering(alternationIndex: 0) : nil)
+                }, setPeerIdWithRevealedOptions: { _, _ in }, removePeer: { _ in }, hasTopStripe: false, noInsets: true, style: .plain, tag: nil, shimmering: loading ? ItemListPeerItemShimmering(alternationIndex: 0) : nil)
         }
     }
 }
@@ -371,7 +476,7 @@ public final class InviteLinkViewController: ViewController {
         self.controllerNode.containerLayoutUpdated(layout, transition: transition)
     }
 
-    class Node: ViewControllerTracingNode, UIGestureRecognizerDelegate {
+    class Node: ViewControllerTracingNode, ASGestureRecognizerDelegate {
         private weak var controller: InviteLinkViewController?
         
         private let context: AccountContext
@@ -415,8 +520,10 @@ public final class InviteLinkViewController: ViewController {
             self.presentationDataPromise = Promise(self.presentationData)
             self.controller = controller
             
+            let configuration = StarsSubscriptionConfiguration.with(appConfiguration: context.currentAppConfiguration.with { $0 })
+            
             self.importersContext = importersContext ?? context.engine.peers.peerInvitationImporters(peerId: peerId, subject: .invite(invite: invite, requested: false))
-            if case let .link(_, _, _, requestApproval, _, _, _, _, _, _, _, _) = invite, requestApproval {
+            if case let .link(_, _, _, requestApproval, _, _, _, _, _, _, _, _, _) = invite, requestApproval {
                 self.requestsContext = context.engine.peers.peerInvitationImporters(peerId: peerId, subject: .invite(invite: invite, requested: true))
             } else {
                 self.requestsContext = nil
@@ -474,13 +581,25 @@ public final class InviteLinkViewController: ViewController {
             self.interaction = InviteLinkViewInteraction(context: context, openPeer: { [weak self] peerId in
                 let _ = (context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: peerId))
                 |> deliverOnMainQueue).start(next: { peer in
-                    guard let peer = peer else {
+                    guard let peer else {
                         return
                     }
-                    
                     if let strongSelf = self, let navigationController = strongSelf.controller?.navigationController as? NavigationController {
                         context.sharedContext.navigateToChatController(NavigateToChatControllerParams(navigationController: navigationController, context: context, chatLocation: .peer(peer), keepStack: .always))
                     }
+                })
+            }, openSubscription: { [weak self] pricing, importer in
+                let _ = (context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: peerId))
+                |> deliverOnMainQueue).start(next: { [weak self] peer in
+                    guard let peer else {
+                        return
+                    }
+                    var usdRate = 0.012
+                    if let usdWithdrawRate = configuration.usdWithdrawRate {
+                        usdRate = Double(usdWithdrawRate) / 1000.0 / 100.0
+                    }
+                    let subscriptionController = context.sharedContext.makeStarsSubscriptionScreen(context: context, peer: peer, pricing: pricing, importer: importer, usdRate: usdRate)
+                    self?.controller?.push(subscriptionController)
                 })
             }, copyLink: { [weak self] invite in
                 UIPasteboard.general.string = invite.link
@@ -488,7 +607,7 @@ public final class InviteLinkViewController: ViewController {
                 self?.controller?.dismissAllTooltips()
                 
                 let presentationData = context.sharedContext.currentPresentationData.with { $0 }
-                self?.controller?.present(UndoOverlayController(presentationData: presentationData, content: .linkCopied(text: presentationData.strings.InviteLink_InviteLinkCopiedText), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), in: .window(.root))
+                self?.controller?.present(UndoOverlayController(presentationData: presentationData, content: .linkCopied(title: nil, text: presentationData.strings.InviteLink_InviteLinkCopiedText), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), in: .window(.root))
             }, shareLink: { [weak self] invite in
                 guard let inviteLink = invite.link else {
                     return
@@ -527,14 +646,28 @@ public final class InviteLinkViewController: ViewController {
                                     }
                                 }
                                 
-                                strongSelf.controller?.present(UndoOverlayController(presentationData: presentationData, content: .forward(savedMessages: savedMessages, text: text), elevatedLayout: false, animateInAsReplacement: true, action: { _ in return false }), in: .window(.root))
+                                strongSelf.controller?.present(UndoOverlayController(presentationData: presentationData, content: .forward(savedMessages: savedMessages, text: text), elevatedLayout: false, animateInAsReplacement: true, action: { action in
+                                    if savedMessages, let self, action == .info {
+                                        let _ = (self.context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: self.context.account.peerId))
+                                        |> deliverOnMainQueue).start(next: { [weak self] peer in
+                                            guard let self, let peer else {
+                                                return
+                                            }
+                                            guard let navigationController = self.controller?.navigationController as? NavigationController else {
+                                                return
+                                            }
+                                            self.context.sharedContext.navigateToChatController(NavigateToChatControllerParams(navigationController: navigationController, context: self.context, chatLocation: .peer(peer), forceOpenChat: true))
+                                        })
+                                    }
+                                    return false
+                                }), in: .window(.root))
                             }
                         })
                     }
                 }
                 shareController.actionCompleted = { [weak self] in
                     let presentationData = context.sharedContext.currentPresentationData.with { $0 }
-                    self?.controller?.present(UndoOverlayController(presentationData: presentationData, content: .linkCopied(text: presentationData.strings.InviteLink_InviteLinkCopiedText), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), in: .window(.root))
+                    self?.controller?.present(UndoOverlayController(presentationData: presentationData, content: .linkCopied(title: nil, text: presentationData.strings.InviteLink_InviteLinkCopiedText), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), in: .window(.root))
                 }
                 self?.controller?.present(shareController, in: .window(.root))
             }, editLink: { [weak self] invite in
@@ -544,122 +677,142 @@ public final class InviteLinkViewController: ViewController {
                     return
                 }
                 
-                let presentationData = context.sharedContext.currentPresentationData.with { $0 }
-                var items: [ContextMenuItem] = []
-
-                items.append(.action(ContextMenuActionItem(text: presentationData.strings.InviteLink_ContextCopy, icon: { theme in
-                    return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Copy"), color: theme.contextMenu.primaryColor)
-                }, action: { [weak self] _, f in
-                    f(.dismissWithoutContent)
-                    
-                    UIPasteboard.general.string = invite.link
-  
-                    self?.controller?.dismissAllTooltips()
-                    
-                    let presentationData = context.sharedContext.currentPresentationData.with { $0 }
-                    self?.controller?.present(UndoOverlayController(presentationData: presentationData, content: .linkCopied(text: presentationData.strings.InviteLink_InviteLinkCopiedText), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), in: .window(.root))
-                })))
+                var creatorIsBot: Signal<Bool, NoError>
+                if case let .link(_, _, _, _, _, adminId, _, _, _, _, _, _, _) = invite {
+                    creatorIsBot = context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: adminId))
+                    |> map { peer -> Bool in
+                        if let peer, case let .user(user) = peer, user.botInfo != nil {
+                            return true
+                        } else {
+                            return false
+                        }
+                    }
+                } else {
+                    creatorIsBot = .single(false)
+                }
                 
-                if invite.isRevoked {
-                    items.append(.action(ContextMenuActionItem(text: presentationData.strings.InviteLink_ContextDelete, textColor: .destructive, icon: { theme in
-                        return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Delete"), color: theme.actionSheet.destructiveActionTextColor)
+                let _ = (creatorIsBot
+                |> take(1)
+                |> deliverOnMainQueue).start(next: { creatorIsBot in
+                    let presentationData = context.sharedContext.currentPresentationData.with { $0 }
+                    var items: [ContextMenuItem] = []
+
+                    items.append(.action(ContextMenuActionItem(text: presentationData.strings.InviteLink_ContextCopy, icon: { theme in
+                        return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Copy"), color: theme.contextMenu.primaryColor)
                     }, action: { [weak self] _, f in
                         f(.dismissWithoutContent)
                         
-                        let controller = ActionSheetController(presentationData: presentationData)
-                        let dismissAction: () -> Void = { [weak controller] in
-                            controller?.dismissAnimated()
-                        }
-                        controller.setItemGroups([
-                            ActionSheetItemGroup(items: [
-                                ActionSheetTextItem(title: presentationData.strings.InviteLink_DeleteLinkAlert_Text),
-                                ActionSheetButtonItem(title: presentationData.strings.InviteLink_DeleteLinkAlert_Action, color: .destructive, action: {
-                                    dismissAction()
-                                    self?.controller?.dismiss()
-                                    
-                                    if let inviteLink = invite.link {
-                                        let _ = (context.engine.peers.deletePeerExportedInvitation(peerId: peerId, link: inviteLink) |> deliverOnMainQueue).start()
-                                    }
-                                    
-                                    self?.controller?.revokedInvitationsContext?.remove(invite)
-                                })
-                            ]),
-                            ActionSheetItemGroup(items: [ActionSheetButtonItem(title: presentationData.strings.Common_Cancel, action: { dismissAction() })])
-                        ])
-                        self?.controller?.present(controller, in: .window(.root))
+                        UIPasteboard.general.string = invite.link
+      
+                        self?.controller?.dismissAllTooltips()
+                        
+                        let presentationData = context.sharedContext.currentPresentationData.with { $0 }
+                        self?.controller?.present(UndoOverlayController(presentationData: presentationData, content: .linkCopied(title: nil, text: presentationData.strings.InviteLink_InviteLinkCopiedText), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), in: .window(.root))
                     })))
-                } else {
-                    if !invitationAvailability(invite).isZero {
-                        items.append(.action(ContextMenuActionItem(text: presentationData.strings.InviteLink_ContextGetQRCode, icon: { theme in
-                            return generateTintedImage(image: UIImage(bundleImageName: "Settings/QrIcon"), color: theme.contextMenu.primaryColor)
+                    
+                    if invite.isRevoked {
+                        items.append(.action(ContextMenuActionItem(text: presentationData.strings.InviteLink_ContextDelete, textColor: .destructive, icon: { theme in
+                            return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Delete"), color: theme.actionSheet.destructiveActionTextColor)
                         }, action: { [weak self] _, f in
                             f(.dismissWithoutContent)
                             
-                            let _ = (context.account.postbox.loadedPeerWithId(peerId)
-                            |> deliverOnMainQueue).start(next: { [weak self] peer in
-                                guard let strongSelf = self, let parentController = strongSelf.controller else {
-                                    return
-                                }
-                                let isGroup: Bool
-                                if let peer = peer as? TelegramChannel, case .broadcast = peer.info {
-                                    isGroup = false
-                                } else {
-                                    isGroup = true
-                                }
-                                let updatedPresentationData = (strongSelf.presentationData, parentController.presentationDataPromise.get())
-                                strongSelf.controller?.present(QrCodeScreen(context: context, updatedPresentationData: updatedPresentationData, subject: .invite(invite: invite, isGroup: isGroup)), in: .window(.root))
-                            })
-                        })))
-                    }
-                    items.append(.action(ContextMenuActionItem(text: presentationData.strings.InviteLink_ContextRevoke, textColor: .destructive, icon: { theme in
-                        return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Delete"), color: theme.actionSheet.destructiveActionTextColor)
-                    }, action: { [weak self] _, f in
-                        f(.dismissWithoutContent)
-                        
-                        let _ = (context.account.postbox.loadedPeerWithId(peerId)
-                        |> deliverOnMainQueue).start(next: { peer in
-                            let isGroup: Bool
-                            if let peer = peer as? TelegramChannel, case .broadcast = peer.info {
-                                isGroup = false
-                            } else {
-                                isGroup = true
-                            }
                             let controller = ActionSheetController(presentationData: presentationData)
                             let dismissAction: () -> Void = { [weak controller] in
                                 controller?.dismissAnimated()
                             }
                             controller.setItemGroups([
                                 ActionSheetItemGroup(items: [
-                                    ActionSheetTextItem(title: isGroup ? presentationData.strings.GroupInfo_InviteLink_RevokeAlert_Text : presentationData.strings.ChannelInfo_InviteLink_RevokeAlert_Text),
-                                    ActionSheetButtonItem(title: presentationData.strings.GroupInfo_InviteLink_RevokeLink, color: .destructive, action: {
+                                    ActionSheetTextItem(title: presentationData.strings.InviteLink_DeleteLinkAlert_Text),
+                                    ActionSheetButtonItem(title: presentationData.strings.InviteLink_DeleteLinkAlert_Action, color: .destructive, action: {
                                         dismissAction()
                                         self?.controller?.dismiss()
-
+                                        
                                         if let inviteLink = invite.link {
-                                            let _ = (context.engine.peers.revokePeerExportedInvitation(peerId: peerId, link: inviteLink) |> deliverOnMainQueue).start(next: { result in
-                                                if case let .replace(_, newInvite) = result {
-                                                    self?.controller?.invitationsContext?.add(newInvite)
-                                                }
-                                            })
+                                            let _ = (context.engine.peers.deletePeerExportedInvitation(peerId: peerId, link: inviteLink) |> deliverOnMainQueue).start()
                                         }
                                         
-                                        self?.controller?.invitationsContext?.remove(invite)
-                                        let revokedInvite = invite.withUpdated(isRevoked: true)
-                                        self?.controller?.revokedInvitationsContext?.add(revokedInvite)
-                                        
-                                        let presentationData = context.sharedContext.currentPresentationData.with { $0 }
-                                        self?.controller?.present(UndoOverlayController(presentationData: presentationData, content: .linkRevoked(text: presentationData.strings.InviteLink_InviteLinkRevoked), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), in: .window(.root))
+                                        self?.controller?.revokedInvitationsContext?.remove(invite)
                                     })
                                 ]),
                                 ActionSheetItemGroup(items: [ActionSheetButtonItem(title: presentationData.strings.Common_Cancel, action: { dismissAction() })])
                             ])
                             self?.controller?.present(controller, in: .window(.root))
-                        })
-                    })))
-                }
-                           
-                let contextController = ContextController(account: context.account, presentationData: presentationData, source: .reference(InviteLinkContextReferenceContentSource(controller: controller, sourceNode: node)), items: .single(ContextController.Items(content: .list(items))), gesture: gesture)
-                self?.controller?.presentInGlobalOverlay(contextController)
+                        })))
+                    } else {
+                        if !invitationAvailability(invite).isZero {
+                            items.append(.action(ContextMenuActionItem(text: presentationData.strings.InviteLink_ContextGetQRCode, icon: { theme in
+                                return generateTintedImage(image: UIImage(bundleImageName: "Settings/QrIcon"), color: theme.contextMenu.primaryColor)
+                            }, action: { [weak self] _, f in
+                                f(.dismissWithoutContent)
+                                
+                                let _ = (context.account.postbox.loadedPeerWithId(peerId)
+                                |> deliverOnMainQueue).start(next: { [weak self] peer in
+                                    guard let strongSelf = self, let parentController = strongSelf.controller else {
+                                        return
+                                    }
+                                    let isGroup: Bool
+                                    if let peer = peer as? TelegramChannel, case .broadcast = peer.info {
+                                        isGroup = false
+                                    } else {
+                                        isGroup = true
+                                    }
+                                    let updatedPresentationData = (strongSelf.presentationData, parentController.presentationDataPromise.get())
+                                    strongSelf.controller?.present(QrCodeScreen(context: context, updatedPresentationData: updatedPresentationData, subject: .invite(invite: invite, isGroup: isGroup)), in: .window(.root))
+                                })
+                            })))
+                        }
+                        if !creatorIsBot {
+                            items.append(.action(ContextMenuActionItem(text: presentationData.strings.InviteLink_ContextRevoke, textColor: .destructive, icon: { theme in
+                                return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Delete"), color: theme.actionSheet.destructiveActionTextColor)
+                            }, action: { [weak self] _, f in
+                                f(.dismissWithoutContent)
+                                
+                                let _ = (context.account.postbox.loadedPeerWithId(peerId)
+                                |> deliverOnMainQueue).start(next: { peer in
+                                    let isGroup: Bool
+                                    if let peer = peer as? TelegramChannel, case .broadcast = peer.info {
+                                        isGroup = false
+                                    } else {
+                                        isGroup = true
+                                    }
+                                    let controller = ActionSheetController(presentationData: presentationData)
+                                    let dismissAction: () -> Void = { [weak controller] in
+                                        controller?.dismissAnimated()
+                                    }
+                                    controller.setItemGroups([
+                                        ActionSheetItemGroup(items: [
+                                            ActionSheetTextItem(title: isGroup ? presentationData.strings.GroupInfo_InviteLink_RevokeAlert_Text : presentationData.strings.ChannelInfo_InviteLink_RevokeAlert_Text),
+                                            ActionSheetButtonItem(title: presentationData.strings.GroupInfo_InviteLink_RevokeLink, color: .destructive, action: {
+                                                dismissAction()
+                                                self?.controller?.dismiss()
+                                                
+                                                if let inviteLink = invite.link {
+                                                    let _ = (context.engine.peers.revokePeerExportedInvitation(peerId: peerId, link: inviteLink) |> deliverOnMainQueue).start(next: { result in
+                                                        if case let .replace(_, newInvite) = result {
+                                                            self?.controller?.invitationsContext?.add(newInvite)
+                                                        }
+                                                    })
+                                                }
+                                                
+                                                self?.controller?.invitationsContext?.remove(invite)
+                                                let revokedInvite = invite.withUpdated(isRevoked: true)
+                                                self?.controller?.revokedInvitationsContext?.add(revokedInvite)
+                                                
+                                                let presentationData = context.sharedContext.currentPresentationData.with { $0 }
+                                                self?.controller?.present(UndoOverlayController(presentationData: presentationData, content: .linkRevoked(text: presentationData.strings.InviteLink_InviteLinkRevoked), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), in: .window(.root))
+                                            })
+                                        ]),
+                                        ActionSheetItemGroup(items: [ActionSheetButtonItem(title: presentationData.strings.Common_Cancel, action: { dismissAction() })])
+                                    ])
+                                    self?.controller?.present(controller, in: .window(.root))
+                                })
+                            })))
+                        }
+                    }
+                    
+                    let contextController = ContextController(presentationData: presentationData, source: .reference(InviteLinkContextReferenceContentSource(controller: controller, sourceNode: node)), items: .single(ContextController.Items(content: .list(items))), gesture: gesture)
+                    self?.controller?.presentInGlobalOverlay(contextController)
+                })
             })
             
             let previousEntries = Atomic<[InviteLinkViewEntry]?>(value: nil)
@@ -672,8 +825,8 @@ public final class InviteLinkViewController: ViewController {
             } else {
                 requestsState = .single(PeerInvitationImportersState.Empty)
             }
-            
-            if case let .link(_, _, _, _, _, adminId, date, _, _, usageLimit, _, _) = invite {
+                        
+            if case let .link(_, _, _, _, _, adminId, date, _, _, usageLimit, _, _, _) = invite {
                 self.disposable = (combineLatest(
                     self.presentationDataPromise.get(),
                     self.importersContext.state,
@@ -681,9 +834,27 @@ public final class InviteLinkViewController: ViewController {
                     context.account.postbox.loadedPeerWithId(adminId)
                 ) |> deliverOnMainQueue).start(next: { [weak self] presentationData, state, requestsState, creatorPeer in
                     if let strongSelf = self {
+                        var usdRate = 0.012
+                        if let usdWithdrawRate = configuration.usdWithdrawRate {
+                            usdRate = Double(usdWithdrawRate) / 1000.0 / 100.0
+                        }
+                                                                        
                         var entries: [InviteLinkViewEntry] = []
                         
                         entries.append(.link(presentationData.theme, invite))
+                        
+                        if let pricing = invite.pricing {
+                            entries.append(.subscriptionHeader(presentationData.theme, presentationData.strings.InviteLink_SubscriptionFee_Title.uppercased()))
+                            var title = presentationData.strings.InviteLink_SubscriptionFee_PerMonth("\(pricing.amount)").string
+                            var subtitle = presentationData.strings.InviteLink_SubscriptionFee_NoOneJoined
+                            if state.count > 0 {
+                                title += " x \(state.count)"
+                                let usdValue = formatTonUsdValue(pricing.amount.value * Int64(state.count), divide: false, rate: usdRate, dateTimeFormat: presentationData.dateTimeFormat)
+                                subtitle = presentationData.strings.InviteLink_SubscriptionFee_ApproximateIncome(usdValue).string
+                            }
+                            entries.append(.subscriptionPricing(presentationData.theme, title, subtitle))
+                        }
+                        
                         entries.append(.creatorHeader(presentationData.theme, presentationData.strings.InviteLink_CreatedBy.uppercased()))
                         entries.append(.creator(presentationData.theme, presentationData.dateTimeFormat, EnginePeer(creatorPeer), date))
                                             
@@ -697,7 +868,7 @@ public final class InviteLinkViewController: ViewController {
                         if requestsState.importers.isEmpty && requestsState.isLoadingMore {
                             count = min(4, state.count)
                             loading = true
-                            let fakeUser = TelegramUser(id: EnginePeer.Id(namespace: .max, id: EnginePeer.Id.Id._internalFromInt64Value(0)), accessHash: nil, firstName: "", lastName: "", username: nil, phone: nil, photo: [], botInfo: nil, restrictionInfo: nil, flags: [], emojiStatus: nil, usernames: [])
+                            let fakeUser = TelegramUser(id: EnginePeer.Id(namespace: .max, id: EnginePeer.Id.Id._internalFromInt64Value(0)), accessHash: nil, firstName: "", lastName: "", username: nil, phone: nil, photo: [], botInfo: nil, restrictionInfo: nil, flags: [], emojiStatus: nil, usernames: [], storiesHidden: nil, nameColor: nil, backgroundEmojiId: nil, profileColor: nil, profileBackgroundEmojiId: nil, subscriberCount: nil, verificationIconFileId: nil)
                             for i in 0 ..< count {
                                 entries.append(.request(Int32(i), presentationData.theme, presentationData.dateTimeFormat, EnginePeer.user(fakeUser), 0, true))
                             }
@@ -731,16 +902,16 @@ public final class InviteLinkViewController: ViewController {
                         if state.importers.isEmpty && state.isLoadingMore {
                             count = min(4, state.count)
                             loading = true
-                            let fakeUser = TelegramUser(id: EnginePeer.Id(namespace: .max, id: EnginePeer.Id.Id._internalFromInt64Value(0)), accessHash: nil, firstName: "", lastName: "", username: nil, phone: nil, photo: [], botInfo: nil, restrictionInfo: nil, flags: [], emojiStatus: nil, usernames: [])
+                            let fakeUser = TelegramUser(id: EnginePeer.Id(namespace: .max, id: EnginePeer.Id.Id._internalFromInt64Value(0)), accessHash: nil, firstName: "", lastName: "", username: nil, phone: nil, photo: [], botInfo: nil, restrictionInfo: nil, flags: [], emojiStatus: nil, usernames: [], storiesHidden: nil, nameColor: nil, backgroundEmojiId: nil, profileColor: nil, profileBackgroundEmojiId: nil, subscriberCount: nil, verificationIconFileId: nil)
                             for i in 0 ..< count {
-                                entries.append(.importer(Int32(i), presentationData.theme, presentationData.dateTimeFormat, EnginePeer.user(fakeUser), 0, true))
+                                entries.append(.importer(Int32(i), presentationData.theme, presentationData.dateTimeFormat, EnginePeer.user(fakeUser), 0, false, true, nil, nil))
                             }
                         } else {
                             count = min(4, Int32(state.importers.count))
                             loading = false
                             for importer in state.importers {
                                 if let peer = importer.peer.peer {
-                                    entries.append(.importer(index, presentationData.theme, presentationData.dateTimeFormat, EnginePeer(peer), importer.date, false))
+                                    entries.append(.importer(index, presentationData.theme, presentationData.dateTimeFormat, EnginePeer(peer), importer.date, importer.joinedViaFolderLink, false, importer, invite.pricing))
                                 }
                                 index += 1
                             }
@@ -812,7 +983,7 @@ public final class InviteLinkViewController: ViewController {
             self.dimNode.view.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(self.dimTapGesture(_:))))
             
             let panRecognizer = DirectionalPanGestureRecognizer(target: self, action: #selector(self.panGesture(_:)))
-            panRecognizer.delegate = self
+            panRecognizer.delegate = self.wrappedGestureRecognizerDelegate
             panRecognizer.delaysTouchesBegan = false
             panRecognizer.cancelsTouchesInView = true
             self.view.addGestureRecognizer(panRecognizer)
@@ -959,7 +1130,7 @@ public final class InviteLinkViewController: ViewController {
             var subtitleText = ""
             var subtitleColor = self.presentationData.theme.list.itemSecondaryTextColor
             
-            if case let .link(_, title, _, _, isRevoked, _, _, _, expireDate, usageLimit, count, _) = self.invite {
+            if case let .link(_, title, _, _, isRevoked, _, _, _, expireDate, usageLimit, count, _, _) = self.invite {
                 if isRevoked {
                     subtitleText = self.presentationData.strings.InviteLink_Revoked
                 } else if let usageLimit = usageLimit, let count = count, count >= usageLimit {

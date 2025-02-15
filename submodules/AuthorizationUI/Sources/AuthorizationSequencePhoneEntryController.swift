@@ -11,8 +11,9 @@ import AccountContext
 import CountrySelectionUI
 import PhoneNumberFormat
 import DebugSettingsUI
+import MessageUI
 
-final class AuthorizationSequencePhoneEntryController: ViewController {
+public final class AuthorizationSequencePhoneEntryController: ViewController, MFMailComposeViewControllerDelegate {
     private var controllerNode: AuthorizationSequencePhoneEntryControllerNode {
         return self.displayNode as! AuthorizationSequencePhoneEntryControllerNode
     }
@@ -20,7 +21,7 @@ final class AuthorizationSequencePhoneEntryController: ViewController {
     private var validLayout: ContainerViewLayout?
     
     private let sharedContext: SharedAccountContext
-    private var account: UnauthorizedAccount
+    private var account: UnauthorizedAccount?
     private let isTestingEnvironment: Bool
     private let otherAccountPhoneNumbers: ((String, AccountRecordId, Bool)?, [(String, AccountRecordId, Bool)])
     private let network: Network
@@ -43,14 +44,14 @@ final class AuthorizationSequencePhoneEntryController: ViewController {
         return self.controllerNode.buttonNode
     }
     
-    var inProgress: Bool = false {
+    public var inProgress: Bool = false {
         didSet {
             self.updateNavigationItems()
             self.controllerNode.inProgress = self.inProgress
             self.confirmationController?.inProgress = self.inProgress
         }
     }
-    var loginWithNumber: ((String, Bool) -> Void)?
+    public var loginWithNumber: ((String, Bool) -> Void)?
     var accountUpdated: ((UnauthorizedAccount) -> Void)?
     
     weak var confirmationController: PhoneConfirmationController?
@@ -59,7 +60,7 @@ final class AuthorizationSequencePhoneEntryController: ViewController {
     
     private let hapticFeedback = HapticFeedback()
     
-    init(sharedContext: SharedAccountContext, account: UnauthorizedAccount, isTestingEnvironment: Bool, otherAccountPhoneNumbers: ((String, AccountRecordId, Bool)?, [(String, AccountRecordId, Bool)]), network: Network, presentationData: PresentationData, openUrl: @escaping (String) -> Void, back: @escaping () -> Void) {
+    public init(sharedContext: SharedAccountContext, account: UnauthorizedAccount?, countriesConfiguration: CountriesConfiguration? = nil, isTestingEnvironment: Bool, otherAccountPhoneNumbers: ((String, AccountRecordId, Bool)?, [(String, AccountRecordId, Bool)]), network: Network, presentationData: PresentationData, openUrl: @escaping (String) -> Void, back: @escaping () -> Void) {
         self.sharedContext = sharedContext
         self.account = account
         self.isTestingEnvironment = isTestingEnvironment
@@ -85,6 +86,10 @@ final class AuthorizationSequencePhoneEntryController: ViewController {
         
         if !otherAccountPhoneNumbers.1.isEmpty {
             self.navigationItem.leftBarButtonItem = UIBarButtonItem(title: presentationData.strings.Common_Cancel, style: .plain, target: self, action: #selector(self.cancelPressed))
+        }
+        
+        if let countriesConfiguration {
+            AuthorizationSequenceCountrySelectionController.setupCountryCodes(countries: countriesConfiguration.countries, codesByPrefix: countriesConfiguration.countriesByPrefix)
         }
     }
     
@@ -113,7 +118,7 @@ final class AuthorizationSequencePhoneEntryController: ViewController {
         }
     }
     
-    func updateData(countryCode: Int32, countryName: String?, number: String) {
+    public func updateData(countryCode: Int32, countryName: String?, number: String) {
         self.currentData = (countryCode, countryName, number)
         if self.isNodeLoaded {
             self.controllerNode.codeAndNumber = (countryCode, countryName, number)
@@ -173,15 +178,23 @@ final class AuthorizationSequencePhoneEntryController: ViewController {
             self?.nextPressed()
         }
         
-        loadServerCountryCodes(accountManager: sharedContext.accountManager, engine: TelegramEngineUnauthorized(account: self.account), completion: { [weak self] in
-            if let strongSelf = self {
-                strongSelf.controllerNode.updateCountryCode()
-            }
-        })
+        if let account = self.account {
+            loadServerCountryCodes(accountManager: sharedContext.accountManager, engine: TelegramEngineUnauthorized(account: account), completion: { [weak self] in
+                if let strongSelf = self {
+                    strongSelf.controllerNode.updateCountryCode()
+                }
+            })
+        } else {
+            self.controllerNode.updateCountryCode()
+        }
+    }
+    
+    public func updateCountryCode() {
+        self.controllerNode.updateCountryCode()
     }
     
     private var animatingIn = false
-    override func viewWillAppear(_ animated: Bool) {
+    override public func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         
         if self.shouldAnimateIn {
@@ -197,7 +210,7 @@ final class AuthorizationSequencePhoneEntryController: ViewController {
         }
     }
     
-    override func viewDidAppear(_ animated: Bool) {
+    override public func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         
         if !self.animatingIn {
@@ -205,7 +218,7 @@ final class AuthorizationSequencePhoneEntryController: ViewController {
         }
     }
     
-    override func viewWillDisappear(_ animated: Bool) {
+    override public func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         
         if let confirmationController = self.confirmationController {
@@ -213,7 +226,7 @@ final class AuthorizationSequencePhoneEntryController: ViewController {
         }
     }
     
-    override func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
+    override public func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
         super.containerLayoutUpdated(layout, transition: transition)
         
         let hadLayout = self.validLayout != nil
@@ -233,25 +246,28 @@ final class AuthorizationSequencePhoneEntryController: ViewController {
         }
     }
     
-    func dismissConfirmation() {
+    public func dismissConfirmation() {
         self.confirmationController?.dismissAnimated()
         self.confirmationController = nil
     }
     
     @objc func nextPressed() {
+        guard self.confirmationController == nil else {
+            return
+        }
         let (_, _, number) = self.controllerNode.codeAndNumber
         if !number.isEmpty {
-            let logInNumber = formatPhoneNumber(self.controllerNode.currentNumber)
+            let logInNumber = cleanPhoneNumber(self.controllerNode.currentNumber, removePlus: true)
             var existing: (String, AccountRecordId)?
             for (number, id, isTestingEnvironment) in self.otherAccountPhoneNumbers.1 {
-                if isTestingEnvironment == self.isTestingEnvironment && formatPhoneNumber(number) == logInNumber {
+                if isTestingEnvironment == self.isTestingEnvironment && cleanPhoneNumber(number, removePlus: true) == logInNumber {
                     existing = (number, id)
                 }
             }
             
             if let (_, id) = existing {
                 var actions: [TextAlertAction] = []
-                if let (current, _, _) = self.otherAccountPhoneNumbers.0, logInNumber != formatPhoneNumber(current) {
+                if let (current, _, _) = self.otherAccountPhoneNumbers.0, logInNumber != cleanPhoneNumber(current, removePlus: true) {
                     actions.append(TextAlertAction(type: .genericAction, title: self.presentationData.strings.Login_PhoneNumberAlreadyAuthorizedSwitch, action: { [weak self] in
                         self?.sharedContext.switchToAccount(id: id, fromSettingsController: nil, withChatListController: nil)
                         self?.back()
@@ -286,5 +302,9 @@ final class AuthorizationSequencePhoneEntryController: ViewController {
             self.hapticFeedback.error()
             self.controllerNode.animateError()
         }
+    }
+    
+    public func mailComposeController(_ controller: MFMailComposeViewController, didFinishWith result: MFMailComposeResult, error: Error?) {
+        controller.dismiss(animated: true, completion: nil)
     }
 }

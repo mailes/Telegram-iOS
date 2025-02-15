@@ -1,5 +1,7 @@
 #import "UIKitUtils.h"
 
+#import <ObjCRuntimeUtils/RuntimeUtils.h>
+
 #import <objc/runtime.h>
 
 #if TARGET_IPHONE_SIMULATOR
@@ -55,6 +57,7 @@ CABasicAnimation * _Nonnull makeSpringAnimationImpl(NSString * _Nonnull keyPath)
     springAnimation.damping = 500.0f;
     springAnimation.duration = 0.5;
     springAnimation.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionLinear];
+    
     return springAnimation;
 }
 
@@ -170,32 +173,129 @@ void applySmoothRoundedCornersImpl(CALayer * _Nonnull layer) {
 }
 
 UIView<UIKitPortalViewProtocol> * _Nullable makePortalView(bool matchPosition) {
-    if (@available(iOS 12.0, *)) {
-        static Class portalViewClass = nil;
-        static dispatch_once_t onceToken;
-        dispatch_once(&onceToken, ^{
-            portalViewClass = NSClassFromString([@[@"_", @"UI", @"Portal", @"View"] componentsJoinedByString:@""]);
-        });
-        if (!portalViewClass) {
-            return nil;
-        }
-        UIView<UIKitPortalViewProtocol> *view = [[portalViewClass alloc] init];
-        if (!view) {
-            return nil;
-        }
-        
-        if (@available(iOS 13.0, *)) {
-            view.forwardsClientHitTestingToSourceView = false;
-        }
-        view.matchesPosition = matchPosition;
-        view.matchesTransform = matchPosition;
-        view.matchesAlpha = false;
-        if (@available(iOS 13.0, *)) {
-            view.allowsHitTesting = false;
-        }
-        
-        return view;
-    } else {
+    static Class portalViewClass = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        portalViewClass = NSClassFromString([@[@"_", @"UI", @"Portal", @"View"] componentsJoinedByString:@""]);
+    });
+    if (!portalViewClass) {
         return nil;
+    }
+    UIView<UIKitPortalViewProtocol> *view = [[portalViewClass alloc] init];
+    if (!view) {
+        return nil;
+    }
+    
+    if (@available(iOS 14.0, *)) {
+        view.forwardsClientHitTestingToSourceView = false;
+    }
+    view.matchesPosition = matchPosition;
+    view.matchesTransform = matchPosition;
+    view.matchesAlpha = false;
+    if (@available(iOS 14.0, *)) {
+        view.allowsHitTesting = false;
+    }
+    
+    return view;
+}
+
+bool isViewPortalView(UIView * _Nonnull view) {
+    static Class portalViewClass = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        portalViewClass = NSClassFromString([@[@"_", @"UI", @"Portal", @"View"] componentsJoinedByString:@""]);
+    });
+    if ([view isKindOfClass:portalViewClass]) {
+        return true;
+    } else {
+        return false;
+    }
+}
+
+UIView * _Nullable getPortalViewSourceView(UIView * _Nonnull portalView) {
+    if (!isViewPortalView(portalView)) {
+        return nil;
+    }
+    UIView<UIKitPortalViewProtocol> *view = (UIView<UIKitPortalViewProtocol> *)portalView;
+    return view.sourceView;
+}
+
+@protocol GraphicsFilterProtocol <NSObject>
+    
+- (NSObject * _Nullable)filterWithName:(NSString * _Nonnull)name;
+
+@end
+
+NSObject * _Nullable makeBlurFilter() {
+    return [(id<GraphicsFilterProtocol>)NSClassFromString(@"CAFilter") filterWithName:@"gaussianBlur"];
+}
+
+NSObject * _Nullable makeLuminanceToAlphaFilter() {
+    return [(id<GraphicsFilterProtocol>)NSClassFromString(@"CAFilter") filterWithName:@"luminanceToAlpha"];
+}
+
+NSObject * _Nullable makeColorInvertFilter() {
+    return [(id<GraphicsFilterProtocol>)NSClassFromString(@"CAFilter") filterWithName:@"colorInvert"];
+}
+
+NSObject * _Nullable makeMonochromeFilter() {
+    return [(id<GraphicsFilterProtocol>)NSClassFromString(@"CAFilter") filterWithName:@"colorMonochrome"];
+}
+
+static const void *layerDisableScreenshotsKey = &layerDisableScreenshotsKey;
+
+void setLayerDisableScreenshots(CALayer * _Nonnull layer, bool disableScreenshots) {
+    static UITextField *textField = nil;
+    static UIView *secureView = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        textField = [[UITextField alloc] init];
+        for (UIView *subview in textField.subviews) {
+            if ([NSStringFromClass([subview class]) containsString:@"TextLayoutCanvasView"]) {
+                secureView = subview;
+                break;
+            }
+        }
+    });
+    if (secureView == nil) {
+        return;
+    }
+    
+    CALayer *previousLayer = secureView.layer;
+    [secureView setValue:layer forKey:@"layer"];
+    if (disableScreenshots) {
+        textField.secureTextEntry = false;
+        textField.secureTextEntry = true;
+    } else {
+        textField.secureTextEntry = true;
+        textField.secureTextEntry = false;
+    }
+    [secureView setValue:previousLayer forKey:@"layer"];
+    
+    [layer setAssociatedObject:@(disableScreenshots) forKey:layerDisableScreenshotsKey associationPolicy:NSObjectAssociationPolicyRetain];
+}
+
+bool getLayerDisableScreenshots(CALayer * _Nonnull layer) {
+    id result = [layer associatedObjectForKey:layerDisableScreenshotsKey];
+    if ([result respondsToSelector:@selector(boolValue)]) {
+        return [(NSNumber *)result boolValue];
+    } else {
+        return false;
+    }
+}
+
+void setLayerContentsMaskMode(CALayer * _Nonnull layer, bool maskMode) {
+    static NSString *key = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        key = [@"contents" stringByAppendingString:@"Swizzle"];
+    });
+    if (key == nil) {
+        return;
+    }
+    if (maskMode) {
+        [layer setValue:@"AAAA" forKey:key];
+    } else {
+        [layer setValue:@"RGBA" forKey:key];
     }
 }

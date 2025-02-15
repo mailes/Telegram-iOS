@@ -1,5 +1,5 @@
 package {
-    default_applicable_licenses: ["external_libyuv_files_license"],
+    default_applicable_licenses: ["external_libyuv_license"],
 }
 
 // Added automatically by a large-scale-change
@@ -10,14 +10,13 @@ package {
 // Please consider removing redundant or irrelevant files from 'license_text:'.
 // See: http://go/android-license-faq
 license {
-    name: "external_libyuv_files_license",
+    name: "external_libyuv_license",
     visibility: [":__subpackages__"],
     license_kinds: [
         "SPDX-license-identifier-BSD",
     ],
     license_text: [
         "LICENSE",
-        "LICENSE_THIRD_PARTY",
         "PATENTS",
     ],
 }
@@ -35,7 +34,6 @@ cc_library {
         "source/compare.cc",
         "source/compare_common.cc",
         "source/compare_gcc.cc",
-        "source/compare_mmi.cc",
         "source/compare_msa.cc",
         "source/compare_neon.cc",
         "source/compare_neon64.cc",
@@ -55,26 +53,26 @@ cc_library {
         "source/rotate_argb.cc",
         "source/rotate_common.cc",
         "source/rotate_gcc.cc",
-        "source/rotate_mmi.cc",
         "source/rotate_msa.cc",
         "source/rotate_neon.cc",
         "source/rotate_neon64.cc",
         "source/row_any.cc",
         "source/row_common.cc",
         "source/row_gcc.cc",
-        "source/row_mmi.cc",
         "source/row_msa.cc",
         "source/row_neon.cc",
         "source/row_neon64.cc",
+        "source/row_rvv.cc",
         "source/scale.cc",
         "source/scale_any.cc",
         "source/scale_argb.cc",
         "source/scale_common.cc",
         "source/scale_gcc.cc",
-        "source/scale_mmi.cc",
         "source/scale_msa.cc",
         "source/scale_neon.cc",
         "source/scale_neon64.cc",
+        "source/scale_rgb.cc",
+        "source/scale_rvv.cc",
         "source/scale_uv.cc",
         "source/video_common.cc",
     ],
@@ -85,6 +83,7 @@ cc_library {
         "-Wno-unused-parameter",
         "-fexceptions",
         "-DHAVE_JPEG",
+        "-DLIBYUV_UNLIMITED_DATA",
     ],
 
     arch: {
@@ -134,6 +133,8 @@ cc_test {
         "unit_test/rotate_argb_test.cc",
         "unit_test/rotate_test.cc",
         "unit_test/scale_argb_test.cc",
+        "unit_test/scale_plane_test.cc",
+        "unit_test/scale_rgb_test.cc",
         "unit_test/scale_test.cc",
         "unit_test/scale_uv_test.cc",
         "unit_test/unit_test.cc",

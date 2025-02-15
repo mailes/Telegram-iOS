@@ -2,7 +2,6 @@ import Foundation
 import UIKit
 import Display
 import AsyncDisplayKit
-import Postbox
 import TelegramCore
 import SwiftSignalKit
 import TelegramPresentationData
@@ -118,7 +117,7 @@ final class PrivacyIntroControllerNode: ViewControllerTracingNode {
         if self.animationNode.isHidden {
             self.iconNode.image = self.mode.icon(theme: presentationData.theme)
         }
-        self.titleNode.attributedText = NSAttributedString(string: self.mode.title(strings: presentationData.strings), font: titleFont, textColor: presentationData.theme.list.sectionHeaderTextColor, paragraphAlignment: .center)
+        self.titleNode.attributedText = NSAttributedString(string: self.mode.title(context: self.context, strings: presentationData.strings), font: titleFont, textColor: presentationData.theme.list.sectionHeaderTextColor, paragraphAlignment: .center)
         self.textNode.attributedText = NSAttributedString(string: self.mode.text(strings: presentationData.strings), font: textFont, textColor: presentationData.theme.list.freeTextColor, paragraphAlignment: .center)
         self.noticeNode.attributedText = NSAttributedString(string: self.mode.notice(strings: presentationData.strings), font: textFont, textColor: presentationData.theme.list.freeTextColor, paragraphAlignment: .center)
         self.buttonTextNode.attributedText = NSAttributedString(string: self.mode.buttonTitle(strings: presentationData.strings), font: buttonFont, textColor: presentationData.theme.list.itemAccentColor, paragraphAlignment: .center)

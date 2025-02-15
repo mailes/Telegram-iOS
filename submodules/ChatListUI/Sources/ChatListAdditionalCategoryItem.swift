@@ -45,8 +45,12 @@ public class ChatListAdditionalCategoryItem: ItemListItem, ListViewItemWithHeade
         self.action = action
         
         switch appearance {
-        case .option:
-            self.header = ChatListSearchItemHeader(type: .chatTypes, theme: presentationData.theme, strings: presentationData.strings, actionTitle: nil, action: nil)
+        case let .option(sectionTitle):
+            if let sectionTitle {
+                self.header = ChatListSearchItemHeader(type: .text(sectionTitle, AnyHashable(0)), theme: presentationData.theme, strings: presentationData.strings, actionTitle: nil, action: nil)
+            } else {
+                self.header = ChatListSearchItemHeader(type: .chatTypes, theme: presentationData.theme, strings: presentationData.strings, actionTitle: nil, action: nil)
+            }
         case .action:
             self.header = header
         }
@@ -121,7 +125,9 @@ public class ChatListAdditionalCategoryItem: ItemListItem, ListViewItemWithHeade
                 }
             } else if let _ = nextItem as? ChatListAdditionalCategoryItem {
             } else {
-                last = true
+                if let nextItem = nextItem as? ListViewItemWithHeader, nextItem.header != nil {
+                    last = true
+                }
             }
         } else {
             last = true
@@ -355,7 +361,7 @@ public class ChatListAdditionalCategoryItemNode: ItemListRevealOptionsItemNode {
         accessoryItemNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -29.0), size: CGSize(width: bounds.size.width, height: 29.0))
     }
     
-    override public func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
+    override public func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: duration * 0.5)
     }
     

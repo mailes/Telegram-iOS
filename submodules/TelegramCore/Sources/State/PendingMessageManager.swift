@@ -6,8 +6,23 @@ import MtProtoKit
 
 
 public struct PendingMessageStatus: Equatable {
+    public struct Progress: Equatable {
+        public let progress: Float
+        public let mediaProgress: [MediaId: Float]
+        
+        public init(progress: Float, mediaProgress: [MediaId: Float] = [:]) {
+            self.progress = progress
+            self.mediaProgress = mediaProgress
+        }
+        
+        init(_ contentProgress: PendingMessageUploadedContentProgress) {
+            self.progress = contentProgress.progress
+            self.mediaProgress = contentProgress.mediaProgress
+        }
+    }
+    
     public let isRunning: Bool
-    public let progress: Float
+    public let progress: Progress
 }
 
 private enum PendingMessageState {
@@ -57,11 +72,15 @@ public enum PendingMessageFailureReason {
     case slowmodeActive
     case tooMuchScheduled
     case voiceMessagesForbidden
+    case sendingTooFast
+    case nonPremiumMessagesForbidden
 }
 
-private func reasonForError(_ error: String) -> PendingMessageFailureReason? {
+func sendMessageReasonForError(_ error: String) -> PendingMessageFailureReason? {
     if error.hasPrefix("PEER_FLOOD") {
         return .flood
+    } else if error.hasPrefix("SENDING_TOO_FAST") {
+        return .sendingTooFast
     } else if error.hasPrefix("USER_BANNED_IN_CHANNEL") {
         return .publicBan
     } else if error.hasPrefix("CHAT_SEND_") && error.hasSuffix("_FORBIDDEN") {
@@ -72,13 +91,27 @@ private func reasonForError(_ error: String) -> PendingMessageFailureReason? {
         return .tooMuchScheduled
     } else if error.hasPrefix("VOICE_MESSAGES_FORBIDDEN") {
         return .voiceMessagesForbidden
+    } else if error.hasPrefix("PRIVACY_PREMIUM_REQUIRED") {
+        return .nonPremiumMessagesForbidden
     } else {
         return nil
     }
 }
 
+public struct PeerPendingMessageDelivered {
+    public var id: EngineMessage.Id
+    public var isSilent: Bool
+    public var isPendingProcessing: Bool
+    
+    public init(id: EngineMessage.Id, isSilent: Bool, isPendingProcessing: Bool) {
+        self.id = id
+        self.isSilent = isSilent
+        self.isPendingProcessing = isPendingProcessing
+    }
+}
+
 private final class PeerPendingMessagesSummaryContext {
-    var messageDeliveredSubscribers = Bag<((MessageId.Namespace, Bool)) -> Void>()
+    var messageDeliveredSubscribers = Bag<([PeerPendingMessageDelivered]) -> Void>()
     var messageFailedSubscribers = Bag<(PendingMessageFailureReason) -> Void>()
 }
 
@@ -106,6 +139,15 @@ private func uploadActivityTypeForMessage(_ message: Message) -> PeerInputActivi
     return nil
 }
 
+private func shouldPassFetchProgressForMessage(_ message: Message) -> Bool {
+    for media in message.media {
+        if let file = media as? TelegramMediaFile, file.isVideo {
+            return true
+        }
+    }
+    return false
+}
+
 private func failMessages(postbox: Postbox, ids: [MessageId]) -> Signal<Void, NoError> {
     let modify = postbox.transaction { transaction -> Void in
         for id in ids {
@@ -122,7 +164,7 @@ private func failMessages(postbox: Postbox, ids: [MessageId]) -> Signal<Void, No
     return modify
 }
 
-private final class PendingMessageRequestDependencyTag: NetworkRequestDependencyTag {
+final class PendingMessageRequestDependencyTag: NetworkRequestDependencyTag {
     let messageId: MessageId
     
     init(messageId: MessageId) {
@@ -135,6 +177,10 @@ private final class PendingMessageRequestDependencyTag: NetworkRequestDependency
         }
         return false
     }
+}
+
+private final class CorrelationIdToSentMessageId {
+    var mapping: [Int64: MessageId] = [:]
 }
 
 public final class PendingMessageManager {
@@ -161,6 +207,8 @@ public final class PendingMessageManager {
     private var peerSummaryContexts: [PeerId: PeerPendingMessagesSummaryContext] = [:]
     
     var transformOutgoingMessageMedia: TransformOutgoingMessageMedia?
+    
+    private let correlationIdToSentMessageId: Atomic<CorrelationIdToSentMessageId> = Atomic(value: CorrelationIdToSentMessageId())
     
     init(network: Network, postbox: Postbox, accountPeerId: PeerId, auxiliaryMethods: AccountAuxiliaryMethods, stateManager: AccountStateManager, localInputActivityManager: PeerInputActivityManager, messageMediaPreuploadManager: MessageMediaPreuploadManager, revalidationContext: MediaReferenceRevalidationContext) {
         Logger.shared.log("PendingMessageManager", "create instance")
@@ -234,29 +282,32 @@ public final class PendingMessageManager {
             }
             
             if !removedSecretMessageIds.isEmpty {
-                let _ = (self.postbox.transaction { transaction -> (Set<PeerId>, Bool) in
-                    var silent = false
-                    var peerIdsWithDeliveredMessages = Set<PeerId>()
+                let _ = (self.postbox.transaction { transaction -> [PeerId: [PeerPendingMessageDelivered]] in
+                    var peerIdsWithDeliveredMessages: [PeerId: [PeerPendingMessageDelivered]] = [:]
                     for id in removedSecretMessageIds {
                         if let message = transaction.getMessage(id) {
                             if message.isSentOrAcknowledged {
-                                peerIdsWithDeliveredMessages.insert(id.peerId)
+                                var silent = false
                                 if message.muted {
                                     silent = true
                                 }
+                                if peerIdsWithDeliveredMessages[id.peerId] == nil {
+                                    peerIdsWithDeliveredMessages[id.peerId] = []
+                                }
+                                peerIdsWithDeliveredMessages[id.peerId]?.append(PeerPendingMessageDelivered(id: MessageId(peerId: id.peerId, namespace: Namespaces.Message.Cloud, id: id.id), isSilent: silent, isPendingProcessing: false))
                             }
                         }
                     }
-                    return (peerIdsWithDeliveredMessages, silent)
+                    return peerIdsWithDeliveredMessages
                 }
-                |> deliverOn(self.queue)).start(next: { [weak self] peerIdsWithDeliveredMessages, silent in
+                |> deliverOn(self.queue)).start(next: { [weak self] peerIdsWithDeliveredMessages in
                     guard let strongSelf = self else {
                         return
                     }
-                    for peerId in peerIdsWithDeliveredMessages {
+                    for (peerId, deliveredMessages) in peerIdsWithDeliveredMessages {
                         if let context = strongSelf.peerSummaryContexts[peerId] {
                             for subscriber in context.messageDeliveredSubscribers.copyItems() {
-                                subscriber((Namespaces.Message.Cloud, silent))
+                                subscriber(deliveredMessages)
                             }
                         }
                     }
@@ -343,7 +394,7 @@ public final class PendingMessageManager {
                 self.messageContexts[id] = messageContext
             }
             
-            let status = PendingMessageStatus(isRunning: false, progress: 0.0)
+            let status = PendingMessageStatus(isRunning: false, progress: PendingMessageStatus.Progress(progress: 0.0))
             if status != messageContext.status {
                 messageContext.status = status
                 for subscriber in messageContext.statusSubscribers.copyItems() {
@@ -400,7 +451,8 @@ public final class PendingMessageManager {
                     return lhs.1.index < rhs.1.index
                 }) {
                     if case let .collectingInfo(message) = messageContext.state {
-                        let contentToUpload = messageContentToUpload(network: strongSelf.network, postbox: strongSelf.postbox, auxiliaryMethods: strongSelf.auxiliaryMethods, transformOutgoingMessageMedia: strongSelf.transformOutgoingMessageMedia, messageMediaPreuploadManager: strongSelf.messageMediaPreuploadManager, revalidationContext: strongSelf.revalidationContext, forceReupload:  messageContext.forcedReuploadOnce, isGrouped: message.groupingKey != nil, message: message)
+                        let passFetchProgress = shouldPassFetchProgressForMessage(message)
+                        let contentToUpload = messageContentToUpload(accountPeerId: strongSelf.accountPeerId, network: strongSelf.network, postbox: strongSelf.postbox, auxiliaryMethods: strongSelf.auxiliaryMethods, transformOutgoingMessageMedia: strongSelf.transformOutgoingMessageMedia, messageMediaPreuploadManager: strongSelf.messageMediaPreuploadManager, revalidationContext: strongSelf.revalidationContext, forceReupload: messageContext.forcedReuploadOnce, isGrouped: message.groupingKey != nil, passFetchProgress: passFetchProgress, message: message)
                         messageContext.contentType = contentToUpload.type
                         switch contentToUpload {
                         case let .immediate(result, type):
@@ -443,20 +495,77 @@ public final class PendingMessageManager {
                 
                 Logger.shared.log("PendingMessageManager", "beginSendingMessages messagesToForward.count: \(messagesToForward.count)")
                 
-                
-                for (_, messages) in messagesToForward {
-                    for (context, _, _) in messages {
-                        context.state = .sending(groupId: nil)
+                let forwardGroupLimit = 100
+                for (_, ungroupedMessages) in messagesToForward {
+                    var messageGroups: [[(PendingMessageContext, Message, ForwardSourceInfoAttribute)]] = []
+                    
+                    for message in ungroupedMessages {
+                        if messageGroups.isEmpty || messageGroups[messageGroups.count - 1].isEmpty {
+                            messageGroups.append([message])
+                        } else {
+                            if messageGroups[messageGroups.count - 1][0].1.groupingKey == message.1.groupingKey {
+                                messageGroups[messageGroups.count - 1].append(message)
+                            } else {
+                                messageGroups.append([message])
+                            }
+                        }
                     }
-                    let sendMessage: Signal<PendingMessageResult, NoError> = strongSelf.sendGroupMessagesContent(network: strongSelf.network, postbox: strongSelf.postbox, stateManager: strongSelf.stateManager, accountPeerId: strongSelf.accountPeerId, group: messages.map { data in
-                        let (_, message, forwardInfo) = data
-                        return (message.id, PendingMessageUploadedContentAndReuploadInfo(content: .forward(forwardInfo), reuploadInfo: nil))
-                    })
-                    |> map { next -> PendingMessageResult in
-                        return .progress(1.0)
+                    
+                    var countedMessageGroups: [[(PendingMessageContext, Message, ForwardSourceInfoAttribute)]] = []
+                    while !messageGroups.isEmpty {
+                        guard let messageGroup = messageGroups.first else {
+                            break
+                        }
+                        
+                        messageGroups.removeFirst()
+                        
+                        if messageGroup.isEmpty {
+                            continue
+                        }
+                        if countedMessageGroups.isEmpty {
+                            countedMessageGroups.append([])
+                        } else if countedMessageGroups[countedMessageGroups.count - 1].count >= forwardGroupLimit {
+                            countedMessageGroups.append([])
+                        }
+                        
+                        if countedMessageGroups[countedMessageGroups.count - 1].isEmpty {
+                            let fittingFreeMessageCount = min(forwardGroupLimit, messageGroup.count)
+                            countedMessageGroups[countedMessageGroups.count - 1].append(contentsOf: messageGroup[0 ..< fittingFreeMessageCount])
+                            if fittingFreeMessageCount < messageGroup.count {
+                                messageGroups.insert(Array(messageGroup[fittingFreeMessageCount ..< messageGroup.count]), at: 0)
+                            }
+                        } else if countedMessageGroups[countedMessageGroups.count - 1].count + messageGroup.count <= forwardGroupLimit {
+                            countedMessageGroups[countedMessageGroups.count - 1].append(contentsOf: messageGroup)
+                        } else {
+                            if countedMessageGroups[countedMessageGroups.count - 1][0].1.groupingKey == nil && messageGroup[0].1.groupingKey == nil {
+                                let fittingFreeMessageCount = forwardGroupLimit - countedMessageGroups[countedMessageGroups.count - 1].count
+                                countedMessageGroups[countedMessageGroups.count - 1].append(contentsOf: messageGroup[0 ..< fittingFreeMessageCount])
+                                messageGroups.insert(Array(messageGroup[fittingFreeMessageCount ..< messageGroup.count]), at: 0)
+                            } else {
+                                countedMessageGroups.append([])
+                            }
+                        }
                     }
-                    messages[0].0.sendDisposable.set((sendMessage
-                    |> deliverOn(strongSelf.queue)).start())
+                    
+                    for messages in countedMessageGroups {
+                        if messages.isEmpty {
+                            continue
+                        }
+                        
+                        for (context, _, _) in messages {
+                            context.state = .sending(groupId: nil)
+                        }
+                        
+                        let sendMessage: Signal<PendingMessageResult, NoError> = strongSelf.sendGroupMessagesContent(network: strongSelf.network, postbox: strongSelf.postbox, stateManager: strongSelf.stateManager, accountPeerId: strongSelf.accountPeerId, group: messages.map { data in
+                            let (_, message, forwardInfo) = data
+                            return (message.id, PendingMessageUploadedContentAndReuploadInfo(content: .forward(forwardInfo), reuploadInfo: nil, cacheReferenceKey: nil))
+                        })
+                        |> map { next -> PendingMessageResult in
+                            return .progress(1.0)
+                        }
+                        messages[0].0.sendDisposable.set((sendMessage
+                        |> deliverOn(strongSelf.queue)).start())
+                    }
                 }
             }
         }))
@@ -539,7 +648,7 @@ public final class PendingMessageManager {
                 switch next {
                     case let .progress(progress):
                         if let current = strongSelf.messageContexts[messageId] {
-                            let status = PendingMessageStatus(isRunning: true, progress: progress)
+                            let status = PendingMessageStatus(isRunning: true, progress: PendingMessageStatus.Progress(progress: progress))
                             current.status = status
                             for subscriber in current.statusSubscribers.copyItems() {
                                 subscriber(current.status, current.error)
@@ -557,7 +666,7 @@ public final class PendingMessageManager {
     private func beginUploadingMessage(messageContext: PendingMessageContext, id: MessageId, threadId: Int64?, groupId: Int64?, uploadSignal: Signal<PendingMessageUploadedContentResult, PendingMessageUploadError>) {
         messageContext.state = .uploading(groupId: groupId)
         
-        let status = PendingMessageStatus(isRunning: true, progress: 0.0)
+        let status = PendingMessageStatus(isRunning: true, progress: PendingMessageStatus.Progress(progress: 0.0))
         messageContext.status = status
         for subscriber in messageContext.statusSubscribers.copyItems() {
             subscriber(messageContext.status, messageContext.error)
@@ -599,7 +708,7 @@ public final class PendingMessageManager {
                 switch next {
                     case let .progress(progress):
                         if let current = strongSelf.messageContexts[id] {
-                            let status = PendingMessageStatus(isRunning: true, progress: progress)
+                            let status = PendingMessageStatus(isRunning: true, progress: PendingMessageStatus.Progress(progress))
                             current.status = status
                             for subscriber in current.statusSubscribers.copyItems() {
                                 subscriber(current.status, current.error)
@@ -633,7 +742,7 @@ public final class PendingMessageManager {
             if case let .waitingForUploadToStart(groupId, uploadSignal) = context.state {
                 if self.canBeginUploadingMessage(id: contextId, type: context.contentType ?? .media) {
                     context.state = .uploading(groupId: groupId)
-                    let status = PendingMessageStatus(isRunning: true, progress: 0.0)
+                    let status = PendingMessageStatus(isRunning: true, progress: PendingMessageStatus.Progress(progress: 0.0))
                     context.status = status
                     for subscriber in context.statusSubscribers.copyItems() {
                         subscriber(context.status, context.error)
@@ -655,7 +764,7 @@ public final class PendingMessageManager {
                             switch next {
                                 case let .progress(progress):
                                     if let current = strongSelf.messageContexts[contextId] {
-                                        let status = PendingMessageStatus(isRunning: true, progress: progress)
+                                        let status = PendingMessageStatus(isRunning: true, progress: PendingMessageStatus.Progress(progress))
                                         current.status = status
                                         for subscriber in current.statusSubscribers.copyItems() {
                                             subscriber(context.status, context.error)
@@ -709,14 +818,27 @@ public final class PendingMessageManager {
                 var hideSendersNames = false
                 var hideCaptions = false
                 var replyMessageId: Int32?
+                var replyPeerId: PeerId?
+                var replyQuote: EngineMessageReplyQuote?
+                var replyToStoryId: StoryId?
                 var scheduleTime: Int32?
                 var sendAsPeerId: PeerId?
+                var quickReply: OutgoingQuickReplyMessageAttribute?
+                var messageEffect: EffectMessageAttribute?
                 
                 var flags: Int32 = 0
                 
                 for attribute in messages[0].0.attributes {
                     if let replyAttribute = attribute as? ReplyMessageAttribute {
                         replyMessageId = replyAttribute.messageId.id
+                        if peerId != replyAttribute.messageId.peerId {
+                            replyPeerId = replyAttribute.messageId.peerId
+                        }
+                        if replyAttribute.isQuote {
+                            replyQuote = replyAttribute.quote
+                        }
+                    } else if let attribute = attribute as? ReplyStoryAttribute {
+                        replyToStoryId = attribute.storyId
                     } else if let _ = attribute as? ForwardSourceInfoAttribute {
                         isForward = true
                     } else if let attribute = attribute as? NotificationInfoMessageAttribute {
@@ -731,6 +853,12 @@ public final class PendingMessageManager {
                         hideCaptions = attribute.hideCaptions
                     } else if let attribute = attribute as? SendAsMessageAttribute {
                         sendAsPeerId = attribute.peerId
+                    } else if let attribute = attribute as? OutgoingQuickReplyMessageAttribute {
+                        quickReply = attribute
+                    } else if let attribute = attribute as? EffectMessageAttribute {
+                        messageEffect = attribute
+                    } else if let _ = attribute as? InvertMediaMessageAttribute {
+                        flags |= Int32(1 << 16)
                     }
                 }
                                 
@@ -781,6 +909,16 @@ public final class PendingMessageManager {
                         topMsgId = Int32(clamping: threadId)
                     }
                     
+                    var quickReplyShortcut: Api.InputQuickReplyShortcut?
+                    if let quickReply {
+                        if let threadId = messages[0].0.threadId {
+                            quickReplyShortcut = .inputQuickReplyShortcutId(shortcutId: Int32(clamping: threadId))
+                        } else {
+                            quickReplyShortcut = .inputQuickReplyShortcut(shortcut: quickReply.shortcut)
+                        }
+                        flags |= 1 << 17
+                    }
+                    
                     let forwardPeerIds = Set(forwardIds.map { $0.0.peerId })
                     if forwardPeerIds.count != 1 {
                         assertionFailure()
@@ -788,16 +926,13 @@ public final class PendingMessageManager {
                     } else if let inputSourcePeerId = forwardPeerIds.first, let inputSourcePeer = transaction.getPeer(inputSourcePeerId).flatMap(apiInputPeer) {
                         let dependencyTag = PendingMessageRequestDependencyTag(messageId: messages[0].0.id)
 
-                        sendMessageRequest = network.request(Api.functions.messages.forwardMessages(flags: flags, fromPeer: inputSourcePeer, id: forwardIds.map { $0.0.id }, randomId: forwardIds.map { $0.1 }, toPeer: inputPeer, topMsgId: topMsgId, scheduleDate: scheduleTime, sendAs: sendAsInputPeer), tag: dependencyTag)
+                        sendMessageRequest = network.request(Api.functions.messages.forwardMessages(flags: flags, fromPeer: inputSourcePeer, id: forwardIds.map { $0.0.id }, randomId: forwardIds.map { $0.1 }, toPeer: inputPeer, topMsgId: topMsgId, scheduleDate: scheduleTime, sendAs: sendAsInputPeer, quickReplyShortcut: quickReplyShortcut), tag: dependencyTag)
                     } else {
                         assertionFailure()
                         sendMessageRequest = .fail(MTRpcError(errorCode: 400, errorDescription: "Invalid forward source"))
                     }
                 } else {
                     flags |= (1 << 7)
-                    if let _ = replyMessageId {
-                        flags |= Int32(1 << 0)
-                    }
                     
                     var sendAsInputPeer: Api.InputPeer?
                     if let sendAsPeerId = sendAsPeerId, let sendAsPeer = transaction.getPeer(sendAsPeerId), let inputPeer = apiInputPeerOrSelf(sendAsPeer, accountPeerId: accountPeerId) {
@@ -853,7 +988,76 @@ public final class PendingMessageManager {
                         topMsgId = Int32(clamping: threadId)
                     }
                     
-                    sendMessageRequest = network.request(Api.functions.messages.sendMultiMedia(flags: flags, peer: inputPeer, replyToMsgId: replyMessageId, topMsgId: topMsgId, multiMedia: singleMedias, scheduleDate: scheduleTime, sendAs: sendAsInputPeer))
+                    var replyTo: Api.InputReplyTo?
+                    if let replyMessageId = replyMessageId {
+                        flags |= 1 << 0
+                        
+                        var replyFlags: Int32 = 0
+                        if topMsgId != nil {
+                            replyFlags |= 1 << 0
+                        }
+                        
+                        var replyToPeerId: Api.InputPeer?
+                        if let replyPeerId = replyPeerId {
+                            replyToPeerId = transaction.getPeer(replyPeerId).flatMap(apiInputPeer)
+                        }
+                        if replyToPeerId != nil {
+                            replyFlags |= 1 << 1
+                        }
+                        
+                        var quoteText: String?
+                        var quoteEntities: [Api.MessageEntity]?
+                        var quoteOffset: Int32?
+                        if let replyQuote = replyQuote {
+                            replyFlags |= 1 << 2
+                            quoteText = replyQuote.text
+                            quoteOffset = replyQuote.offset.flatMap { Int32.init(clamping: $0) }
+                            
+                            if !replyQuote.entities.isEmpty {
+                                replyFlags |= 1 << 3
+                                var associatedPeers = SimpleDictionary<PeerId, Peer>()
+                                for entity in replyQuote.entities {
+                                    for associatedPeerId in entity.associatedPeerIds {
+                                        if associatedPeers[associatedPeerId] == nil {
+                                            if let associatedPeer = transaction.getPeer(associatedPeerId) {
+                                                associatedPeers[associatedPeerId] = associatedPeer
+                                            }
+                                        }
+                                    }
+                                }
+                                quoteEntities = apiEntitiesFromMessageTextEntities(replyQuote.entities, associatedPeers: associatedPeers)
+                            }
+                            
+                            if quoteOffset != nil {
+                                replyFlags |= 1 << 4
+                            }
+                        }
+                        
+                        replyTo = .inputReplyToMessage(flags: replyFlags, replyToMsgId: replyMessageId, topMsgId: topMsgId, replyToPeerId: replyToPeerId, quoteText: quoteText, quoteEntities: quoteEntities, quoteOffset: quoteOffset)
+                    } else if let replyToStoryId = replyToStoryId {
+                        if let inputPeer = transaction.getPeer(replyToStoryId.peerId).flatMap(apiInputPeer) {
+                            flags |= 1 << 0
+                            replyTo = .inputReplyToStory(peer: inputPeer, storyId: replyToStoryId.id)
+                        }
+                    }
+                    
+                    var quickReplyShortcut: Api.InputQuickReplyShortcut?
+                    if let quickReply {
+                        if let threadId = messages[0].0.threadId {
+                            quickReplyShortcut = .inputQuickReplyShortcutId(shortcutId: Int32(clamping: threadId))
+                        } else {
+                            quickReplyShortcut = .inputQuickReplyShortcut(shortcut: quickReply.shortcut)
+                        }
+                        flags |= 1 << 17
+                    }
+                    
+                    var messageEffectId: Int64?
+                    if let messageEffect {
+                        flags |= 1 << 18
+                        messageEffectId = messageEffect.id
+                    }
+                    
+                    sendMessageRequest = network.request(Api.functions.messages.sendMultiMedia(flags: flags, peer: inputPeer, replyTo: replyTo, multiMedia: singleMedias, scheduleDate: scheduleTime, sendAs: sendAsInputPeer, quickReplyShortcut: quickReplyShortcut, effect: messageEffectId))
                 }
                 
                 return sendMessageRequest
@@ -870,31 +1074,69 @@ public final class PendingMessageManager {
                 |> `catch` { error -> Signal<Void, NoError> in
                     return deferred {
                         if let strongSelf = self {
-                            if error.errorDescription.hasPrefix("FILEREF_INVALID") || error.errorDescription.hasPrefix("FILE_REFERENCE_") {
-                                var allFoundAndValid = true
-                                for (message, _) in messages {
-                                    if let context = strongSelf.messageContexts[message.id] {
-                                        if context.forcedReuploadOnce {
-                                            allFoundAndValid = false
-                                            break
-                                        }
-                                    } else {
-                                        allFoundAndValid = false
-                                        break
+                            let errorText: String = error.errorDescription
+                            
+                            if errorText.hasPrefix("FILEREF_INVALID") || errorText.hasPrefix("FILE_REFERENCE_") {
+                                var selectiveIndices: [Int]?
+                                if errorText.hasPrefix("FILE_REFERENCE_") && errorText.hasSuffix("_EXPIRED") {
+                                    if let value = Int(errorText[errorText.index(errorText.startIndex, offsetBy: "FILE_REFERENCE_".count)..<errorText.index(errorText.endIndex, offsetBy: -"_EXPIRED".count)]) {
+                                        selectiveIndices = [value]
                                     }
                                 }
                                 
-                                if allFoundAndValid {
-                                    for (message, _) in messages {
+                                if let selectiveIndices {
+                                    var allFoundAndValid = true
+                                    for i in 0 ..< messages.count {
+                                        let message = messages[i].0
                                         if let context = strongSelf.messageContexts[message.id] {
-                                            context.forcedReuploadOnce = true
+                                            if selectiveIndices.contains(i) {
+                                                if context.forcedReuploadOnce {
+                                                    allFoundAndValid = false
+                                                    break
+                                                }
+                                            }
                                         }
                                     }
                                     
-                                    strongSelf.beginSendingMessages(messages.map({ $0.0.id }))
-                                    return .complete()
+                                    if allFoundAndValid {
+                                        for i in 0 ..< messages.count {
+                                            let message = messages[i].0
+                                            if selectiveIndices.contains(i) {
+                                                if let context = strongSelf.messageContexts[message.id] {
+                                                    context.forcedReuploadOnce = true
+                                                }
+                                            }
+                                        }
+                                        
+                                        strongSelf.beginSendingMessages(messages.map({ $0.0.id }))
+                                        return .complete()
+                                    }
+                                } else {
+                                    var allFoundAndValid = true
+                                    for (message, _) in messages {
+                                        if let context = strongSelf.messageContexts[message.id] {
+                                            if context.forcedReuploadOnce {
+                                                allFoundAndValid = false
+                                                break
+                                            }
+                                        } else {
+                                            allFoundAndValid = false
+                                            break
+                                        }
+                                    }
+                                    
+                                    if allFoundAndValid {
+                                        for (message, _) in messages {
+                                            if let context = strongSelf.messageContexts[message.id] {
+                                                context.forcedReuploadOnce = true
+                                            }
+                                        }
+                                        
+                                        strongSelf.beginSendingMessages(messages.map({ $0.0.id }))
+                                        return .complete()
+                                    }
                                 }
-                            } else if let failureReason = reasonForError(error.errorDescription), let message = messages.first?.0 {
+                            } else if let failureReason = sendMessageReasonForError(error.errorDescription), let message = messages.first?.0 {
                                 for (message, _) in messages {
                                     if let context = strongSelf.messageContexts[message.id] {
                                         context.error = failureReason
@@ -950,7 +1192,7 @@ public final class PendingMessageManager {
             var sentAsAction = false
             for media in message.media {
                 if let media = media as? TelegramMediaAction {
-                    if case let .messageAutoremoveTimeoutUpdated(value) = media.action {
+                    if case let .messageAutoremoveTimeoutUpdated(value, _) = media.action {
                         sentAsAction = true
                         let updatedState = addSecretChatOutgoingOperation(transaction: transaction, peerId: message.id.peerId, operation: .setMessageAutoremoveTimeout(layer: layer, actionGloballyUniqueId: message.globallyUniqueId!, timeout: value, messageId: message.id), state: state)
                         if updatedState != state {
@@ -1022,15 +1264,28 @@ public final class PendingMessageManager {
                 var forwardSourceInfoAttribute: ForwardSourceInfoAttribute?
                 var messageEntities: [Api.MessageEntity]?
                 var replyMessageId: Int32?
+                var replyPeerId: PeerId?
+                var replyQuote: EngineMessageReplyQuote?
+                var replyToStoryId: StoryId?
                 var scheduleTime: Int32?
                 var sendAsPeerId: PeerId?
                 var bubbleUpEmojiOrStickersets = false
+                var quickReply: OutgoingQuickReplyMessageAttribute?
+                var messageEffect: EffectMessageAttribute?
                 
                 var flags: Int32 = 0
         
                 for attribute in message.attributes {
                     if let replyAttribute = attribute as? ReplyMessageAttribute {
                         replyMessageId = replyAttribute.messageId.id
+                        if peer.id != replyAttribute.messageId.peerId {
+                            replyPeerId = replyAttribute.messageId.peerId
+                        }
+                        if replyAttribute.isQuote {
+                            replyQuote = replyAttribute.quote
+                        }
+                    } else if let attribute = attribute as? ReplyStoryAttribute {
+                        replyToStoryId = attribute.storyId
                     } else if let outgoingInfo = attribute as? OutgoingMessageInfoAttribute {
                         uniqueId = outgoingInfo.uniqueId
                         bubbleUpEmojiOrStickersets = !outgoingInfo.bubbleUpEmojiOrStickersets.isEmpty
@@ -1051,6 +1306,10 @@ public final class PendingMessageManager {
                         scheduleTime = attribute.scheduleTime
                     } else if let attribute = attribute as? SendAsMessageAttribute {
                         sendAsPeerId = attribute.peerId
+                    } else if let attribute = attribute as? OutgoingQuickReplyMessageAttribute {
+                        quickReply = attribute
+                    } else if let attribute = attribute as? EffectMessageAttribute {
+                        messageEffect = attribute
                     }
                 }
                 
@@ -1081,25 +1340,168 @@ public final class PendingMessageManager {
                             flags |= Int32(1 << 15)
                         }
                     
-                        var topMsgId: Int32?
-                        if let threadId = message.threadId {
-                            flags |= Int32(1 << 9)
-                            topMsgId = Int32(clamping: threadId)
+                        var replyTo: Api.InputReplyTo?
+                        if let replyMessageId = replyMessageId {
+                            flags |= 1 << 0
+                            
+                            var replyFlags: Int32 = 0
+                            if message.threadId != nil {
+                                replyFlags |= 1 << 0
+                            }
+                            
+                            var replyToPeerId: Api.InputPeer?
+                            if let replyPeerId = replyPeerId {
+                                replyToPeerId = transaction.getPeer(replyPeerId).flatMap(apiInputPeer)
+                            }
+                            if replyToPeerId != nil {
+                                replyFlags |= 1 << 1
+                            }
+                            
+                            var quoteText: String?
+                            var quoteEntities: [Api.MessageEntity]?
+                            var quoteOffset: Int32?
+                            if let replyQuote = replyQuote {
+                                replyFlags |= 1 << 2
+                                quoteText = replyQuote.text
+                                quoteOffset = replyQuote.offset.flatMap { Int32.init(clamping: $0) }
+                                
+                                if !replyQuote.entities.isEmpty {
+                                    replyFlags |= 1 << 3
+                                    var associatedPeers = SimpleDictionary<PeerId, Peer>()
+                                    for entity in replyQuote.entities {
+                                        for associatedPeerId in entity.associatedPeerIds {
+                                            if associatedPeers[associatedPeerId] == nil {
+                                                if let associatedPeer = transaction.getPeer(associatedPeerId) {
+                                                    associatedPeers[associatedPeerId] = associatedPeer
+                                                }
+                                            }
+                                        }
+                                    }
+                                    quoteEntities = apiEntitiesFromMessageTextEntities(replyQuote.entities, associatedPeers: associatedPeers)
+                                }
+                                
+                                if quoteOffset != nil {
+                                    replyFlags |= 1 << 4
+                                }
+                            }
+                            
+                            replyTo = .inputReplyToMessage(flags: replyFlags, replyToMsgId: replyMessageId, topMsgId: message.threadId.flatMap(Int32.init(clamping:)), replyToPeerId: replyToPeerId, quoteText: quoteText, quoteEntities: quoteEntities, quoteOffset: quoteOffset)
+                        } else if let replyToStoryId = replyToStoryId {
+                            if let inputPeer = transaction.getPeer(replyToStoryId.peerId).flatMap(apiInputPeer) {
+                                flags |= 1 << 0
+                                replyTo = .inputReplyToStory(peer: inputPeer, storyId: replyToStoryId.id)
+                            }
+                        }
+                        if let attribute = message.webpagePreviewAttribute {
+                            if attribute.leadingPreview {
+                                flags |= 1 << 16
+                            }
+                        }
+                        if message.invertMedia {
+                            flags |= 1 << 16
                         }
                     
-                        sendMessageRequest = network.requestWithAdditionalInfo(Api.functions.messages.sendMessage(flags: flags, peer: inputPeer, replyToMsgId: replyMessageId, topMsgId: topMsgId, message: message.text, randomId: uniqueId, replyMarkup: nil, entities: messageEntities, scheduleDate: scheduleTime, sendAs: sendAsInputPeer), info: .acknowledgement, tag: dependencyTag)
+                        var quickReplyShortcut: Api.InputQuickReplyShortcut?
+                        if let quickReply {
+                            if let threadId = message.threadId {
+                                quickReplyShortcut = .inputQuickReplyShortcutId(shortcutId: Int32(clamping: threadId))
+                            } else {
+                                quickReplyShortcut = .inputQuickReplyShortcut(shortcut: quickReply.shortcut)
+                            }
+                            flags |= 1 << 17
+                        }
+                    
+                        var messageEffectId: Int64?
+                        if let messageEffect {
+                            flags |= 1 << 18
+                            messageEffectId = messageEffect.id
+                        }
+                    
+                        sendMessageRequest = network.requestWithAdditionalInfo(Api.functions.messages.sendMessage(flags: flags, peer: inputPeer, replyTo: replyTo, message: message.text, randomId: uniqueId, replyMarkup: nil, entities: messageEntities, scheduleDate: scheduleTime, sendAs: sendAsInputPeer, quickReplyShortcut: quickReplyShortcut, effect: messageEffectId), info: .acknowledgement, tag: dependencyTag)
                     case let .media(inputMedia, text):
                         if bubbleUpEmojiOrStickersets {
                             flags |= Int32(1 << 15)
                         }
                     
-                        var topMsgId: Int32?
-                        if let threadId = message.threadId {
-                            flags |= Int32(1 << 9)
-                            topMsgId = Int32(clamping: threadId)
+                        var replyTo: Api.InputReplyTo?
+                        if let replyMessageId = replyMessageId {
+                            flags |= 1 << 0
+                            
+                            var replyFlags: Int32 = 0
+                            if message.threadId != nil {
+                                replyFlags |= 1 << 0
+                            }
+                            
+                            var replyToPeerId: Api.InputPeer?
+                            if let replyPeerId = replyPeerId {
+                                replyToPeerId = transaction.getPeer(replyPeerId).flatMap(apiInputPeer)
+                            }
+                            if replyToPeerId != nil {
+                                replyFlags |= 1 << 1
+                            }
+                            
+                            var quoteText: String?
+                            var quoteEntities: [Api.MessageEntity]?
+                            var quoteOffset: Int32?
+                            if let replyQuote = replyQuote {
+                                replyFlags |= 1 << 2
+                                quoteText = replyQuote.text
+                                
+                                quoteOffset = replyQuote.offset.flatMap { Int32.init(clamping: $0) }
+                                if quoteOffset != nil {
+                                    replyFlags |= 1 << 4
+                                }
+                                
+                                if !replyQuote.entities.isEmpty {
+                                    replyFlags |= 1 << 3
+                                    var associatedPeers = SimpleDictionary<PeerId, Peer>()
+                                    for entity in replyQuote.entities {
+                                        for associatedPeerId in entity.associatedPeerIds {
+                                            if associatedPeers[associatedPeerId] == nil {
+                                                if let associatedPeer = transaction.getPeer(associatedPeerId) {
+                                                    associatedPeers[associatedPeerId] = associatedPeer
+                                                }
+                                            }
+                                        }
+                                    }
+                                    quoteEntities = apiEntitiesFromMessageTextEntities(replyQuote.entities, associatedPeers: associatedPeers)
+                                }
+                            }
+                            
+                            replyTo = .inputReplyToMessage(flags: replyFlags, replyToMsgId: replyMessageId, topMsgId: message.threadId.flatMap(Int32.init(clamping:)), replyToPeerId: replyToPeerId, quoteText: quoteText, quoteEntities: quoteEntities, quoteOffset: quoteOffset)
+                        } else if let replyToStoryId = replyToStoryId {
+                            if let inputPeer = transaction.getPeer(replyToStoryId.peerId).flatMap(apiInputPeer) {
+                                flags |= 1 << 0
+                                replyTo = .inputReplyToStory(peer: inputPeer, storyId: replyToStoryId.id)
+                            }
+                        }
+                    
+                        if let attribute = message.webpagePreviewAttribute {
+                            if attribute.leadingPreview {
+                                flags |= 1 << 16
+                            }
+                        }
+                        if message.invertMedia {
+                            flags |= 1 << 16
+                        }
+                    
+                        var quickReplyShortcut: Api.InputQuickReplyShortcut?
+                        if let quickReply {
+                            if let threadId = message.threadId {
+                                quickReplyShortcut = .inputQuickReplyShortcutId(shortcutId: Int32(clamping: threadId))
+                            } else {
+                                quickReplyShortcut = .inputQuickReplyShortcut(shortcut: quickReply.shortcut)
+                            }
+                            flags |= 1 << 17
+                        }
+                    
+                        var messageEffectId: Int64?
+                        if let messageEffect {
+                            flags |= 1 << 18
+                            messageEffectId = messageEffect.id
                         }
                         
-                        sendMessageRequest = network.request(Api.functions.messages.sendMedia(flags: flags, peer: inputPeer, replyToMsgId: replyMessageId, topMsgId: topMsgId, media: inputMedia, message: text, randomId: uniqueId, replyMarkup: nil, entities: messageEntities, scheduleDate: scheduleTime, sendAs: sendAsInputPeer), tag: dependencyTag)
+                        sendMessageRequest = network.request(Api.functions.messages.sendMedia(flags: flags, peer: inputPeer, replyTo: replyTo, media: inputMedia, message: text, randomId: uniqueId, replyMarkup: nil, entities: messageEntities, scheduleDate: scheduleTime, sendAs: sendAsInputPeer, quickReplyShortcut: quickReplyShortcut, effect: messageEffectId), tag: dependencyTag)
                         |> map(NetworkRequestResult.result)
                     case let .forward(sourceInfo):
                         var topMsgId: Int32?
@@ -1108,8 +1510,18 @@ public final class PendingMessageManager {
                             topMsgId = Int32(clamping: threadId)
                         }
                     
+                        var quickReplyShortcut: Api.InputQuickReplyShortcut?
+                        if let quickReply {
+                            if let threadId = message.threadId {
+                                quickReplyShortcut = .inputQuickReplyShortcutId(shortcutId: Int32(clamping: threadId))
+                            } else {
+                                quickReplyShortcut = .inputQuickReplyShortcut(shortcut: quickReply.shortcut)
+                            }
+                            flags |= 1 << 17
+                        }
+                    
                         if let forwardSourceInfoAttribute = forwardSourceInfoAttribute, let sourcePeer = transaction.getPeer(forwardSourceInfoAttribute.messageId.peerId), let sourceInputPeer = apiInputPeer(sourcePeer) {
-                            sendMessageRequest = network.request(Api.functions.messages.forwardMessages(flags: flags, fromPeer: sourceInputPeer, id: [sourceInfo.messageId.id], randomId: [uniqueId], toPeer: inputPeer, topMsgId: topMsgId, scheduleDate: scheduleTime, sendAs: sendAsInputPeer), tag: dependencyTag)
+                            sendMessageRequest = network.request(Api.functions.messages.forwardMessages(flags: flags, fromPeer: sourceInputPeer, id: [sourceInfo.messageId.id], randomId: [uniqueId], toPeer: inputPeer, topMsgId: topMsgId, scheduleDate: scheduleTime, sendAs: sendAsInputPeer, quickReplyShortcut: quickReplyShortcut), tag: dependencyTag)
                             |> map(NetworkRequestResult.result)
                         } else {
                             sendMessageRequest = .fail(MTRpcError(errorCode: 400, errorDescription: "internal"))
@@ -1119,16 +1531,91 @@ public final class PendingMessageManager {
                             flags |= Int32(1 << 11)
                         }
                     
-                        var topMsgId: Int32?
-                        if let threadId = message.threadId {
-                            flags |= Int32(1 << 9)
-                            topMsgId = Int32(clamping: threadId)
+                        var replyTo: Api.InputReplyTo?
+                        if let replyMessageId = replyMessageId {
+                            flags |= 1 << 0
+                            
+                            var replyFlags: Int32 = 0
+                            if message.threadId != nil {
+                                replyFlags |= 1 << 0
+                            }
+                            
+                            var replyToPeerId: Api.InputPeer?
+                            if let replyPeerId = replyPeerId {
+                                replyToPeerId = transaction.getPeer(replyPeerId).flatMap(apiInputPeer)
+                            }
+                            if replyToPeerId != nil {
+                                replyFlags |= 1 << 1
+                            }
+                            
+                            var quoteText: String?
+                            var quoteEntities: [Api.MessageEntity]?
+                            var quoteOffset: Int32?
+                            if let replyQuote = replyQuote {
+                                replyFlags |= 1 << 2
+                                quoteText = replyQuote.text
+                                
+                                quoteOffset = replyQuote.offset.flatMap { Int32.init(clamping: $0) }
+                                if quoteOffset != nil {
+                                    replyFlags |= 1 << 4
+                                }
+                                
+                                if !replyQuote.entities.isEmpty {
+                                    replyFlags |= 1 << 3
+                                    var associatedPeers = SimpleDictionary<PeerId, Peer>()
+                                    for entity in replyQuote.entities {
+                                        for associatedPeerId in entity.associatedPeerIds {
+                                            if associatedPeers[associatedPeerId] == nil {
+                                                if let associatedPeer = transaction.getPeer(associatedPeerId) {
+                                                    associatedPeers[associatedPeerId] = associatedPeer
+                                                }
+                                            }
+                                        }
+                                    }
+                                    quoteEntities = apiEntitiesFromMessageTextEntities(replyQuote.entities, associatedPeers: associatedPeers)
+                                }
+                            }
+                            
+                            replyTo = .inputReplyToMessage(flags: replyFlags, replyToMsgId: replyMessageId, topMsgId: message.threadId.flatMap(Int32.init(clamping:)), replyToPeerId: replyToPeerId, quoteText: quoteText, quoteEntities: quoteEntities, quoteOffset: quoteOffset)
+                        } else if let replyToStoryId = replyToStoryId {
+                            if let inputPeer = transaction.getPeer(replyToStoryId.peerId).flatMap(apiInputPeer) {
+                                flags |= 1 << 0
+                                replyTo = .inputReplyToStory(peer: inputPeer, storyId: replyToStoryId.id)
+                            }
                         }
                     
-                        sendMessageRequest = network.request(Api.functions.messages.sendInlineBotResult(flags: flags, peer: inputPeer, replyToMsgId: replyMessageId, topMsgId: topMsgId, randomId: uniqueId, queryId: chatContextResult.queryId, id: chatContextResult.id, scheduleDate: scheduleTime, sendAs: sendAsInputPeer))
+                        var quickReplyShortcut: Api.InputQuickReplyShortcut?
+                        if let quickReply {
+                            if let threadId = message.threadId {
+                                quickReplyShortcut = .inputQuickReplyShortcutId(shortcutId: Int32(clamping: threadId))
+                            } else {
+                                quickReplyShortcut = .inputQuickReplyShortcut(shortcut: quickReply.shortcut)
+                            }
+                            flags |= 1 << 17
+                        }
+                    
+                        sendMessageRequest = network.request(Api.functions.messages.sendInlineBotResult(flags: flags, peer: inputPeer, replyTo: replyTo, randomId: uniqueId, queryId: chatContextResult.queryId, id: chatContextResult.id, scheduleDate: scheduleTime, sendAs: sendAsInputPeer, quickReplyShortcut: quickReplyShortcut))
                         |> map(NetworkRequestResult.result)
                     case .messageScreenshot:
-                        sendMessageRequest = network.request(Api.functions.messages.sendScreenshotNotification(peer: inputPeer, replyToMsgId: replyMessageId ?? 0, randomId: uniqueId))
+                        let replyTo: Api.InputReplyTo
+                    
+                        if let replyMessageId = replyMessageId {
+                            let replyFlags: Int32 = 0
+                            replyTo = .inputReplyToMessage(flags: replyFlags, replyToMsgId: replyMessageId, topMsgId: nil, replyToPeerId: nil, quoteText: nil, quoteEntities: nil, quoteOffset: nil)
+                        } else if let replyToStoryId = replyToStoryId {
+                            if let inputPeer = transaction.getPeer(replyToStoryId.peerId).flatMap(apiInputPeer) {
+                                flags |= 1 << 0
+                                replyTo = .inputReplyToStory(peer: inputPeer, storyId: replyToStoryId.id)
+                            } else {
+                                let replyFlags: Int32 = 0
+                                replyTo = .inputReplyToMessage(flags: replyFlags, replyToMsgId: 0, topMsgId: nil, replyToPeerId: nil, quoteText: nil, quoteEntities: nil, quoteOffset: nil)
+                            }
+                        } else {
+                            let replyFlags: Int32 = 0
+                            replyTo = .inputReplyToMessage(flags: replyFlags, replyToMsgId: 0, topMsgId: nil, replyToPeerId: nil, quoteText: nil, quoteEntities: nil, quoteOffset: nil)
+                        }
+                    
+                        sendMessageRequest = network.request(Api.functions.messages.sendScreenshotNotification(peer: inputPeer, replyTo: replyTo, randomId: uniqueId))
                         |> map(NetworkRequestResult.result)
                     case .secretMedia:
                         assertionFailure()
@@ -1149,7 +1636,7 @@ public final class PendingMessageManager {
                             |> mapError { _ -> MTRpcError in
                             }
                         case let .result(result):
-                            return strongSelf.applySentMessage(postbox: postbox, stateManager: stateManager, message: message, result: result)
+                            return strongSelf.applySentMessage(postbox: postbox, stateManager: stateManager, message: message, content: content, result: result)
                             |> mapError { _ -> MTRpcError in
                             }
                     }
@@ -1165,7 +1652,7 @@ public final class PendingMessageManager {
                                 strongSelf.beginSendingMessages([messageId])
                                 return
                             }
-                        } else if let failureReason = reasonForError(error.errorDescription) {
+                        } else if let failureReason = sendMessageReasonForError(error.errorDescription) {
                             if let context = strongSelf.messageContexts[message.id] {
                                 context.error = failureReason
                                 for f in context.statusSubscribers.copyItems() {
@@ -1232,10 +1719,19 @@ public final class PendingMessageManager {
         }
     }
     
-    private func applySentMessage(postbox: Postbox, stateManager: AccountStateManager, message: Message, result: Api.Updates) -> Signal<Void, NoError> {
+    private func applySentMessage(postbox: Postbox, stateManager: AccountStateManager, message: Message, content: PendingMessageUploadedContentAndReuploadInfo, result: Api.Updates) -> Signal<Void, NoError> {
         var apiMessage: Api.Message?
         for resultMessage in result.messages {
-            if let id = resultMessage.id(namespace: Namespaces.Message.allScheduled.contains(message.id.namespace) ? Namespaces.Message.ScheduledCloud : Namespaces.Message.Cloud) {
+            let targetNamespace: MessageId.Namespace
+            if Namespaces.Message.allScheduled.contains(message.id.namespace) {
+                targetNamespace = Namespaces.Message.ScheduledCloud
+            } else if Namespaces.Message.allQuickReply.contains(message.id.namespace) {
+                targetNamespace = Namespaces.Message.QuickReplyCloud
+            } else {
+                targetNamespace = Namespaces.Message.Cloud
+            }
+                
+            if let id = resultMessage.id(namespace: targetNamespace) {
                 if id.peerId == message.id.peerId {
                     apiMessage = resultMessage
                     break
@@ -1243,51 +1739,81 @@ public final class PendingMessageManager {
             }
         }
         
-        let silent = message.muted
-        var namespace = Namespaces.Message.Cloud
-        if let apiMessage = apiMessage, let id = apiMessage.id(namespace: message.scheduleTime != nil && message.scheduleTime == apiMessage.timestamp ? Namespaces.Message.ScheduledCloud : Namespaces.Message.Cloud) {
-            namespace = id.namespace
-        }
-        
-        return applyUpdateMessage(postbox: postbox, stateManager: stateManager, message: message, result: result, accountPeerId: self.accountPeerId)
-        |> afterDisposed { [weak self] in
-            if let strongSelf = self {
-                strongSelf.queue.async {
-                    if let context = strongSelf.peerSummaryContexts[message.id.peerId] {
-                        for subscriber in context.messageDeliveredSubscribers.copyItems() {
-                            subscriber((namespace, silent))
-                        }
+        if message.id.namespace == Namespaces.Message.QuickReplyLocal {
+        } else if let apiMessage {
+            var isScheduled = false
+            if message.scheduleTime != nil && message.scheduleTime == apiMessage.timestamp {
+                isScheduled = true
+            }
+            if case let .message(_, flags2, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _) = apiMessage {
+                if (flags2 & (1 << 4)) != 0 {
+                    isScheduled = true
+                }
+            }
+            if let id = apiMessage.id(namespace: isScheduled ? Namespaces.Message.ScheduledCloud : Namespaces.Message.Cloud) {
+                if let attribute = message.attributes.first(where: { $0 is OutgoingMessageInfoAttribute }) as? OutgoingMessageInfoAttribute, let correlationId = attribute.correlationId {
+                    self.correlationIdToSentMessageId.with { value in
+                        value.mapping[correlationId] = id
                     }
                 }
             }
         }
+        
+        let queue = self.queue
+        return applyUpdateMessage(postbox: postbox, stateManager: stateManager, message: message, cacheReferenceKey: content.cacheReferenceKey, result: result, accountPeerId: self.accountPeerId, pendingMessageEvent: { [weak self] pendingMessageDelivered in
+            queue.async {
+                if let strongSelf = self {
+                    if let context = strongSelf.peerSummaryContexts[message.id.peerId] {
+                        for subscriber in context.messageDeliveredSubscribers.copyItems() {
+                            subscriber([pendingMessageDelivered])
+                        }
+                    }
+                }
+            }
+        })
     }
     
     private func applySentGroupMessages(postbox: Postbox, stateManager: AccountStateManager, messages: [Message], result: Api.Updates) -> Signal<Void, NoError> {
-        var silent = false
         var namespace = Namespaces.Message.Cloud
-        if let message = messages.first, let apiMessage = result.messages.first, message.scheduleTime != nil && message.scheduleTime == apiMessage.timestamp {
-            namespace = Namespaces.Message.ScheduledCloud
-            if message.muted {
-                silent = true
+        if let message = messages.first {
+            if message.id.namespace == Namespaces.Message.QuickReplyLocal {
+                namespace = Namespaces.Message.QuickReplyCloud
+            } else if let apiMessage = result.messages.first, message.scheduleTime != nil && message.scheduleTime == apiMessage.timestamp {
+                namespace = Namespaces.Message.ScheduledCloud
+            } else if let apiMessage = result.messages.first, case let .message(_, flags2, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _) = apiMessage, (flags2 & (1 << 4)) != 0 {
+                namespace = Namespaces.Message.ScheduledCloud
             }
         }
         
-        return applyUpdateGroupMessages(postbox: postbox, stateManager: stateManager, messages: messages, result: result)
-        |> afterDisposed { [weak self] in
-            if let strongSelf = self {
-                strongSelf.queue.async {
-                    if let message = messages.first, let context = strongSelf.peerSummaryContexts[message.id.peerId] {
-                        for subscriber in context.messageDeliveredSubscribers.copyItems() {
-                            subscriber((namespace, silent))
+        if messages.count == result.messages.count {
+            for i in 0 ..< messages.count {
+                let message = messages[i]
+                let apiMessage = result.messages[i]
+                if let id = apiMessage.id(namespace: namespace) {
+                    if let attribute = message.attributes.first(where: { $0 is OutgoingMessageInfoAttribute }) as? OutgoingMessageInfoAttribute, let correlationId = attribute.correlationId {
+                        self.correlationIdToSentMessageId.with { value in
+                            value.mapping[correlationId] = id
                         }
                     }
                 }
             }
         }
+        let queue = self.queue
+        
+        return applyUpdateGroupMessages(postbox: postbox, stateManager: stateManager, messages: messages, result: result, pendingMessageEvents: { [weak self] pendingMessagesDelivered in
+            queue.async {
+                if let strongSelf = self {
+                    if let message = messages.first, let context = strongSelf.peerSummaryContexts[message.id.peerId], !pendingMessagesDelivered.isEmpty {
+                        for subscriber in context.messageDeliveredSubscribers.copyItems() {
+                            subscriber(pendingMessagesDelivered)
+                        }
+                    }
+                }
+            }
+        })
     }
     
-    public func deliveredMessageEvents(peerId: PeerId) -> Signal<(namespace: MessageId.Namespace, silent: Bool), NoError> {
+    public func deliveredMessageEvents(peerId: PeerId) -> Signal<[PeerPendingMessageDelivered], NoError> {
         return Signal { subscriber in
             let disposable = MetaDisposable()
             
@@ -1300,8 +1826,8 @@ public final class PendingMessageManager {
                     self.peerSummaryContexts[peerId] = summaryContext
                 }
                 
-                let index = summaryContext.messageDeliveredSubscribers.add({ namespace, silent in
-                    subscriber.putNext((namespace, silent))
+                let index = summaryContext.messageDeliveredSubscribers.add({ event in
+                    subscriber.putNext(event)
                 })
                 
                 disposable.set(ActionDisposable {
@@ -1351,5 +1877,9 @@ public final class PendingMessageManager {
             
             return disposable
         }
+    }
+    
+    public func synchronouslyLookupCorrelationId(correlationId: Int64) -> MessageId? {
+        return self.correlationIdToSentMessageId.with { $0.mapping[correlationId] }
     }
 }

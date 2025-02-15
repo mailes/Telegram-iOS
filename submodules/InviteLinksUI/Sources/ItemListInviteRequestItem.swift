@@ -389,7 +389,7 @@ public class ItemListInviteRequestItemNode: ListViewItemNode, ItemListItemNode {
                             let avatarListNode = PeerInfoAvatarListContainerNode(context: item.context)
                             avatarListWrapperNode.contentNode.clipsToBounds = true
                             avatarListNode.backgroundColor = .clear
-                            avatarListNode.peer = peer
+                            avatarListNode.peer = EnginePeer(peer)
                             avatarListNode.firstFullSizeOnly = true
                             avatarListNode.offsetLocation = true
                             avatarListNode.customCenterTapAction = { [weak self] in
@@ -405,7 +405,7 @@ public class ItemListInviteRequestItemNode: ListViewItemNode, ItemListItemNode {
                             avatarListContainerNode.addSubnode(avatarListNode.controlsClippingOffsetNode)
                             avatarListWrapperNode.contentNode.addSubnode(avatarListContainerNode)
                             
-                            avatarListNode.update(size: targetRect.size, peer: peer, customNode: nil, additionalEntry: .single(nil), isExpanded: true, transition: .immediate)
+                            avatarListNode.update(size: targetRect.size, peer: EnginePeer(peer), customNode: nil, additionalEntry: .single(nil), isExpanded: true, transition: .immediate)
                             strongSelf.offsetContainerNode.supernode?.addSubnode(avatarListWrapperNode)
                             
                             strongSelf.avatarListWrapperNode = avatarListWrapperNode
@@ -858,7 +858,7 @@ public class ItemListInviteRequestItemNode: ListViewItemNode, ItemListItemNode {
         }
     }
     
-    override public func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
+    override public func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.4)
     }
     

@@ -3,7 +3,6 @@ import UIKit
 import MapKit
 import Display
 import SwiftSignalKit
-import Postbox
 import TelegramCore
 import AvatarNode
 import AppBundle
@@ -27,10 +26,10 @@ private func generateSmallBackgroundImage(color: UIColor) -> UIImage? {
     })
 }
 
-class LocationPinAnnotation: NSObject, MKAnnotation {
+public class LocationPinAnnotation: NSObject, MKAnnotation {
     let context: AccountContext
     let theme: PresentationTheme
-    var coordinate: CLLocationCoordinate2D {
+    public var coordinate: CLLocationCoordinate2D {
         willSet {
             self.willChangeValue(forKey: "coordinate")
         }
@@ -39,8 +38,11 @@ class LocationPinAnnotation: NSObject, MKAnnotation {
         }
     }
     let location: TelegramMediaMap?
-    let peer: Peer?
-    let message: Message?
+    let queryId: Int64?
+    let resultId: String?
+    
+    let peer: EnginePeer?
+    let message: EngineMessage?
     let forcedSelection: Bool
     @objc dynamic var heading: NSNumber? {
         willSet {
@@ -52,14 +54,16 @@ class LocationPinAnnotation: NSObject, MKAnnotation {
     }
     
     var isSelf = false
-    var selfPeer: Peer?
-    var title: String? = ""
-    var subtitle: String? = ""
+    var selfPeer: EnginePeer?
+    public var title: String? = ""
+    public var subtitle: String? = ""
     
-    init(context: AccountContext, theme: PresentationTheme, peer: Peer) {
+    public init(context: AccountContext, theme: PresentationTheme, peer: EnginePeer?) {
         self.context = context
         self.theme = theme
         self.location = nil
+        self.queryId = nil
+        self.resultId = nil
         self.peer = peer
         self.message = nil
         self.coordinate = kCLLocationCoordinate2DInvalid
@@ -67,10 +71,12 @@ class LocationPinAnnotation: NSObject, MKAnnotation {
         super.init()
     }
     
-    init(context: AccountContext, theme: PresentationTheme, location: TelegramMediaMap, forcedSelection: Bool = false) {
+    public init(context: AccountContext, theme: PresentationTheme, location: TelegramMediaMap, queryId: Int64?, resultId: String?, forcedSelection: Bool = false) {
         self.context = context
         self.theme = theme
         self.location = location
+        self.queryId = queryId
+        self.resultId = resultId
         self.peer = nil
         self.message = nil
         self.coordinate = location.coordinate
@@ -78,10 +84,12 @@ class LocationPinAnnotation: NSObject, MKAnnotation {
         super.init()
     }
     
-    init(context: AccountContext, theme: PresentationTheme, message: Message, selfPeer: Peer?, isSelf: Bool, heading: Int32?) {
+    public init(context: AccountContext, theme: PresentationTheme, message: EngineMessage, selfPeer: EnginePeer?, isSelf: Bool, heading: Int32?) {
         self.context = context
         self.theme = theme
         self.location = nil
+        self.queryId = nil
+        self.resultId = nil
         self.peer = nil
         self.isSelf = isSelf
         self.message = message
@@ -96,7 +104,7 @@ class LocationPinAnnotation: NSObject, MKAnnotation {
         super.init()
     }
     
-    var id: String {
+    public var id: String {
         if let message = self.message {
             return "\(message.id.id)"
         } else if let peer = self.peer {
@@ -149,7 +157,7 @@ private func removePulseAnimations(layer: CALayer) {
     layer.removeAnimation(forKey: "pulse-opacity")
 }
 
-class LocationPinAnnotationView: MKAnnotationView {
+public class LocationPinAnnotationView: MKAnnotationView {
     let shadowNode: ASImageNode
     let pulseNode: ASImageNode
     let backgroundNode: ASImageNode
@@ -170,17 +178,17 @@ class LocationPinAnnotationView: MKAnnotationView {
     
     var headingKvoToken: NSKeyValueObservation?
     
-    override class var layerClass: AnyClass {
+    override public class var layerClass: AnyClass {
         return LocationPinAnnotationLayer.self
     }
     
-    func setZPosition(_ zPosition: CGFloat?) {
+    public func setZPosition(_ zPosition: CGFloat?) {
         if let layer = self.layer as? LocationPinAnnotationLayer {
             layer.customZPosition = zPosition
         }
     }
     
-    init(annotation: LocationPinAnnotation) {
+    public init(annotation: LocationPinAnnotation) {
         self.shadowNode = ASImageNode()
         self.shadowNode.image = UIImage(bundleImageName: "Location/PinShadow")
         if let image = self.shadowNode.image {
@@ -236,7 +244,7 @@ class LocationPinAnnotationView: MKAnnotationView {
         self.annotation = annotation
     }
     
-    required init?(coder aDecoder: NSCoder) {
+    required public init?(coder aDecoder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
     
@@ -244,7 +252,7 @@ class LocationPinAnnotationView: MKAnnotationView {
         self.headingKvoToken?.invalidate()
     }
     
-    var defaultZPosition: CGFloat {
+    public var defaultZPosition: CGFloat {
         if let annotation = self.annotation as? LocationPinAnnotation {
             if annotation.forcedSelection {
                 return 0.0
@@ -258,7 +266,7 @@ class LocationPinAnnotationView: MKAnnotationView {
         }
     }
     
-    override var annotation: MKAnnotation? {
+    override public var annotation: MKAnnotation? {
         didSet {
             if let annotation = self.annotation as? LocationPinAnnotation {
                 if let message = annotation.message {
@@ -355,14 +363,14 @@ class LocationPinAnnotationView: MKAnnotationView {
         }
     }
     
-    override func prepareForReuse() {
+    override public func prepareForReuse() {
         self.previousPeerId = nil
         self.smallNode.isHidden = true
         self.backgroundNode.isHidden = false
         self.appeared = false
     }
     
-    override func setSelected(_ selected: Bool, animated: Bool) {
+    override public func setSelected(_ selected: Bool, animated: Bool) {
         super.setSelected(selected, animated: animated)
         
         if let annotation = self.annotation as? LocationPinAnnotation {
@@ -538,8 +546,8 @@ class LocationPinAnnotationView: MKAnnotationView {
         }
     }
     
-    var previousPeerId: PeerId?
-    func setPeer(context: AccountContext, theme: PresentationTheme, peer: Peer) {
+    var previousPeerId: EnginePeer.Id?
+    public func setPeer(context: AccountContext, theme: PresentationTheme, peer: EnginePeer) {
         let avatarNode: AvatarNode
         if let currentAvatarNode = self.avatarNode {
             avatarNode = currentAvatarNode
@@ -554,11 +562,11 @@ class LocationPinAnnotationView: MKAnnotationView {
         
         if self.previousPeerId != peer.id {
             self.previousPeerId = peer.id
-            avatarNode.setPeer(context: context, theme: theme, peer: EnginePeer(peer))
+            avatarNode.setPeer(context: context, theme: theme, peer: peer)
         }
     }
     
-    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+    override public func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
         super.traitCollectionDidChange(previousTraitCollection)
         
         if let labelNode = self.labelNode {
@@ -581,7 +589,7 @@ class LocationPinAnnotationView: MKAnnotationView {
     }
     
     var isRaised = false
-    func setRaised(_ raised: Bool, animated: Bool, completion: @escaping () -> Void = {}) {
+    public func setRaised(_ raised: Bool, animated: Bool, completion: @escaping () -> Void = {}) {
         guard raised != self.isRaised else {
             return
         }
@@ -617,7 +625,7 @@ class LocationPinAnnotationView: MKAnnotationView {
         }
     }
     
-    func setCustom(_ custom: Bool, animated: Bool) {
+    public func setCustom(_ custom: Bool, animated: Bool) {
         if let annotation = self.annotation as? LocationPinAnnotation {
             self.iconNode.setSignal(venueIcon(engine: annotation.context.engine, type: "", background: false))
         }
@@ -668,7 +676,7 @@ class LocationPinAnnotationView: MKAnnotationView {
         self.dotNode.isHidden = !custom
     }
     
-    func animateAppearance() {
+    public func animateAppearance() {
         guard let annotation = self.annotation as? LocationPinAnnotation, annotation.location != nil && !annotation.forcedSelection else {
             return
         }
@@ -686,7 +694,7 @@ class LocationPinAnnotationView: MKAnnotationView {
         }
     }
     
-    override func layoutSubviews() {
+    override public func layoutSubviews() {
         super.layoutSubviews()
     
         guard !self.animating else {

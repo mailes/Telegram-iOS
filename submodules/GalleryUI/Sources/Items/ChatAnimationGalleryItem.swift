@@ -172,9 +172,7 @@ final class ChatAnimationGalleryItemNode: ZoomableContentGalleryItemNode {
             
             self._title.set(.single("\(fileReference.media.fileName ?? "") - \(dataSizeString(fileReference.media.size ?? 0, forceDecimal: false, formatting: DataSizeStringFormatting(presentationData: self.presentationData)))"))
             
-            let speedItem = UIBarButtonItem(image: UIImage(bundleImageName: "Media Gallery/SlowDown"), style: .plain, target: self, action: #selector(self.toggleSpeedButtonPressed))
-            let backgroundItem = UIBarButtonItem(image: backgroundButtonIcon, style: .plain, target: self, action: #selector(self.toggleBackgroundButtonPressed))
-            self._rightBarButtonItems.set(.single([speedItem, backgroundItem]))
+            self._rightBarButtonItems.set(.single([]))
         }
         self.contextAndMedia = (context, fileReference.abstract)
     }
@@ -345,7 +343,7 @@ final class ChatAnimationGalleryItemNode: ZoomableContentGalleryItemNode {
                     case .Fetching:
                         self.context.account.postbox.mediaBox.cancelInteractiveResourceFetch(resource.resource)
                     case .Remote:
-                        self.fetchDisposable.set(fetchedMediaResource(mediaBox: self.context.account.postbox.mediaBox, reference: resource, statsCategory: statsCategory ?? .generic).start())
+                    self.fetchDisposable.set(fetchedMediaResource(mediaBox: self.context.account.postbox.mediaBox, userLocation: (self.message?.id.peerId).flatMap(MediaResourceUserLocation.peer) ?? .other, userContentType: .file, reference: resource, statsCategory: statsCategory ?? .generic).start())
                     default:
                         break
                 }

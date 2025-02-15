@@ -15,7 +15,9 @@ final class AuthorizationSequencePasswordEntryControllerNode: ASDisplayNode, UIT
     
     private let animationNode: AnimatedStickerNode
     private let titleNode: ASTextNode
+    private let titleActivateAreaNode: AccessibilityAreaNode
     private let noticeNode: ASTextNode
+    private let noticeActivateAreaNode: AccessibilityAreaNode
     private let forgotNode: HighlightableButtonNode
     private let resetNode: HighlightableButtonNode
     private let proceedNode: SolidRoundedButtonNode
@@ -54,6 +56,8 @@ final class AuthorizationSequencePasswordEntryControllerNode: ASDisplayNode, UIT
     
     private var timer: SwiftSignalKit.Timer?
     
+    private let appearanceTimestamp = CACurrentMediaTime()
+    
     init(strings: PresentationStrings, theme: PresentationTheme) {
         self.strings = strings
         self.theme = theme
@@ -66,15 +70,23 @@ final class AuthorizationSequencePasswordEntryControllerNode: ASDisplayNode, UIT
         self.titleNode.displaysAsynchronously = false
         self.titleNode.attributedText = NSAttributedString(string: strings.LoginPassword_Title, font: Font.semibold(28.0), textColor: self.theme.list.itemPrimaryTextColor)
         
+        self.titleActivateAreaNode = AccessibilityAreaNode()
+        self.titleActivateAreaNode.accessibilityTraits = .staticText
+        
         self.noticeNode = ASTextNode()
         self.noticeNode.isUserInteractionEnabled = false
         self.noticeNode.displaysAsynchronously = false
         self.noticeNode.lineSpacing = 0.1
         self.noticeNode.attributedText = NSAttributedString(string: strings.TwoStepAuth_EnterPasswordHelp, font: Font.regular(17.0), textColor: self.theme.list.itemPrimaryTextColor, paragraphAlignment: .center)
         
+        self.noticeActivateAreaNode = AccessibilityAreaNode()
+        self.noticeActivateAreaNode.accessibilityTraits = .staticText
+        
         self.forgotNode = HighlightableButtonNode()
         self.forgotNode.displaysAsynchronously = false
         self.forgotNode.setAttributedTitle(NSAttributedString(string: self.strings.TwoStepAuth_EnterPasswordForgot, font: Font.regular(16.0), textColor: self.theme.list.itemAccentColor, paragraphAlignment: .center), for: [])
+        self.forgotNode.accessibilityLabel = self.strings.TwoStepAuth_EnterPasswordForgot
+        self.forgotNode.accessibilityTraits = [.button]
         
         self.resetNode = HighlightableButtonNode()
         self.resetNode.displaysAsynchronously = false
@@ -93,6 +105,7 @@ final class AuthorizationSequencePasswordEntryControllerNode: ASDisplayNode, UIT
         self.codeField.textField.keyboardAppearance = self.theme.rootController.keyboardColor.keyboardAppearance
         self.codeField.textField.disableAutomaticKeyboardHandling = [.forward, .backward]
         self.codeField.textField.tintColor = self.theme.list.itemAccentColor
+        self.codeField.textField.accessibilityHint = self.strings.Login_VoiceOver_Password
         
         self.proceedNode = SolidRoundedButtonNode(title: self.strings.Login_Continue, theme: SolidRoundedButtonTheme(theme: self.theme), height: 50.0, cornerRadius: 11.0, gloss: false)
         self.proceedNode.progressType = .embedded
@@ -112,9 +125,11 @@ final class AuthorizationSequencePasswordEntryControllerNode: ASDisplayNode, UIT
         self.addSubnode(self.codeSeparatorNode)
         self.addSubnode(self.codeField)
         self.addSubnode(self.titleNode)
+        self.addSubnode(self.titleActivateAreaNode)
         self.addSubnode(self.forgotNode)
         self.addSubnode(self.resetNode)
         self.addSubnode(self.noticeNode)
+        self.addSubnode(self.noticeActivateAreaNode)
         self.addSubnode(self.animationNode)
         self.addSubnode(self.proceedNode)
         
@@ -147,7 +162,18 @@ final class AuthorizationSequencePasswordEntryControllerNode: ASDisplayNode, UIT
     }
     
     func containerLayoutUpdated(_ layout: ContainerViewLayout, navigationBarHeight: CGFloat, transition: ContainedViewLayoutTransition) {
+        let previousInputHeight = self.layoutArguments?.0.inputHeight ?? 0.0
+        let newInputHeight = layout.inputHeight ?? 0.0
+        
         self.layoutArguments = (layout, navigationBarHeight)
+        
+        var layout = layout
+        if CACurrentMediaTime() - self.appearanceTimestamp < 2.0, newInputHeight < previousInputHeight {
+            layout = layout.withUpdatedInputHeight(previousInputHeight)
+        }
+        
+        let inset: CGFloat = 24.0
+        let maximumWidth: CGFloat = min(430.0, layout.size.width)
         
         var insets = layout.insets(options: [])
         insets.top = layout.statusBarHeight ?? 20.0
@@ -160,23 +186,21 @@ final class AuthorizationSequencePasswordEntryControllerNode: ASDisplayNode, UIT
         
         self.titleNode.attributedText = NSAttributedString(string: self.strings.LoginPassword_Title, font: Font.semibold(28.0), textColor: self.theme.list.itemPrimaryTextColor)
         
-        let inset: CGFloat = 24.0
-        
         let animationSize = CGSize(width: 100.0, height: 100.0)
-        let titleSize = self.titleNode.measure(CGSize(width: layout.size.width, height: CGFloat.greatestFiniteMagnitude))
+        let titleSize = self.titleNode.measure(CGSize(width: maximumWidth, height: CGFloat.greatestFiniteMagnitude))
         
-        let noticeSize = self.noticeNode.measure(CGSize(width: layout.size.width - 28.0, height: CGFloat.greatestFiniteMagnitude))
-        let forgotSize = self.forgotNode.measure(CGSize(width: layout.size.width, height: CGFloat.greatestFiniteMagnitude))
-        let resetSize = self.resetNode.measure(CGSize(width: layout.size.width, height: CGFloat.greatestFiniteMagnitude))
-        let proceedHeight = self.proceedNode.updateLayout(width: layout.size.width - inset * 2.0, transition: transition)
-        let proceedSize = CGSize(width: layout.size.width - inset * 2.0, height: proceedHeight)
+        let noticeSize = self.noticeNode.measure(CGSize(width: maximumWidth - 28.0, height: CGFloat.greatestFiniteMagnitude))
+        let forgotSize = self.forgotNode.measure(CGSize(width: maximumWidth, height: CGFloat.greatestFiniteMagnitude))
+        let resetSize = self.resetNode.measure(CGSize(width: maximumWidth, height: CGFloat.greatestFiniteMagnitude))
+        let proceedHeight = self.proceedNode.updateLayout(width: maximumWidth - inset * 2.0, transition: transition)
+        let proceedSize = CGSize(width: maximumWidth - inset * 2.0, height: proceedHeight)
         
         var items: [AuthorizationLayoutItem] = []
         items.append(AuthorizationLayoutItem(node: self.titleNode, size: titleSize, spacingBefore: AuthorizationLayoutItemSpacing(weight: titleInset, maxValue: titleInset), spacingAfter: AuthorizationLayoutItemSpacing(weight: 0.0, maxValue: 0.0)))
         items.append(AuthorizationLayoutItem(node: self.noticeNode, size: noticeSize, spacingBefore: AuthorizationLayoutItemSpacing(weight: 18.0, maxValue: 18.0), spacingAfter: AuthorizationLayoutItemSpacing(weight: 0.0, maxValue: 0.0)))
         
-        items.append(AuthorizationLayoutItem(node: self.codeField, size: CGSize(width: layout.size.width - 80.0, height: 44.0), spacingBefore: AuthorizationLayoutItemSpacing(weight: 32.0, maxValue: 60.0), spacingAfter: AuthorizationLayoutItemSpacing(weight: 0.0, maxValue: 0.0)))
-        items.append(AuthorizationLayoutItem(node: self.codeSeparatorNode, size: CGSize(width: layout.size.width - 48.0, height: UIScreenPixel), spacingBefore: AuthorizationLayoutItemSpacing(weight: 0.0, maxValue: 0.0), spacingAfter: AuthorizationLayoutItemSpacing(weight: 0.0, maxValue: 0.0)))
+        items.append(AuthorizationLayoutItem(node: self.codeField, size: CGSize(width: maximumWidth - 80.0, height: 44.0), spacingBefore: AuthorizationLayoutItemSpacing(weight: 32.0, maxValue: 60.0), spacingAfter: AuthorizationLayoutItemSpacing(weight: 0.0, maxValue: 0.0)))
+        items.append(AuthorizationLayoutItem(node: self.codeSeparatorNode, size: CGSize(width: maximumWidth - 48.0, height: UIScreenPixel), spacingBefore: AuthorizationLayoutItemSpacing(weight: 0.0, maxValue: 0.0), spacingAfter: AuthorizationLayoutItemSpacing(weight: 0.0, maxValue: 0.0)))
         
         items.append(AuthorizationLayoutItem(node: self.forgotNode, size: forgotSize, spacingBefore: AuthorizationLayoutItemSpacing(weight: 48.0, maxValue: 100.0), spacingAfter: AuthorizationLayoutItemSpacing(weight: 0.0, maxValue: 0.0)))
         
@@ -203,6 +227,12 @@ final class AuthorizationSequencePasswordEntryControllerNode: ASDisplayNode, UIT
         self.animationNode.updateLayout(size: animationSize)
         
         let _ = layoutAuthorizationItems(bounds: CGRect(origin: CGPoint(x: 0.0, y: insets.top), size: CGSize(width: layout.size.width, height: layout.size.height - insets.top - insets.bottom - additionalBottomInset)), items: items, transition: transition, failIfDoesNotFit: false)
+        
+        self.titleActivateAreaNode.accessibilityLabel = self.titleNode.attributedText?.string ?? ""
+        self.noticeActivateAreaNode.accessibilityLabel = self.noticeNode.attributedText?.string ?? ""
+        
+        self.titleActivateAreaNode.frame = self.titleNode.frame
+        self.noticeActivateAreaNode.frame = self.noticeNode.frame
     }
     
     func activateInput() {

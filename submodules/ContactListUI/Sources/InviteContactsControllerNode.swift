@@ -52,11 +52,11 @@ private enum InviteContactsEntry: Comparable, Identifiable {
             case let .peer(_, id, contact, count, selection, theme, strings, nameSortOrder, nameDisplayOrder):
                 let status: ContactsPeerItemStatus
                 if count != 0 {
-                    status = .custom(string: strings.Contacts_ImportersCount(count), multiline: false)
+                    status = .custom(string: NSAttributedString(string: strings.Contacts_ImportersCount(count)), multiline: false, isActive: false, icon: nil)
                 } else {
                     status = .none
                 }
-                let peer: EnginePeer = .user(TelegramUser(id: EnginePeer.Id(namespace: .max, id: EnginePeer.Id.Id._internalFromInt64Value(0)), accessHash: nil, firstName: contact.firstName, lastName: contact.lastName, username: nil, phone: nil, photo: [], botInfo: nil, restrictionInfo: nil, flags: [], emojiStatus: nil, usernames: []))
+                let peer: EnginePeer = .user(TelegramUser(id: EnginePeer.Id(namespace: .max, id: EnginePeer.Id.Id._internalFromInt64Value(0)), accessHash: nil, firstName: contact.firstName, lastName: contact.lastName, username: nil, phone: nil, photo: [], botInfo: nil, restrictionInfo: nil, flags: [], emojiStatus: nil, usernames: [], storiesHidden: nil, nameColor: nil, backgroundEmojiId: nil, profileColor: nil, profileBackgroundEmojiId: nil, subscriberCount: nil, verificationIconFileId: nil))
                 return ContactsPeerItem(presentationData: ItemListPresentationData(presentationData), sortOrder: nameSortOrder, displayOrder: nameDisplayOrder, context: context, peerMode: .peer, peer: .peer(peer: peer, chatPeer: peer), status: status, enabled: true, selection: selection, editing: ContactsPeerItemEditing(editable: false, editing: false, revealed: false), index: nil, header: ChatListSearchItemHeader(type: .contacts, theme: theme, strings: strings, actionTitle: nil, action: nil), action: { _ in
                     interaction.toggleContact(id)
                 })
@@ -325,7 +325,7 @@ final class InviteContactsControllerNode: ASDisplayNode {
                     strongSelf.updateThemeAndStrings()
                 }
             }
-        })
+        }).strict()
         
         let selectionStateSignal = self.selectionStatePromise.get()
         let transition: Signal<InviteContactsTransition, NoError>
@@ -428,7 +428,7 @@ final class InviteContactsControllerNode: ASDisplayNode {
         
         self.disposable = transition.start(next: { [weak self] transition in
             self?.enqueueTransition(transition)
-        })
+        }).strict()
         
         shareImpl = { [weak self] in
             if let strongSelf = self {
@@ -513,6 +513,7 @@ final class InviteContactsControllerNode: ASDisplayNode {
                 strongSelf.selectionState = strongSelf.selectionState.withSelectedContactId(id)
                 strongSelf.requestDeactivateSearch?()
             }
+        }, openDisabledPeer: { _, _ in
         }, contextAction: nil), cancel: { [weak self] in
             if let requestDeactivateSearch = self?.requestDeactivateSearch {
                 requestDeactivateSearch()

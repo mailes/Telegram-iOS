@@ -3,7 +3,6 @@ import AsyncDisplayKit
 import Display
 import ComponentFlow
 import SwiftSignalKit
-import Postbox
 import TelegramCore
 import AccountContext
 import TelegramPresentationData
@@ -15,6 +14,71 @@ import AnimationCache
 import MultiAnimationRenderer
 import EmojiTextAttachmentView
 import TextFormat
+import AppBundle
+import AnimatedTextComponent
+
+private let tagImage: UIImage? = {
+    return generateTintedImage(image: UIImage(bundleImageName: "Chat/Message/ReactionTagBackground"), color: .white)?.stretchableImage(withLeftCapWidth: 8, topCapHeight: 15)
+}()
+
+private final class StarsButtonEffectLayer: SimpleLayer {
+    let emitterLayer = CAEmitterLayer()
+    
+    override init() {
+        super.init()
+        
+        self.addSublayer(self.emitterLayer)
+    }
+    
+    override init(layer: Any) {
+        super.init(layer: layer)
+    }
+    
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+    
+    private func setup() {
+        let color = UIColor(rgb: 0xffbe27)
+        
+        let emitter = CAEmitterCell()
+        emitter.name = "emitter"
+        emitter.contents = UIImage(bundleImageName: "Premium/Stars/Particle")?.cgImage
+        emitter.birthRate = 25.0
+        emitter.lifetime = 2.0
+        emitter.velocity = 12.0
+        emitter.velocityRange = 3
+        emitter.scale = 0.1
+        emitter.scaleRange = 0.08
+        emitter.alphaRange = 0.1
+        emitter.emissionRange = .pi * 2.0
+        emitter.setValue(3.0, forKey: "mass")
+        emitter.setValue(2.0, forKey: "massRange")
+        
+        let staticColors: [Any] = [
+            color.withAlphaComponent(0.0).cgColor,
+            color.cgColor,
+            color.cgColor,
+            color.withAlphaComponent(0.0).cgColor
+        ]
+        let staticColorBehavior = CAEmitterCell.createEmitterBehavior(type: "colorOverLife")
+        staticColorBehavior.setValue(staticColors, forKey: "colors")
+        emitter.setValue([staticColorBehavior], forKey: "emitterBehaviors")
+        
+        self.emitterLayer.emitterCells = [emitter]
+    }
+    
+    func update(size: CGSize) {
+        if self.emitterLayer.emitterCells == nil {
+            self.setup()
+        }
+        self.emitterLayer.emitterShape = .circle
+        self.emitterLayer.emitterSize = CGSize(width: size.width * 0.7, height: size.height * 0.7)
+        self.emitterLayer.emitterMode = .surface
+        self.emitterLayer.frame = CGRect(origin: .zero, size: size)
+        self.emitterLayer.emitterPosition = CGPoint(x: size.width / 2.0, y: size.height / 2.0)
+    }
+}
 
 public final class ReactionIconView: PortalSourceView {
     private var animationLayer: InlineStickerItemLayer?
@@ -24,11 +88,13 @@ public final class ReactionIconView: PortalSourceView {
     private var file: TelegramMediaFile?
     private var animationCache: AnimationCache?
     private var animationRenderer: MultiAnimationRenderer?
+    private var contentTintColor: UIColor?
     private var placeholderColor: UIColor?
     private var size: CGSize?
     private var animateIdle: Bool?
     private var reaction: MessageReaction.Reaction?
     
+    private var isPaused: Bool = false
     private var isAnimationHidden: Bool = false
     
     private var disposable: Disposable?
@@ -59,6 +125,7 @@ public final class ReactionIconView: PortalSourceView {
         fileId: Int64,
         animationCache: AnimationCache,
         animationRenderer: MultiAnimationRenderer,
+        tintColor: UIColor?,
         placeholderColor: UIColor,
         animateIdle: Bool,
         reaction: MessageReaction.Reaction,
@@ -67,6 +134,7 @@ public final class ReactionIconView: PortalSourceView {
         self.context = context
         self.animationCache = animationCache
         self.animationRenderer = animationRenderer
+        self.contentTintColor = tintColor
         self.placeholderColor = placeholderColor
         self.size = size
         self.animateIdle = animateIdle
@@ -94,7 +162,7 @@ public final class ReactionIconView: PortalSourceView {
                     }
                     strongSelf.file = files[fileId]
                     strongSelf.reloadFile()
-                })
+                }).strict()
             }
         }
         
@@ -109,10 +177,16 @@ public final class ReactionIconView: PortalSourceView {
                 iconSize = CGSize(width: floor(size.width * 1.25), height: floor(size.height * 1.25))
                 animationLayer.masksToBounds = true
                 animationLayer.cornerRadius = floor(size.width * 0.2)
+            case .stars:
+                iconSize = CGSize(width: floor(size.width * 1.25), height: floor(size.height * 1.25))
+                animationLayer.masksToBounds = false
+                animationLayer.cornerRadius = 0.0
             }
             
             transition.updateFrame(layer: animationLayer, frame: CGRect(origin: CGPoint(x: floor((size.width - iconSize.width) / 2.0), y: floor((size.height - iconSize.height) / 2.0)), size: iconSize))
         }
+        
+        self.updateTintColor()
     }
     
     public func updateIsAnimationHidden(isAnimationHidden: Bool, transition: ContainedViewLayoutTransition) {
@@ -121,6 +195,29 @@ public final class ReactionIconView: PortalSourceView {
             
             if let animationLayer = self.animationLayer {
                 transition.updateAlpha(layer: animationLayer, alpha: isAnimationHidden ? 0.0 : 1.0)
+            }
+        }
+    }
+    
+    func updateIsPaused(isPaused: Bool) {
+        guard let context = self.context, let animateIdle = self.animateIdle, let animationLayer = self.animationLayer else {
+            return
+        }
+        self.isPaused = isPaused
+        
+        let isVisibleForAnimations = !self.isPaused && animateIdle && context.sharedContext.energyUsageSettings.loopEmoji
+        if isVisibleForAnimations != animationLayer.isVisibleForAnimations {
+            if isPaused {
+                animationLayer.animateAlpha(from: 1.0, to: 0.0, duration: 0.15, removeOnCompletion: false, completion: { [weak animationLayer] _ in
+                    animationLayer?.removeFromSuperlayer()
+                })
+                self.animationLayer = nil
+                self.reloadFile()
+                if let animationLayer = self.animationLayer {
+                    animationLayer.animateAlpha(from: 0.0, to: 1.0, duration: 0.12)
+                }
+            } else {
+                animationLayer.isVisibleForAnimations = !self.isPaused && animateIdle && context.sharedContext.energyUsageSettings.loopEmoji
             }
         }
     }
@@ -139,10 +236,13 @@ public final class ReactionIconView: PortalSourceView {
             iconSize = CGSize(width: floor(size.width * 2.0), height: floor(size.height * 2.0))
         case .custom:
             iconSize = CGSize(width: floor(size.width * 1.25), height: floor(size.height * 1.25))
+        case .stars:
+            iconSize = CGSize(width: floor(size.width * 1.25), height: floor(size.height * 1.25))
         }
         
         let animationLayer = InlineStickerItemLayer(
-            context: context,
+            context: .account(context),
+            userLocation: .other,
             attemptSynchronousLoad: false,
             emoji: ChatTextInputTextCustomEmojiAttribute(
                 interactivelySelectedFromPackId: nil,
@@ -152,6 +252,7 @@ public final class ReactionIconView: PortalSourceView {
             file: file,
             cache: animationCache,
             renderer: animationRenderer,
+            unique: true,
             placeholderColor: placeholderColor,
             pointSize: CGSize(width: iconSize.width * 2.0, height: iconSize.height * 2.0)
         )
@@ -165,11 +266,44 @@ public final class ReactionIconView: PortalSourceView {
         case .custom:
             animationLayer.masksToBounds = true
             animationLayer.cornerRadius = floor(size.width * 0.3)
+        case .stars:
+            animationLayer.masksToBounds = false
+            animationLayer.cornerRadius = 0.0
         }
         
         animationLayer.frame = CGRect(origin: CGPoint(x: floor((size.width - iconSize.width) / 2.0), y: floor((size.height - iconSize.height) / 2.0)), size: iconSize)
         
-        animationLayer.isVisibleForAnimations = animateIdle
+        animationLayer.isVisibleForAnimations = !self.isPaused && animateIdle && context.sharedContext.energyUsageSettings.loopEmoji
+        self.updateTintColor()
+    }
+    
+    private func updateTintColor() {
+        guard let file = self.file, let animationLayer = self.animationLayer else {
+            return
+        }
+        var accentTint = false
+        if file.isCustomTemplateEmoji {
+            accentTint = true
+        }
+        for attribute in file.attributes {
+            if case let .CustomEmoji(_, _, _, packReference) = attribute {
+                switch packReference {
+                case let .id(id, _):
+                    if id == 773947703670341676 || id == 2964141614563343 {
+                        accentTint = true
+                    }
+                default:
+                    break
+                }
+            }
+        }
+        if accentTint, let tintColor = self.contentTintColor {
+            animationLayer.contentTintColor = tintColor
+            animationLayer.dynamicColor = tintColor
+        } else {
+            animationLayer.contentTintColor = nil
+            animationLayer.dynamicColor = nil
+        }
     }
     
     func reset() {
@@ -181,6 +315,12 @@ public final class ReactionIconView: PortalSourceView {
         if let disposable = self.disposable {
             self.disposable = nil
             disposable.dispose()
+        }
+        
+        if !self.subviews.isEmpty {
+            for subview in Array(self.subviews) {
+                subview.removeFromSuperview()
+            }
         }
         
         self.context = nil
@@ -221,24 +361,30 @@ public final class ReactionButtonAsyncNode: ContextControllerSourceView {
             var foreground: UInt32
             var extractedBackground: UInt32
             var extractedForeground: UInt32
+            var extractedSelectedForeground: UInt32
             var isSelected: Bool
         }
         
         struct Counter: Equatable {
             var components: [CounterLayout.Component]
+            var extractedComponents: [CounterLayout.Component]
         }
         
         struct Layout: Equatable {
             var colors: Colors
             var size: CGSize
+            var extractedSize: CGSize
             var counter: Counter?
+            var isTag: Bool
         }
         
         private struct AnimationState {
             var fromCounter: Counter?
+            var fromExtracted: Bool
             var fromColors: Colors
             var startTime: Double
             var duration: Double
+            var curve: ComponentTransition.Animation.Curve
         }
         
         private var isExtracted: Bool = false
@@ -249,6 +395,9 @@ public final class ReactionButtonAsyncNode: ContextControllerSourceView {
         
         override init(frame: CGRect) {
             super.init(frame: CGRect())
+            
+            self.layer.contentsScale = UIScreenScale
+            self.layer.contentsGravity = .topLeft
         }
         
         required init?(coder: NSCoder) {
@@ -263,13 +412,12 @@ public final class ReactionButtonAsyncNode: ContextControllerSourceView {
         func update(layout: Layout) {
             if self.currentLayout != layout {
                 if let currentLayout = self.currentLayout, (currentLayout.counter != layout.counter || currentLayout.colors.isSelected != layout.colors.isSelected) {
-                    self.animationState = AnimationState(fromCounter: currentLayout.counter, fromColors: currentLayout.colors, startTime: CACurrentMediaTime(), duration: 0.15 * UIView.animationDurationFactor())
+                    self.animationState = AnimationState(fromCounter: currentLayout.counter, fromExtracted: self.isExtracted, fromColors: currentLayout.colors, startTime: CACurrentMediaTime(), duration: 0.15 * UIView.animationDurationFactor(), curve: .linear)
                 }
                 
                 self.currentLayout = layout
                 
                 self.updateBackgroundImage(animated: false)
-                
                 self.updateAnimation()
             }
         }
@@ -305,7 +453,21 @@ public final class ReactionButtonAsyncNode: ContextControllerSourceView {
         func updateIsExtracted(isExtracted: Bool, animated: Bool) {
             if self.isExtracted != isExtracted {
                 self.isExtracted = isExtracted
-                self.updateBackgroundImage(animated: animated)
+                
+                if let currentLayout = self.currentLayout {
+                    self.animationState = AnimationState(
+                        fromCounter: currentLayout.counter,
+                        fromExtracted: !isExtracted,
+                        fromColors: currentLayout.colors,
+                        startTime: CACurrentMediaTime(),
+                        duration: 0.5 * UIView.animationDurationFactor(),
+                        curve: .spring
+                    )
+                    self.updateBackgroundImage(animated: false)
+                    updateAnimation()
+                } else {
+                    self.updateBackgroundImage(animated: true)
+                }
             }
         }
         
@@ -314,9 +476,18 @@ public final class ReactionButtonAsyncNode: ContextControllerSourceView {
                 return
             }
             
-            var totalComponentWidth: CGFloat = 0.0
+            var counterComponents: [CounterLayout.Component]?
             if let counter = layout.counter {
-                for component in counter.components {
+                if self.isExtracted {
+                    counterComponents = counter.extractedComponents
+                } else {
+                    counterComponents = counter.components
+                }
+            }
+            
+            var totalComponentWidth: CGFloat = 0.0
+            if let counterComponents {
+                for component in counterComponents {
                     totalComponentWidth += component.bounds.width
                 }
             }
@@ -324,104 +495,176 @@ public final class ReactionButtonAsyncNode: ContextControllerSourceView {
             let isExtracted = self.isExtracted
             let animationState = self.animationState
             
+            var animationFraction: CGFloat
+            var fixedTransitionDirection: Bool?
+            if let animationState, animationState.fromCounter != nil {
+                animationFraction = max(0.0, min(1.0, (CACurrentMediaTime() - animationState.startTime) / animationState.duration))
+                animationFraction = animationState.curve.solve(at: animationFraction)
+                if animationState.fromExtracted != isExtracted {
+                    fixedTransitionDirection = isExtracted ? true : false
+                }
+            } else {
+                animationFraction = 1.0
+            }
+            
+            let targetImageSize = isExtracted ? layout.extractedSize : layout.size
+            var imageSize = targetImageSize
+            if let animationState {
+                let sourceImageSize = animationState.fromExtracted ? layout.extractedSize : layout.size
+                imageSize = CGSize(
+                    width: floor(sourceImageSize.width * (1.0 - animationFraction) + targetImageSize.width * animationFraction),
+                    height: floor(sourceImageSize.height * (1.0 - animationFraction) + targetImageSize.height * animationFraction)
+                )
+            }
+            
             DispatchQueue.global().async { [weak self] in
-                var image: UIImage?
-                
-                if true {
-                    image = generateImage(layout.size, rotatedContext: { size, context in
-                        context.clear(CGRect(origin: CGPoint(), size: size))
-                        UIGraphicsPushContext(context)
-                        
-                        func drawContents(colors: Colors) {
-                            let backgroundColor: UIColor
-                            let foregroundColor: UIColor
-                            if isExtracted {
-                                backgroundColor = UIColor(argb: colors.extractedBackground)
-                                foregroundColor = UIColor(argb: colors.extractedForeground)
+                let image = generateImage(imageSize, rotatedContext: { size, context in
+                    context.clear(CGRect(origin: CGPoint(), size: size))
+                    UIGraphicsPushContext(context)
+                    
+                    func drawContents(colors: Colors) {
+                        let backgroundColor: UIColor
+                        let foregroundColor: UIColor
+                        if isExtracted {
+                            backgroundColor = UIColor(argb: colors.extractedBackground)
+                            if layout.colors.isSelected {
+                                foregroundColor = UIColor(argb: colors.extractedSelectedForeground)
                             } else {
-                                backgroundColor = UIColor(argb: colors.background)
-                                foregroundColor = UIColor(argb: colors.foreground)
+                                foregroundColor = UIColor(argb: colors.extractedForeground)
                             }
-                            
-                            context.setBlendMode(.copy)
-                            
+                        } else {
+                            backgroundColor = UIColor(argb: colors.background)
+                            foregroundColor = UIColor(argb: colors.foreground)
+                        }
+                        
+                        context.setBlendMode(.copy)
+                        
+                        if layout.isTag {
+                            if let tagImage {
+                                let rect = CGRect(origin: CGPoint(), size: CGSize(width: size.width, height: size.height))
+                                
+                                context.setFillColor(UIColor(rgb: layout.colors.background).cgColor)
+                                context.fill(rect)
+                                
+                                UIGraphicsPushContext(context)
+                                tagImage.draw(in: rect, blendMode: .destinationIn, alpha: 1.0)
+                                UIGraphicsPopContext()
+                                
+                                context.setBlendMode(.destinationIn)
+                                context.setFillColor(UIColor(white: 1.0, alpha: 0.5).cgColor)
+                                context.fillEllipse(in: CGRect(origin: CGPoint(x: rect.width - 6.0 - 6.0, y: floor((rect.height - 6.0) * 0.5)), size: CGSize(width: 6.0, height: 6.0)))
+                                context.setBlendMode(.copy)
+                            }
+                        } else {
                             context.setFillColor(backgroundColor.cgColor)
                             context.fillEllipse(in: CGRect(origin: CGPoint(), size: CGSize(width: size.height, height: size.height)))
                             context.fillEllipse(in: CGRect(origin: CGPoint(x: size.width - size.height, y: 0.0), size: CGSize(width: size.height, height: size.height)))
                             context.fill(CGRect(origin: CGPoint(x: size.height / 2.0, y: 0.0), size: CGSize(width: size.width - size.height, height: size.height)))
+                        }
+                        
+                        if let counterComponents {
+                            let isForegroundTransparent = foregroundColor.alpha < 1.0
+                            context.setBlendMode(isForegroundTransparent ? .copy : .normal)
                             
-                            if let counter = layout.counter {
-                                let isForegroundTransparent = foregroundColor.alpha < 1.0
-                                context.setBlendMode(isForegroundTransparent ? .copy : .normal)
+                            let textOrigin: CGFloat
+                            if layout.isTag {
+                                textOrigin = 32.0
+                            } else {
+                                textOrigin = 36.0
+                            }
+                            
+                            var leftTextOrigin = textOrigin
+                            
+                            for i in 0 ..< counterComponents.count {
+                                let component = counterComponents[i]
+                                var componentAlpha: CGFloat = 1.0
+                                var componentVerticalOffset: CGFloat = 0.0
                                 
-                                let textOrigin: CGFloat = 36.0
+                                var componentAnimationFraction = animationFraction
                                 
-                                var rightTextOrigin = textOrigin + totalComponentWidth
-                                
-                                let animationFraction: CGFloat
-                                if let animationState = animationState, animationState.fromCounter != nil {
-                                    animationFraction = max(0.0, min(1.0, (CACurrentMediaTime() - animationState.startTime) / animationState.duration))
-                                } else {
-                                    animationFraction = 1.0
-                                }
-                                
-                                for i in (0 ..< counter.components.count).reversed() {
-                                    let component = counter.components[i]
-                                    var componentAlpha: CGFloat = 1.0
-                                    var componentVerticalOffset: CGFloat = 0.0
+                                if let animationState = animationState, let fromCounter = animationState.fromCounter {
+                                    let fromCounterComponents = animationState.fromExtracted ? fromCounter.extractedComponents : fromCounter.components
                                     
-                                    if let animationState = animationState, let fromCounter = animationState.fromCounter {
-                                        let reverseIndex = counter.components.count - 1 - i
-                                        if reverseIndex < fromCounter.components.count {
-                                            let previousComponent = fromCounter.components[fromCounter.components.count - 1 - reverseIndex]
+                                    let countNorm = max(counterComponents.count, fromCounterComponents.count)
+                                    let countFraction = CGFloat(i + 1) / CGFloat(countNorm)
+                                    
+                                    let minDurationCompression = 0.25
+                                    let maxDurationCompression = 1.0
+                                    
+                                    let durationCompression = minDurationCompression * (1.0 - countFraction) + maxDurationCompression * countFraction
+                                    
+                                    let adjustedDuration = animationState.duration * durationCompression
+                                    
+                                    componentAnimationFraction = max(0.0, min(1.0, (CACurrentMediaTime() - animationState.startTime) / adjustedDuration))
+                                    componentAnimationFraction = animationState.curve.solve(at: componentAnimationFraction)
+                                    
+                                    if i < fromCounterComponents.count {
+                                        let previousComponent = fromCounterComponents[i]
+                                        
+                                        if previousComponent != component {
+                                            componentAlpha = componentAnimationFraction
+                                            componentVerticalOffset = -(1.0 - componentAnimationFraction) * 12.0
+                                            let previousComponentAlpha = 1.0 - componentAlpha
+                                            var previousComponentVerticalOffset = componentAnimationFraction * 12.0
                                             
-                                            if previousComponent != component {
-                                                componentAlpha = animationFraction
-                                                componentVerticalOffset = -(1.0 - animationFraction) * 8.0
-                                                if previousComponent.string < component.string {
+                                            if let fixedTransitionDirection {
+                                                if !fixedTransitionDirection {
                                                     componentVerticalOffset = -componentVerticalOffset
-                                                }
-                                                
-                                                let previousComponentAlpha = 1.0 - componentAlpha
-                                                var previousComponentVerticalOffset = animationFraction * 8.0
-                                                if previousComponent.string < component.string {
                                                     previousComponentVerticalOffset = -previousComponentVerticalOffset
                                                 }
-                                                
-                                                var componentOrigin = rightTextOrigin - previousComponent.bounds.width
-                                                componentOrigin = max(componentOrigin, layout.size.height / 2.0 + UIScreenPixel)
-                                                let previousColor: UIColor
-                                                if isForegroundTransparent {
-                                                    previousColor = foregroundColor.mixedWith(backgroundColor, alpha: 1.0 - previousComponentAlpha)
-                                                } else {
-                                                    previousColor = foregroundColor.withMultipliedAlpha(previousComponentAlpha)
+                                            } else {
+                                                if previousComponent.string < component.string {
+                                                    componentVerticalOffset = -componentVerticalOffset
+                                                    previousComponentVerticalOffset = -previousComponentVerticalOffset
                                                 }
-                                                let string = NSAttributedString(string: previousComponent.string, font: Font.medium(11.0), textColor: previousColor)
-                                                string.draw(at: previousComponent.bounds.origin.offsetBy(dx: componentOrigin, dy: floorToScreenPixels(size.height - previousComponent.bounds.height) / 2.0 + previousComponentVerticalOffset))
+                                            }
+                                            
+                                            var componentOrigin = leftTextOrigin
+                                            componentOrigin = max(componentOrigin, layout.size.height / 2.0 + UIScreenPixel)
+                                            let previousColor: UIColor
+                                            if isForegroundTransparent {
+                                                previousColor = foregroundColor.mixedWith(backgroundColor, alpha: 1.0 - previousComponentAlpha)
+                                            } else {
+                                                previousColor = foregroundColor.withMultipliedAlpha(previousComponentAlpha)
+                                            }
+                                            let string = NSAttributedString(string: previousComponent.string, font: Font.medium(11.0), textColor: previousColor)
+                                            string.draw(at: previousComponent.bounds.origin.offsetBy(dx: componentOrigin, dy: floorToScreenPixels(size.height - previousComponent.bounds.height) / 2.0 + previousComponentVerticalOffset))
+                                        }
+                                    } else {
+                                        componentAlpha = componentAnimationFraction
+                                        componentVerticalOffset = -(1.0 - componentAnimationFraction) * 12.0
+                                        if let fixedTransitionDirection {
+                                            if !fixedTransitionDirection {
+                                                componentVerticalOffset = -componentVerticalOffset
                                             }
                                         }
                                     }
-                                    
-                                    let componentOrigin = rightTextOrigin - component.bounds.width
-                                    let currentColor: UIColor
-                                    if isForegroundTransparent {
-                                        currentColor = foregroundColor.mixedWith(backgroundColor, alpha: 1.0 - componentAlpha)
-                                    } else {
-                                        currentColor = foregroundColor.withMultipliedAlpha(componentAlpha)
-                                    }
-                                    let string = NSAttributedString(string: component.string, font: Font.medium(11.0), textColor: currentColor)
-                                    string.draw(at: component.bounds.origin.offsetBy(dx: componentOrigin, dy: floorToScreenPixels(size.height - component.bounds.height) / 2.0 + componentVerticalOffset))
-                                    
-                                    rightTextOrigin -= component.bounds.width
                                 }
+                                
+                                let componentOrigin = leftTextOrigin
+                                let currentColor: UIColor
+                                if isForegroundTransparent {
+                                    currentColor = foregroundColor.mixedWith(backgroundColor, alpha: 1.0 - componentAlpha)
+                                } else {
+                                    currentColor = foregroundColor.withMultipliedAlpha(componentAlpha)
+                                }
+                                let string = NSAttributedString(string: component.string, font: Font.medium(11.0), textColor: currentColor)
+                                string.draw(at: component.bounds.origin.offsetBy(dx: componentOrigin, dy: floorToScreenPixels(size.height - component.bounds.height) / 2.0 + componentVerticalOffset))
+                                
+                                leftTextOrigin += component.bounds.width
                             }
                         }
-                        
+                    }
+                    
+                    if layout.isTag {
+                        drawContents(colors: layout.colors)
+                    } else {
                         if let animationState = animationState, animationState.fromColors.isSelected != layout.colors.isSelected {
                             var animationFraction: CGFloat = max(0.0, min(1.0, (CACurrentMediaTime() - animationState.startTime) / animationState.duration))
                             if !layout.colors.isSelected {
                                 animationFraction = 1.0 - animationFraction
                             }
+                            animationFraction = animationState.curve.solve(at: animationFraction)
                             
                             let center = CGPoint(x: 21.0, y: size.height / 2.0)
                             let diameter = 0.0 * (1.0 - animationFraction) + (size.width - center.x) * 2.0 * animationFraction
@@ -432,7 +675,7 @@ public final class ReactionButtonAsyncNode: ContextControllerSourceView {
                             drawContents(colors: layout.colors.isSelected ? layout.colors : animationState.fromColors)
                             
                             context.resetClip()
-                                
+                            
                             context.beginPath()
                             context.addRect(CGRect(origin: CGPoint(), size: size))
                             context.addEllipse(in: CGRect(origin: CGPoint(x: center.x - diameter / 2.0, y: center.y - diameter / 2.0), size: CGSize(width: diameter, height: diameter)))
@@ -441,16 +684,17 @@ public final class ReactionButtonAsyncNode: ContextControllerSourceView {
                         } else {
                             drawContents(colors: layout.colors)
                         }
-                        
-                        UIGraphicsPopContext()
-                    })
-                }
+                    }
+                    
+                    UIGraphicsPopContext()
+                })
                 
                 DispatchQueue.main.async {
                     if let strongSelf = self, let image = image {
                         let previousContents = strongSelf.layer.contents
                         
-                        ASDisplayNodeSetResizableContents(strongSelf.layer, image)
+                        //ASDisplayNodeSetResizableContents(strongSelf.layer, image)
+                        strongSelf.layer.contents = image.cgImage
                         
                         if animated, let previousContents = previousContents {
                             strongSelf.layer.animate(from: previousContents as! CGImage, to: image.cgImage!, keyPath: "contents", timingFunction: CAMediaTimingFunctionName.linear.rawValue, duration: 0.2)
@@ -545,10 +789,12 @@ public final class ReactionButtonAsyncNode: ContextControllerSourceView {
         let imageSize: CGSize
         
         let counterLayout: CounterLayout?
+        let extractedCounterLayout: CounterLayout?
         
         let backgroundLayout: ContainerButtonNode.Layout
         
         let size: CGSize
+        let extractedSize: CGSize
         
         init(
             spec: Spec,
@@ -557,8 +803,10 @@ public final class ReactionButtonAsyncNode: ContextControllerSourceView {
             imageFrame: CGRect,
             imageSize: CGSize,
             counterLayout: CounterLayout?,
+            extractedCounterLayout: CounterLayout?,
             backgroundLayout: ContainerButtonNode.Layout,
-            size: CGSize
+            size: CGSize,
+            extractedSize: CGSize
         ) {
             self.spec = spec
             self.backgroundColor = backgroundColor
@@ -566,8 +814,10 @@ public final class ReactionButtonAsyncNode: ContextControllerSourceView {
             self.imageFrame = imageFrame
             self.imageSize = imageSize
             self.counterLayout = counterLayout
+            self.extractedCounterLayout = extractedCounterLayout
             self.backgroundLayout = backgroundLayout
             self.size = size
+            self.extractedSize = extractedSize
         }
         
         static func calculate(spec: Spec, currentLayout: Layout?) -> Layout {
@@ -577,34 +827,43 @@ public final class ReactionButtonAsyncNode: ContextControllerSourceView {
             
             let boundingImageSize = CGSize(width: 20.0, height: 20.0)
             let imageSize: CGSize = boundingImageSize
-            /*if let file = spec.component.reaction.centerAnimation {
-                let defaultImageSize = CGSize(width: boundingImageSize.width + floor(boundingImageSize.width * 0.5 * 2.0), height: boundingImageSize.height + floor(boundingImageSize.height * 0.5 * 2.0))
-                imageSize = file.dimensions?.cgSize.aspectFitted(defaultImageSize) ?? defaultImageSize
-            } else {
-                imageSize = boundingImageSize
-            }*/
             
             var counterComponents: [String] = []
-            for character in countString(Int64(spec.component.count)) {
-                counterComponents.append(String(character))
-            }
-            
-            /*#if DEBUG
-            if spec.component.count % 2 == 0 {
-                counterComponents.removeAll()
-                for character in "123.5K" {
+            var extractedCounterComponents: [String] = []
+            var hasTitle = false
+            if let title = spec.component.reaction.title, !title.isEmpty {
+                hasTitle = true
+                counterComponents.append(title)
+                extractedCounterComponents.append(title)
+            } else {
+                #if DEBUG && false
+                let compactString = "4K"
+                #else
+                let compactString = countString(Int64(spec.component.count))
+                #endif
+                
+                for character in compactString {
                     counterComponents.append(String(character))
                 }
+                for character in "\(spec.component.count)" {
+                    extractedCounterComponents.append(String(character))
+                }
             }
-            #endif*/
             
             let backgroundColor = spec.component.chosenOrder != nil ? spec.component.colors.selectedBackground : spec.component.colors.deselectedBackground
             
-            let imageFrame = CGRect(origin: CGPoint(x: sideInsets + floorToScreenPixels((boundingImageSize.width - imageSize.width) / 2.0), y: floorToScreenPixels((height - imageSize.height) / 2.0)), size: imageSize)
+            let imageFrame: CGRect
+            if spec.component.isTag {
+                imageFrame = CGRect(origin: CGPoint(x: 6.0 + floorToScreenPixels((boundingImageSize.width - imageSize.width) / 2.0), y: floorToScreenPixels((height - imageSize.height) / 2.0)), size: imageSize)
+            } else {
+                imageFrame = CGRect(origin: CGPoint(x: sideInsets + floorToScreenPixels((boundingImageSize.width - imageSize.width) / 2.0), y: floorToScreenPixels((height - imageSize.height) / 2.0)), size: imageSize)
+            }
             
             var counterLayout: CounterLayout?
+            var extractedCounterLayout: CounterLayout?
             
             var size = CGSize(width: boundingImageSize.width + sideInsets * 2.0, height: height)
+            var extractedSize = size
             if !spec.component.avatarPeers.isEmpty {
                 size.width += 4.0 + 24.0
                 if spec.component.avatarPeers.count > 1 {
@@ -612,40 +871,85 @@ public final class ReactionButtonAsyncNode: ContextControllerSourceView {
                 } else {
                     size.width -= 2.0
                 }
+                extractedSize = size
+            } else if spec.component.isTag && !hasTitle {
+                size.width += 1.0
+                extractedSize = size
             } else {
-                let counterSpec = CounterLayout.Spec(
-                    stringComponents: counterComponents
-                )
-                let counterValue: CounterLayout
-                if let currentCounter = currentLayout?.counterLayout, currentCounter.spec == counterSpec {
-                    counterValue = currentCounter
-                } else {
-                    counterValue = CounterLayout.calculate(
-                        spec: counterSpec,
-                        previousLayout: currentLayout?.counterLayout
+                do {
+                    let counterSpec = CounterLayout.Spec(
+                        stringComponents: counterComponents
                     )
+                    let counterValue: CounterLayout
+                    if let currentCounter = currentLayout?.counterLayout, currentCounter.spec == counterSpec {
+                        counterValue = currentCounter
+                    } else {
+                        counterValue = CounterLayout.calculate(
+                            spec: counterSpec,
+                            previousLayout: currentLayout?.counterLayout
+                        )
+                    }
+                    counterLayout = counterValue
+                    size.width += spacing + counterValue.size.width
+                    if spec.component.isTag {
+                        size.width += 5.0
+                    }
                 }
-                counterLayout = counterValue
-                size.width += spacing + counterValue.size.width
+                do {
+                    let extractedCounterSpec = CounterLayout.Spec(
+                        stringComponents: extractedCounterComponents
+                    )
+                    let extractedCounterValue: CounterLayout
+                    if let currentExtractedCounter = currentLayout?.extractedCounterLayout, currentExtractedCounter.spec == extractedCounterSpec {
+                        extractedCounterValue = currentExtractedCounter
+                    } else {
+                        extractedCounterValue = CounterLayout.calculate(
+                            spec: extractedCounterSpec,
+                            previousLayout: currentLayout?.extractedCounterLayout
+                        )
+                    }
+                    extractedCounterLayout = extractedCounterValue
+                    extractedSize.width += spacing + extractedCounterValue.size.width
+                    if spec.component.isTag {
+                        extractedSize.width += 5.0
+                    }
+                }
             }
             
-            let backgroundColors = ReactionButtonAsyncNode.ContainerButtonNode.Colors(
-                background: spec.component.chosenOrder != nil ? spec.component.colors.selectedBackground : spec.component.colors.deselectedBackground,
-                foreground: spec.component.chosenOrder != nil ? spec.component.colors.selectedForeground : spec.component.colors.deselectedForeground,
-                extractedBackground: spec.component.colors.extractedBackground,
-                extractedForeground: spec.component.colors.extractedForeground,
-                isSelected: spec.component.chosenOrder != nil
-            )
+            let backgroundColors: ReactionButtonAsyncNode.ContainerButtonNode.Colors
+            
+            if case .stars = spec.component.reaction.value {
+                backgroundColors = ReactionButtonAsyncNode.ContainerButtonNode.Colors(
+                    background: spec.component.chosenOrder != nil ? spec.component.colors.selectedStarsBackground : spec.component.colors.deselectedStarsBackground,
+                    foreground: spec.component.chosenOrder != nil ? spec.component.colors.selectedStarsForeground : spec.component.colors.deselectedStarsForeground,
+                    extractedBackground: spec.component.chosenOrder != nil ? spec.component.colors.selectedStarsBackground : spec.component.colors.deselectedStarsBackground,
+                    extractedForeground: spec.component.chosenOrder != nil ? spec.component.colors.selectedStarsForeground : spec.component.colors.deselectedStarsForeground,
+                    extractedSelectedForeground: spec.component.colors.extractedSelectedForeground,
+                    isSelected: spec.component.chosenOrder != nil
+                )
+            } else {
+                backgroundColors = ReactionButtonAsyncNode.ContainerButtonNode.Colors(
+                    background: spec.component.chosenOrder != nil ? spec.component.colors.selectedBackground : spec.component.colors.deselectedBackground,
+                    foreground: spec.component.chosenOrder != nil ? spec.component.colors.selectedForeground : spec.component.colors.deselectedForeground,
+                    extractedBackground: spec.component.colors.extractedBackground,
+                    extractedForeground: spec.component.colors.extractedForeground,
+                    extractedSelectedForeground: spec.component.colors.extractedSelectedForeground,
+                    isSelected: spec.component.chosenOrder != nil
+                )
+            }
             var backgroundCounter: ReactionButtonAsyncNode.ContainerButtonNode.Counter?
-            if let counterLayout = counterLayout {
+            if let counterLayout, let extractedCounterLayout {
                 backgroundCounter = ReactionButtonAsyncNode.ContainerButtonNode.Counter(
-                    components: counterLayout.components
+                    components: counterLayout.components,
+                    extractedComponents: extractedCounterLayout.components
                 )
             }
             let backgroundLayout = ContainerButtonNode.Layout(
                 colors: backgroundColors,
                 size: size,
-                counter: backgroundCounter
+                extractedSize: extractedSize,
+                counter: backgroundCounter,
+                isTag: spec.component.isTag
             )
             
             return Layout(
@@ -655,8 +959,10 @@ public final class ReactionButtonAsyncNode: ContextControllerSourceView {
                 imageFrame: imageFrame,
                 imageSize: boundingImageSize,
                 counterLayout: counterLayout,
+                extractedCounterLayout: extractedCounterLayout,
                 backgroundLayout: backgroundLayout,
-                size: size
+                size: size,
+                extractedSize: extractedSize
             )
         }
     }
@@ -665,10 +971,19 @@ public final class ReactionButtonAsyncNode: ContextControllerSourceView {
     
     public let containerView: ContextExtractedContentContainingView
     private let buttonNode: ContainerButtonNode
+    private var starsEffectLayer: StarsButtonEffectLayer?
     public var iconView: ReactionIconView?
     private var avatarsView: AnimatedAvatarSetView?
     
     private let iconImageDisposable = MetaDisposable()
+    
+    private var ignoreButtonTap: Bool = false
+    
+    private var tapAnimationLink: SharedDisplayLinkDriver.Link?
+    private var tapAnimationValue: CGFloat = 0.0
+    private var previousTapAnimationTimestamp: Double = 0.0
+    private var previousTapTimestamp: Double = 0.0
+    private var tapCounterView: StarsReactionCounterView?
     
     public var activateAfterCompletion: Bool = false {
         didSet {
@@ -689,6 +1004,10 @@ public final class ReactionButtonAsyncNode: ContextControllerSourceView {
     
     override init(frame: CGRect) {
         self.containerView = ContextExtractedContentContainingView()
+        
+        self.containerView.isMultipleTouchEnabled = false
+        self.containerView.isExclusiveTouch = true
+        
         self.buttonNode = ContainerButtonNode()
         
         self.iconView = ReactionIconView()
@@ -710,10 +1029,14 @@ public final class ReactionButtonAsyncNode: ContextControllerSourceView {
         self.beginDelay = 0.0
         
         self.containerView.willUpdateIsExtractedToContextPreview = { [weak self] isExtracted, _ in
-            guard let strongSelf = self else {
+            guard let self else {
                 return
             }
-            strongSelf.buttonNode.updateIsExtracted(isExtracted: isExtracted, animated: true)
+            self.buttonNode.updateIsExtracted(isExtracted: isExtracted, animated: true)
+            
+            if let iconView = self.iconView {
+                iconView.updateIsPaused(isPaused: isExtracted)
+            }
         }
         
         if self.activateAfterCompletion {
@@ -724,6 +1047,20 @@ public final class ReactionButtonAsyncNode: ContextControllerSourceView {
                 if strongSelf.buttonNode.bounds.contains(point) {
                     strongSelf.pressed()
                 }
+            }
+        }
+        
+        self.contextGesture?.cancelGesturesOnActivation = { [weak self] in
+            guard let self else {
+                return
+            }
+            self.buttonNode.isUserInteractionEnabled = false
+            self.buttonNode.cancelTracking(with: nil)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else {
+                    return
+                }
+                self.buttonNode.isUserInteractionEnabled = true
             }
         }
     }
@@ -747,14 +1084,129 @@ public final class ReactionButtonAsyncNode: ContextControllerSourceView {
         guard let layout = self.layout else {
             return
         }
-        layout.spec.component.action(layout.spec.component.reaction.value)
+        if self.ignoreButtonTap {
+            return
+        }
+        layout.spec.component.action(self, layout.spec.component.reaction.value, self.containerView)
+        
+        if case .stars = layout.spec.component.reaction.value {
+            self.addStarsTap()
+        }
+    }
+    
+    private func addStarsTap() {
+        let timestamp = CACurrentMediaTime()
+        
+        self.previousTapTimestamp = timestamp
+        
+        let deltaTime = timestamp - self.previousTapAnimationTimestamp
+        if deltaTime < 0.4 || self.tapCounterView != nil {
+            self.previousTapAnimationTimestamp = timestamp
+            
+            if let superview = self.superview {
+                for subview in superview.subviews {
+                    if subview !== self {
+                        subview.layer.zPosition = 0.0
+                    }
+                }
+            }
+            self.layer.zPosition = 1.0
+            
+            if let tapCounterView = self.tapCounterView {
+                tapCounterView.add()
+            } else {
+                let tapCounterView = StarsReactionCounterView(count: 2)
+                self.tapCounterView = tapCounterView
+                self.addSubview(tapCounterView)
+                tapCounterView.animateIn()
+                if let layout = self.layout {
+                    tapCounterView.frame = CGRect(origin: CGPoint(x: layout.size.width * 0.5, y: -70.0), size: CGSize())
+                }
+            }
+        }
+        self.tapAnimationValue = min(1.0, self.tapAnimationValue)
+        
+        if self.tapAnimationLink == nil {
+            self.previousTapAnimationTimestamp = timestamp
+            self.updateTapAnimation()
+            
+            self.tapAnimationLink = SharedDisplayLinkDriver.shared.add(framesPerSecond: .max, { [weak self] _ in
+                guard let self else {
+                    return
+                }
+                self.updateTapAnimation()
+            })
+        }
+    }
+    
+    private func updateTapAnimation() {
+        let timestamp = CACurrentMediaTime()
+        let deltaTime = min(timestamp - self.previousTapAnimationTimestamp, 1.0 / 60.0)
+        self.previousTapAnimationTimestamp = timestamp
+        
+        let decelerationRate: CGFloat = 0.98
+        let lastTapDeltaTime = max(0.0, timestamp - self.previousTapTimestamp)
+        let tapAnimationTargetValue: CGFloat
+        if self.tapCounterView != nil {
+            tapAnimationTargetValue = 1.0 * CGFloat(pow(Double(decelerationRate), 1200.0 * lastTapDeltaTime))
+        } else {
+            tapAnimationTargetValue = 0.0
+        }
+        
+        let advancementFraction = deltaTime * UIView.animationDurationFactor() * 120.0 / 60.0
+        self.tapAnimationValue = self.tapAnimationValue * (1.0 - advancementFraction) + tapAnimationTargetValue * advancementFraction
+        
+        if self.tapAnimationValue <= 0.001 && self.previousTapTimestamp + 2.0 < timestamp {
+            self.tapAnimationValue = 0.0
+            self.tapAnimationLink?.invalidate()
+            self.tapAnimationLink = nil
+            
+            if let tapCounterView = self.tapCounterView {
+                self.tapCounterView = nil
+                tapCounterView.alpha = 0.0
+                tapCounterView.animateOut(completion: { [weak tapCounterView] in
+                    tapCounterView?.removeFromSuperview()
+                })
+            }
+        }
+        
+        let tapAnimationFactor = max(0.0, min(1.0, self.tapAnimationValue / 0.3))
+        
+        let scaleValue: CGFloat = 1.0 + tapAnimationFactor * 0.5
+        self.buttonNode.layer.transform = CATransform3DMakeScale(scaleValue, scaleValue, 1.0)
     }
     
     fileprivate func apply(layout: Layout, animation: ListViewItemUpdateAnimation, arguments: ReactionButtonsAsyncLayoutContainer.Arguments) {
-        self.containerView.frame = CGRect(origin: CGPoint(), size: layout.size)
-        self.containerView.contentView.frame = CGRect(origin: CGPoint(), size: layout.size)
-        self.containerView.contentRect = CGRect(origin: CGPoint(), size: layout.size)
-        animation.animator.updateFrame(layer: self.buttonNode.layer, frame: CGRect(origin: CGPoint(), size: layout.size), completion: nil)
+        self.containerView.frame = CGRect(origin: CGPoint(), size: layout.extractedSize)
+        self.containerView.contentView.frame = CGRect(origin: CGPoint(), size: layout.extractedSize)
+        self.containerView.contentRect = CGRect(origin: CGPoint(), size: layout.extractedSize)
+        
+        let buttonFrame = CGRect(origin: CGPoint(), size: layout.size)
+        animation.animator.updatePosition(layer: self.buttonNode.layer, position: buttonFrame.center, completion: nil)
+        animation.animator.updateBounds(layer: self.buttonNode.layer, bounds: CGRect(origin: CGPoint(), size: buttonFrame.size), completion: nil)
+        
+        if case .stars = layout.spec.component.reaction.value {
+            let starsEffectLayer: StarsButtonEffectLayer
+            if let current = self.starsEffectLayer {
+                starsEffectLayer = current
+            } else {
+                starsEffectLayer = StarsButtonEffectLayer()
+                self.starsEffectLayer = starsEffectLayer
+                if let iconView = self.iconView {
+                    self.buttonNode.layer.insertSublayer(starsEffectLayer, below: iconView.layer)
+                } else {
+                    self.buttonNode.layer.insertSublayer(starsEffectLayer, at: 0)
+                }
+            }
+            let starsEffectLayerFrame = CGRect(origin: CGPoint(), size: layout.size)
+            animation.animator.updateFrame(layer: starsEffectLayer, frame: starsEffectLayerFrame, completion: nil)
+            starsEffectLayer.update(size: starsEffectLayerFrame.size)
+        } else {
+            if let starsEffectLayer = self.starsEffectLayer {
+                self.starsEffectLayer = nil
+                starsEffectLayer.removeFromSuperlayer()
+            }
+        }
         
         self.buttonNode.update(layout: layout.backgroundLayout)
         
@@ -763,10 +1215,23 @@ public final class ReactionButtonAsyncNode: ContextControllerSourceView {
             
             if let fileId = layout.spec.component.reaction.animationFileId ?? layout.spec.component.reaction.centerAnimation?.fileId.id {
                 let animateIdle: Bool
-                if case .custom = layout.spec.component.reaction.value {
+                if layout.spec.component.isTag {
+                    animateIdle = false
+                } else if case .custom = layout.spec.component.reaction.value {
                     animateIdle = true
                 } else {
                     animateIdle = false
+                }
+                
+                let tintColor: UIColor
+                if layout.backgroundLayout.colors.isSelected {
+                    if layout.spec.component.colors.selectedForeground != 0 {
+                        tintColor = UIColor(argb: layout.spec.component.colors.selectedForeground)
+                    } else {
+                        tintColor = .white
+                    }
+                } else {
+                    tintColor = UIColor(argb: layout.spec.component.colors.deselectedForeground)
                 }
                 
                 iconView.update(
@@ -776,71 +1241,13 @@ public final class ReactionButtonAsyncNode: ContextControllerSourceView {
                     fileId: fileId,
                     animationCache: arguments.animationCache,
                     animationRenderer: arguments.animationRenderer,
+                    tintColor: tintColor,
                     placeholderColor: layout.spec.component.chosenOrder != nil ? UIColor(argb: layout.spec.component.colors.selectedMediaPlaceholder) : UIColor(argb: layout.spec.component.colors.deselectedMediaPlaceholder),
                     animateIdle: animateIdle,
                     reaction: layout.spec.component.reaction.value,
                     transition: animation.transition
                 )
             }
-            
-            /*if self.layout?.spec.component.reaction != layout.spec.component.reaction {
-                if let file = layout.spec.component.reaction.centerAnimation {
-                    
-                    if let image = ReactionImageCache.shared.get(reaction: layout.spec.component.reaction.value) {
-                        iconView.imageView.image = image
-                    } else {
-                        self.iconImageDisposable.set((reactionStaticImage(context: layout.spec.component.context, animation: file, pixelSize: CGSize(width: 32.0 * UIScreenScale, height: 32.0 * UIScreenScale), queue: sharedReactionStaticImage)
-                        |> filter { data in
-                            return data.isComplete
-                        }
-                        |> take(1)
-                        |> map { data -> UIImage? in
-                            if data.isComplete, let dataValue = try? Data(contentsOf: URL(fileURLWithPath: data.path)) {
-                                if let image = UIImage(data: dataValue) {
-                                    return image.precomposed()
-                                } else {
-                                    print("Could not decode image")
-                                }
-                            } else {
-                                print("Incomplete data")
-                            }
-                            return nil
-                        }
-                        |> deliverOnMainQueue).start(next: { [weak self] image in
-                            guard let strongSelf = self else {
-                                return
-                            }
-                            
-                            if let image = image {
-                                strongSelf.iconView?.imageView.image = image
-                                ReactionImageCache.shared.put(reaction: layout.spec.component.reaction.value, image: image)
-                            }
-                        }))
-                    }
-                } else if let legacyIcon = layout.spec.component.reaction.legacyIcon {
-                    self.iconImageDisposable.set((layout.spec.component.context.account.postbox.mediaBox.resourceData(legacyIcon.resource)
-                    |> deliverOn(Queue.concurrentDefaultQueue())
-                    |> map { data -> UIImage? in
-                        if data.complete, let dataValue = try? Data(contentsOf: URL(fileURLWithPath: data.path)) {
-                            if let image = WebP.convert(fromWebP: dataValue) {
-                                if #available(iOS 15.0, iOSApplicationExtension 15.0, *) {
-                                    return image.preparingForDisplay()
-                                } else {
-                                    return image.precomposed()
-                                }
-                            }
-                        }
-                        return nil
-                    }
-                    |> deliverOnMainQueue).start(next: { [weak self] image in
-                        guard let strongSelf = self else {
-                            return
-                        }
-                        
-                        strongSelf.iconView?.imageView.image = image
-                    }))
-                }
-            }*/
         }
         
         if !layout.spec.component.avatarPeers.isEmpty {
@@ -914,11 +1321,13 @@ public final class ReactionButtonComponent: Equatable {
         public var value: MessageReaction.Reaction
         public var centerAnimation: TelegramMediaFile?
         public var animationFileId: Int64?
+        public var title: String?
         
-        public init(value: MessageReaction.Reaction, centerAnimation: TelegramMediaFile?, animationFileId: Int64?) {
+        public init(value: MessageReaction.Reaction, centerAnimation: TelegramMediaFile?, animationFileId: Int64?, title: String?) {
             self.value = value
             self.centerAnimation = centerAnimation
             self.animationFileId = animationFileId
+            self.title = title
         }
         
         public static func ==(lhs: Reaction, rhs: Reaction) -> Bool {
@@ -931,6 +1340,9 @@ public final class ReactionButtonComponent: Equatable {
             if lhs.animationFileId != rhs.animationFileId {
                 return false
             }
+            if lhs.title != rhs.title {
+                return false
+            }
             return true
         }
     }
@@ -940,8 +1352,13 @@ public final class ReactionButtonComponent: Equatable {
         public var selectedBackground: UInt32
         public var deselectedForeground: UInt32
         public var selectedForeground: UInt32
+        public var deselectedStarsBackground: UInt32
+        public var selectedStarsBackground: UInt32
+        public var deselectedStarsForeground: UInt32
+        public var selectedStarsForeground: UInt32
         public var extractedBackground: UInt32
         public var extractedForeground: UInt32
+        public var extractedSelectedForeground: UInt32
         public var deselectedMediaPlaceholder: UInt32
         public var selectedMediaPlaceholder: UInt32
         
@@ -950,8 +1367,13 @@ public final class ReactionButtonComponent: Equatable {
             selectedBackground: UInt32,
             deselectedForeground: UInt32,
             selectedForeground: UInt32,
+            deselectedStarsBackground: UInt32,
+            selectedStarsBackground: UInt32,
+            deselectedStarsForeground: UInt32,
+            selectedStarsForeground: UInt32,
             extractedBackground: UInt32,
             extractedForeground: UInt32,
+            extractedSelectedForeground: UInt32,
             deselectedMediaPlaceholder: UInt32,
             selectedMediaPlaceholder: UInt32
         ) {
@@ -959,8 +1381,13 @@ public final class ReactionButtonComponent: Equatable {
             self.selectedBackground = selectedBackground
             self.deselectedForeground = deselectedForeground
             self.selectedForeground = selectedForeground
+            self.deselectedStarsBackground = deselectedStarsBackground
+            self.selectedStarsBackground = selectedStarsBackground
+            self.deselectedStarsForeground = deselectedStarsForeground
+            self.selectedStarsForeground = selectedStarsForeground
             self.extractedBackground = extractedBackground
             self.extractedForeground = extractedForeground
+            self.extractedSelectedForeground = extractedSelectedForeground
             self.deselectedMediaPlaceholder = deselectedMediaPlaceholder
             self.selectedMediaPlaceholder = selectedMediaPlaceholder
         }
@@ -970,23 +1397,26 @@ public final class ReactionButtonComponent: Equatable {
     public let colors: Colors
     public let reaction: Reaction
     public let avatarPeers: [EnginePeer]
+    public let isTag: Bool
     public let count: Int
     public let chosenOrder: Int?
-    public let action: (MessageReaction.Reaction) -> Void
+    public let action: (ReactionButtonAsyncNode, MessageReaction.Reaction, ContextExtractedContentContainingView?) -> Void
 
     public init(
         context: AccountContext,
         colors: Colors,
         reaction: Reaction,
         avatarPeers: [EnginePeer],
+        isTag: Bool,
         count: Int,
         chosenOrder: Int?,
-        action: @escaping (MessageReaction.Reaction) -> Void
+        action: @escaping (ReactionButtonAsyncNode, MessageReaction.Reaction, ContextExtractedContentContainingView?) -> Void
     ) {
         self.context = context
         self.colors = colors
         self.reaction = reaction
         self.avatarPeers = avatarPeers
+        self.isTag = isTag
         self.count = count
         self.chosenOrder = chosenOrder
         self.action = action
@@ -1003,6 +1433,9 @@ public final class ReactionButtonComponent: Equatable {
             return false
         }
         if lhs.avatarPeers != rhs.avatarPeers {
+            return false
+        }
+        if lhs.isTag != rhs.isTag {
             return false
         }
         if lhs.count != rhs.count {
@@ -1124,16 +1557,16 @@ public final class ReactionButtonsAsyncLayoutContainer {
     
     public func update(
         context: AccountContext,
-        action: @escaping (MessageReaction.Reaction) -> Void,
+        action: @escaping (ReactionButtonAsyncNode, MessageReaction.Reaction, ContextExtractedContentContainingView?) -> Void,
         reactions: [ReactionButtonsAsyncLayoutContainer.Reaction],
         colors: ReactionButtonComponent.Colors,
+        isTag: Bool,
         constrainedWidth: CGFloat
     ) -> Result {
         var items: [Result.Item] = []
         var applyItems: [(key: MessageReaction.Reaction, size: CGSize, apply: (_ animation: ListViewItemUpdateAnimation, _ arguments: Arguments) -> ReactionNodePool.Item)] = []
         
-        var validIds = Set<MessageReaction.Reaction>()
-        for reaction in reactions.sorted(by: { lhs, rhs in
+        var reactions = reactions.sorted(by: { lhs, rhs in
             var lhsCount = lhs.count
             if lhs.chosenOrder != nil {
                 lhsCount -= 1
@@ -1157,7 +1590,22 @@ public final class ReactionButtonsAsyncLayoutContainer {
             }
             
             return false
+        })
+        
+        if let index = reactions.firstIndex(where: {
+            if case .stars = $0.reaction.value {
+                return true
+            } else {
+                return false
+            }
         }) {
+            let value = reactions[index]
+            reactions.remove(at: index)
+            reactions.insert(value, at: 0)
+        }
+        
+        var validIds = Set<MessageReaction.Reaction>()
+        for reaction in reactions {
             validIds.insert(reaction.reaction.value)
             
             var avatarPeers = reaction.peers
@@ -1175,8 +1623,9 @@ public final class ReactionButtonsAsyncLayoutContainer {
                 context: context,
                 colors: colors,
                 reaction: reaction.reaction,
-                avatarPeers: avatarPeers,
-                count: reaction.count,
+                avatarPeers: isTag ? [] : avatarPeers,
+                isTag: isTag,
+                count: isTag ? 0 : reaction.count,
                 chosenOrder: reaction.chosenOrder,
                 action: action
             ))
@@ -1218,5 +1667,85 @@ public final class ReactionButtonsAsyncLayoutContainer {
                 return ApplyResult(items: items, removedNodes: removedNodes)
             }
         )
+    }
+}
+
+private final class StarsReactionCounterView: UIView {
+    private let portalSource: PortalSourceView
+    private let label = ComponentView<Empty>()
+    
+    private var count: Int
+    
+    init(count: Int) {
+        self.count = count
+        
+        let portalSource = PortalSourceView()
+        portalSource.needsGlobalPortal = true
+        self.portalSource = portalSource
+        
+        super.init(frame: CGRect())
+        
+        self.addSubview(portalSource)
+        
+        portalSource.frame = CGRect(origin: CGPoint(x: -200.0, y: -200.0), size: CGSize(width: 400.0, height: 400.0))
+        
+        self.update(transition: .immediate)
+    }
+    
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+    
+    func animateIn() {
+        if let labelView = self.label.view {
+            labelView.layer.animateScale(from: 0.001, to: 1.0, duration: 0.15)
+            labelView.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.15)
+        }
+    }
+    
+    func animateOut(completion: @escaping () -> Void) {
+        if let labelView = self.label.view {
+            labelView.layer.animateScale(from: 1.0, to: 0.001, duration: 0.15, removeOnCompletion: false)
+            labelView.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.15, removeOnCompletion: false, completion: { _ in
+                completion()
+            })
+        } else {
+            completion()
+        }
+    }
+    
+    func add() {
+        self.count += 1
+        self.update(transition: .easeInOut(duration: 0.15))
+    }
+    
+    func update(transition: ComponentTransition) {
+        var items: [AnimatedTextComponent.Item] = []
+        items.append(AnimatedTextComponent.Item(id: AnyHashable(0), content: .text("+")))
+        items.append(AnimatedTextComponent.Item(id: AnyHashable(1), content: .number(self.count, minDigits: 1)))
+        
+        let labelSize = self.label.update(
+            transition: transition,
+            component: AnyComponent(AnimatedTextComponent(
+                font: Font.with(size: 40.0, design: .round, weight: .bold),
+                color: .white,
+                items: items
+            )),
+            environment: {},
+            containerSize: CGSize(width: 200.0, height: 200.0)
+        )
+        let labelFrame = CGRect(origin: CGPoint(x: floor((self.portalSource.bounds.width - labelSize.width) * 0.5), y: floor((self.portalSource.bounds.height - labelSize.height) * 0.5)), size: labelSize)
+        
+        if let labelView = self.label.view {
+            if labelView.superview == nil {
+                self.portalSource.addSubview(labelView)
+                labelView.layer.shadowColor = UIColor.black.cgColor
+                labelView.layer.shadowOffset = CGSize(width: 0.0, height: 1.0)
+                labelView.layer.shadowOpacity = 0.45
+                labelView.layer.shadowRadius = 9.0
+            }
+            
+            transition.setFrame(view: labelView, frame: labelFrame)
+        }
     }
 }

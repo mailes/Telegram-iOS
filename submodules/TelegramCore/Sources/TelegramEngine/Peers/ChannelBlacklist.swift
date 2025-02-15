@@ -10,14 +10,14 @@ func _internal_updateChannelMemberBannedRights(account: Account, peerId: PeerId,
         return account.postbox.transaction { transaction -> Signal<(ChannelParticipant?, RenderedChannelParticipant?, Bool), NoError> in
             if let peer = transaction.getPeer(peerId), let inputChannel = apiInputChannel(peer), let _ = transaction.getPeer(account.peerId), let memberPeer = transaction.getPeer(memberId), let inputPeer = apiInputPeer(memberPeer) {
                 let updatedParticipant: ChannelParticipant
-                if let currentParticipant = currentParticipant, case let .member(_, invitedAt, _, currentBanInfo, _) = currentParticipant {
+                if let currentParticipant = currentParticipant, case let .member(_, invitedAt, _, currentBanInfo, _, subscriptionUntilDate) = currentParticipant {
                     let banInfo: ChannelParticipantBannedInfo?
                     if let rights = rights, !rights.flags.isEmpty {
                         banInfo = ChannelParticipantBannedInfo(rights: rights, restrictedBy: currentBanInfo?.restrictedBy ?? account.peerId, timestamp: currentBanInfo?.timestamp ?? Int32(Date().timeIntervalSince1970), isMember: currentBanInfo?.isMember ?? true)
                     } else {
                         banInfo = nil
                     }
-                    updatedParticipant = ChannelParticipant.member(id: memberId, invitedAt: invitedAt, adminInfo: nil, banInfo: banInfo, rank: nil)
+                    updatedParticipant = ChannelParticipant.member(id: memberId, invitedAt: invitedAt, adminInfo: nil, banInfo: banInfo, rank: nil, subscriptionUntilDate: subscriptionUntilDate)
                 } else {
                     let banInfo: ChannelParticipantBannedInfo?
                     if let rights = rights, !rights.flags.isEmpty {
@@ -25,7 +25,7 @@ func _internal_updateChannelMemberBannedRights(account: Account, peerId: PeerId,
                     } else {
                         banInfo = nil
                     }
-                    updatedParticipant = ChannelParticipant.member(id: memberId, invitedAt: Int32(Date().timeIntervalSince1970), adminInfo: nil, banInfo: banInfo, rank: nil)
+                    updatedParticipant = ChannelParticipant.member(id: memberId, invitedAt: Int32(Date().timeIntervalSince1970), adminInfo: nil, banInfo: banInfo, rank: nil, subscriptionUntilDate: nil)
                 }
 
                 let apiRights: Api.ChatBannedRights
@@ -48,7 +48,7 @@ func _internal_updateChannelMemberBannedRights(account: Account, peerId: PeerId,
                         switch currentParticipant {
                             case .creator:
                                 break
-                            case let .member(_, _, adminInfo, banInfo, _):
+                            case let .member(_, _, adminInfo, banInfo, _, _):
                                 if let _ = adminInfo {
                                     wasAdmin = true
                                 }
@@ -131,7 +131,7 @@ func _internal_updateChannelMemberBannedRights(account: Account, peerId: PeerId,
                         if let presence = transaction.getPeerPresence(peerId: memberPeer.id) {
                             presences[memberPeer.id] = presence
                         }
-                        if case let .member(_, _, _, maybeBanInfo, _) = updatedParticipant, let banInfo = maybeBanInfo {
+                        if case let .member(_, _, _, maybeBanInfo, _, _) = updatedParticipant, let banInfo = maybeBanInfo {
                             if let peer = transaction.getPeer(banInfo.restrictedBy) {
                                 peers[peer.id] = peer
                             }
@@ -168,11 +168,11 @@ func _internal_updateDefaultChannelMemberBannedRights(account: Account, peerId: 
                     return
                 }
                 if let peer = peer as? TelegramGroup {
-                    updatePeers(transaction: transaction, peers: [peer.updateDefaultBannedRights(rights, version: peer.version)], update: { _, updated in
+                    updatePeersCustom(transaction: transaction, peers: [peer.updateDefaultBannedRights(rights, version: peer.version)], update: { _, updated in
                         return updated
                     })
                 } else if let peer = peer as? TelegramChannel {
-                    updatePeers(transaction: transaction, peers: [peer.withUpdatedDefaultBannedRights(rights)], update: { _, updated in
+                    updatePeersCustom(transaction: transaction, peers: [peer.withUpdatedDefaultBannedRights(rights)], update: { _, updated in
                         return updated
                     })
                 }
@@ -182,4 +182,34 @@ func _internal_updateDefaultChannelMemberBannedRights(account: Account, peerId: 
     }
     |> switchToLatest
 }
+
+func _internal_updateChannelBoostsToUnlockRestrictions(account: Account, peerId: PeerId, boosts: Int32) -> Signal<Never, NoError> {
+    return account.postbox.transaction { transaction -> Signal<Never, NoError> in
+        guard let peer = transaction.getPeer(peerId), let inputChannel = apiInputChannel(peer) else {
+            return .complete()
+        }
+        return account.network.request(Api.functions.channels.setBoostsToUnblockRestrictions(channel: inputChannel, boosts: boosts))
+        |> map(Optional.init)
+        |> `catch` { _ -> Signal<Api.Updates?, NoError> in
+            return .single(nil)
+        }
+        |> mapToSignal { result -> Signal<Never, NoError> in
+            guard let result = result else {
+                return .complete()
+            }
+            account.stateManager.addUpdates(result)
+            return account.postbox.transaction { transaction -> Void in
+                transaction.updatePeerCachedData(peerIds: Set([peerId]), update: { _, cachedData in
+                    if let cachedData = cachedData as? CachedChannelData {
+                        return cachedData.withUpdatedBoostsToUnrestrict(boosts)
+                    }
+                    return cachedData
+                })
+            }
+            |> ignoreValues
+        }
+    }
+    |> switchToLatest
+}
+
 

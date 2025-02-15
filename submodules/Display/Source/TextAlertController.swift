@@ -9,6 +9,7 @@ public enum TextAlertActionType {
     case genericAction
     case defaultAction
     case destructiveAction
+    case defaultDestructiveAction
 }
 
 public struct TextAlertAction {
@@ -25,11 +26,15 @@ public struct TextAlertAction {
 
 public final class TextAlertContentActionNode: HighlightableButtonNode {
     private var theme: AlertControllerTheme
-    let action: TextAlertAction
+    public var action: TextAlertAction {
+        didSet {
+            self.updateTitle()
+        }
+    }
     
     private let backgroundNode: ASDisplayNode
     
-    var highlightedUpdated: (Bool) -> Void = { _ in }
+    public var highlightedUpdated: (Bool) -> Void = { _ in }
         
     public init(theme: AlertControllerTheme, action: TextAlertAction) {
         self.theme = theme
@@ -68,13 +73,13 @@ public final class TextAlertContentActionNode: HighlightableButtonNode {
         })
     }
     
-    func performAction() {
+    public func performAction() {
         if self.actionEnabled {
             self.action.action()
         }
     }
     
-    func setHighlighted(_ highlighted: Bool, animated: Bool) {
+    public func setHighlighted(_ highlighted: Bool, animated: Bool) {
         self.highlightedUpdated(highlighted)
         if highlighted {
             if self.backgroundNode.supernode == nil {
@@ -110,16 +115,26 @@ public final class TextAlertContentActionNode: HighlightableButtonNode {
         switch self.action.type {
             case .defaultAction, .genericAction:
                 color = self.actionEnabled ? self.theme.accentColor : self.theme.disabledColor
-            case .destructiveAction:
+            case .destructiveAction, .defaultDestructiveAction:
                 color = self.actionEnabled ? self.theme.destructiveColor : self.theme.disabledColor
         }
         switch self.action.type {
-            case .defaultAction:
+            case .defaultAction, .defaultDestructiveAction:
                 font = Font.semibold(theme.baseFontSize)
             case .destructiveAction, .genericAction:
                 break
         }
-        self.setAttributedTitle(NSAttributedString(string: self.action.title, font: font, textColor: color, paragraphAlignment: .center), for: [])
+        
+        let attributedString = NSMutableAttributedString(string: self.action.title, font: font, textColor: color, paragraphAlignment: .center)
+        if let range = attributedString.string.range(of: "$") {
+            attributedString.addAttribute(.attachment, value: UIImage(bundleImageName: "Item List/PremiumIcon")!, range: NSRange(range, in: attributedString.string))
+            attributedString.addAttribute(.foregroundColor, value: color, range: NSRange(range, in: attributedString.string))
+            attributedString.addAttribute(.baselineOffset, value: 1.0, range: NSRange(range, in: attributedString.string))
+        }
+        
+        self.setAttributedTitle(attributedString, for: [])
+        self.accessibilityLabel = self.action.title
+        self.accessibilityTraits = [.button]
     }
     
     @objc func pressed() {
@@ -181,7 +196,7 @@ public final class TextAlertContentNode: AlertContentNode {
         }
     }
     
-    public init(theme: AlertControllerTheme, title: NSAttributedString?, text: NSAttributedString, actions: [TextAlertAction], actionLayout: TextAlertContentActionLayout, dismissOnOutsideTap: Bool) {
+    public init(theme: AlertControllerTheme, title: NSAttributedString?, text: NSAttributedString, actions: [TextAlertAction], actionLayout: TextAlertContentActionLayout, dismissOnOutsideTap: Bool, linkAction: (([NSAttributedString.Key: Any], Int) -> Void)? = nil) {
         self.theme = theme
         self.actionLayout = actionLayout
         self._dismissOnOutsideTap = dismissOnOutsideTap
@@ -190,9 +205,10 @@ public final class TextAlertContentNode: AlertContentNode {
             titleNode.attributedText = title
             titleNode.displaysAsynchronously = false
             titleNode.isUserInteractionEnabled = false
-            titleNode.maximumNumberOfLines = 2
+            titleNode.maximumNumberOfLines = 4
             titleNode.truncationType = .end
             titleNode.isAccessibilityElement = true
+            titleNode.accessibilityLabel = title.string
             self.titleNode = titleNode
         } else {
             self.titleNode = nil
@@ -206,6 +222,15 @@ public final class TextAlertContentNode: AlertContentNode {
         self.textNode.isAccessibilityElement = true
         self.textNode.accessibilityLabel = text.string
         self.textNode.insets = UIEdgeInsets(top: 1.0, left: 1.0, bottom: 1.0, right: 1.0)
+        self.textNode.tapAttributeAction = linkAction
+        self.textNode.highlightAttributeAction = { attributes in
+            if let _ = attributes[NSAttributedString.Key(rawValue: "URL")] {
+                return NSAttributedString.Key(rawValue: "URL")
+            } else {
+                return nil
+            }
+        }
+        self.textNode.linkHighlightColor = theme.accentColor.withMultipliedAlpha(0.1)
         if text.length != 0 {
             if let paragraphStyle = text.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle {
                 self.textNode.textAlignment = paragraphStyle.alignment
@@ -442,15 +467,18 @@ public func textAlertController(theme: AlertControllerTheme, title: NSAttributed
     return AlertController(theme: theme, contentNode: TextAlertContentNode(theme: theme, title: title, text: text, actions: actions, actionLayout: actionLayout, dismissOnOutsideTap: dismissOnOutsideTap))
 }
 
-public func standardTextAlertController(theme: AlertControllerTheme, title: String?, text: String, actions: [TextAlertAction], actionLayout: TextAlertContentActionLayout = .horizontal, allowInputInset: Bool = true, parseMarkdown: Bool = false, dismissOnOutsideTap: Bool = true) -> AlertController {
+public func standardTextAlertController(theme: AlertControllerTheme, title: String?, text: String, actions: [TextAlertAction], actionLayout: TextAlertContentActionLayout = .horizontal, allowInputInset: Bool = true, parseMarkdown: Bool = false, dismissOnOutsideTap: Bool = true, linkAction: (([NSAttributedString.Key: Any], Int) -> Void)? = nil) -> AlertController {
     var dismissImpl: (() -> Void)?
     let attributedText: NSAttributedString
     if parseMarkdown {
-        let font = title == nil ? Font.semibold(theme.baseFontSize * 13.0 / 17.0) : Font.regular(floor(theme.baseFontSize * 13.0 / 17.0))
-        let boldFont = title == nil ? Font.bold(theme.baseFontSize * 13.0 / 17.0) : Font.semibold(floor(theme.baseFontSize * 13.0 / 17.0))
+        let font = title == nil ? Font.semibold(theme.baseFontSize) : Font.regular(floor(theme.baseFontSize * 13.0 / 17.0))
+        let boldFont = title == nil ? Font.bold(theme.baseFontSize) : Font.semibold(floor(theme.baseFontSize * 13.0 / 17.0))
         let body = MarkdownAttributeSet(font: font, textColor: theme.primaryColor)
         let bold = MarkdownAttributeSet(font: boldFont, textColor: theme.primaryColor)
-        attributedText = parseMarkdownIntoAttributedString(text, attributes: MarkdownAttributes(body: body, bold: bold, link: body, linkAttribute: { _ in nil }), textAlignment: .center)
+        let link = MarkdownAttributeSet(font: font, textColor: theme.accentColor)
+        attributedText = parseMarkdownIntoAttributedString(text, attributes: MarkdownAttributes(body: body, bold: bold, link: link, linkAttribute: { url in
+            return ("URL", url)
+        }), textAlignment: .center)
     } else {
         attributedText = NSAttributedString(string: text, font: title == nil ? Font.semibold(theme.baseFontSize) : Font.regular(floor(theme.baseFontSize * 13.0 / 17.0)), textColor: theme.primaryColor, paragraphAlignment: .center)
     }
@@ -459,7 +487,7 @@ public func standardTextAlertController(theme: AlertControllerTheme, title: Stri
             dismissImpl?()
             action.action()
         })
-    }, actionLayout: actionLayout, dismissOnOutsideTap: dismissOnOutsideTap), allowInputInset: allowInputInset)
+    }, actionLayout: actionLayout, dismissOnOutsideTap: dismissOnOutsideTap, linkAction: linkAction), allowInputInset: allowInputInset)
     dismissImpl = { [weak controller] in
         controller?.dismissAnimated()
     }

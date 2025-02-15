@@ -19,6 +19,12 @@ import Speak
 import TranslateUI
 import ShareController
 import UndoUI
+import ContextUI
+import SaveToCameraRoll
+import Pasteboard
+import AdUI
+import AdsInfoScreen
+import AdsReportScreen
 
 enum ChatMediaGalleryThumbnail: Equatable {
     case image(ImageMediaReference)
@@ -51,10 +57,12 @@ enum ChatMediaGalleryThumbnail: Equatable {
 
 final class ChatMediaGalleryThumbnailItem: GalleryThumbnailItem {
     private let account: Account
+    private let userLocation: MediaResourceUserLocation
     private let thumbnail: ChatMediaGalleryThumbnail
     
-    init?(account: Account, mediaReference: AnyMediaReference) {
+    init?(account: Account, userLocation: MediaResourceUserLocation, mediaReference: AnyMediaReference) {
         self.account = account
+        self.userLocation = userLocation
         if let imageReference = mediaReference.concrete(TelegramMediaImage.self) {
             self.thumbnail = .image(imageReference)
         } else if let fileReference = mediaReference.concrete(TelegramMediaFile.self) {
@@ -80,19 +88,21 @@ final class ChatMediaGalleryThumbnailItem: GalleryThumbnailItem {
         switch self.thumbnail {
             case let .image(imageReference):
                 if let representation = largestImageRepresentation(imageReference.media.representations) {
-                    return (mediaGridMessagePhoto(account: self.account, photoReference: imageReference), representation.dimensions.cgSize)
+                    return (mediaGridMessagePhoto(account: self.account, userLocation: self.userLocation, photoReference: imageReference), representation.dimensions.cgSize)
                 } else {
                     return (.single({ _ in return nil }), CGSize(width: 128.0, height: 128.0))
                 }
             case let .video(fileReference):
                 if let representation = largestImageRepresentation(fileReference.media.previewRepresentations) {
-                    return (mediaGridMessageVideo(postbox: self.account.postbox, videoReference: fileReference), representation.dimensions.cgSize)
+                    return (mediaGridMessageVideo(postbox: self.account.postbox, userLocation: self.userLocation, videoReference: fileReference), representation.dimensions.cgSize)
+                } else if let dimensions = fileReference.media.dimensions {
+                    return (mediaGridMessageVideo(postbox: self.account.postbox, userLocation: self.userLocation, videoReference: fileReference), dimensions.cgSize)
                 } else {
                     return (.single({ _ in return nil }), CGSize(width: 128.0, height: 128.0))
                 }
             case let .file(fileReference):
                 if let representation = smallestImageRepresentation(fileReference.media.previewRepresentations) {
-                    return (chatWebpageSnippetFile(account: self.account, mediaReference: fileReference.abstract, representation: representation), representation.dimensions.cgSize)
+                    return (chatWebpageSnippetFile(account: self.account, userLocation: self.userLocation, mediaReference: fileReference.abstract, representation: representation), representation.dimensions.cgSize)
                 } else {
                     return (.single({ _ in return nil }), CGSize(width: 128.0, height: 128.0))
                 }
@@ -108,17 +118,25 @@ class ChatImageGalleryItem: GalleryItem {
     let context: AccountContext
     let presentationData: PresentationData
     let message: Message
+    let mediaIndex: Int?
     let location: MessageHistoryEntryLocation?
+    let translateToLanguage: String?
+    let peerIsCopyProtected: Bool
+    let isSecret: Bool
     let displayInfoOnTop: Bool
     let performAction: (GalleryControllerInteractionTapAction) -> Void
     let openActionOptions: (GalleryControllerInteractionTapAction, Message) -> Void
     let present: (ViewController, Any?) -> Void
     
-    init(context: AccountContext, presentationData: PresentationData, message: Message, location: MessageHistoryEntryLocation?, displayInfoOnTop: Bool, performAction: @escaping (GalleryControllerInteractionTapAction) -> Void, openActionOptions: @escaping (GalleryControllerInteractionTapAction, Message) -> Void, present: @escaping (ViewController, Any?) -> Void) {
+    init(context: AccountContext, presentationData: PresentationData, message: Message, mediaIndex: Int? = nil, location: MessageHistoryEntryLocation?, translateToLanguage: String? = nil, peerIsCopyProtected: Bool = false, isSecret: Bool = false, displayInfoOnTop: Bool, performAction: @escaping (GalleryControllerInteractionTapAction) -> Void, openActionOptions: @escaping (GalleryControllerInteractionTapAction, Message) -> Void, present: @escaping (ViewController, Any?) -> Void) {
         self.context = context
         self.presentationData = presentationData
         self.message = message
+        self.mediaIndex = mediaIndex
         self.location = location
+        self.translateToLanguage = translateToLanguage
+        self.peerIsCopyProtected = peerIsCopyProtected
+        self.isSecret = isSecret
         self.displayInfoOnTop = displayInfoOnTop
         self.performAction = performAction
         self.openActionOptions = openActionOptions
@@ -128,28 +146,35 @@ class ChatImageGalleryItem: GalleryItem {
     func node(synchronous: Bool) -> GalleryItemNode {
         let node = ChatImageGalleryItemNode(context: self.context, presentationData: self.presentationData, performAction: self.performAction, openActionOptions: self.openActionOptions, present: self.present)
         
-        node.setMessage(self.message, displayInfo: !self.displayInfoOnTop)
+        node.setMessage(self.message, displayInfo: !self.displayInfoOnTop, translateToLanguage: self.translateToLanguage, peerIsCopyProtected: self.peerIsCopyProtected, isSecret: self.isSecret)
         for media in self.message.media {
-            if let invoice = media as? TelegramMediaInvoice, let extendedMedia = invoice.extendedMedia, case let .full(fullMedia) = extendedMedia, let image = fullMedia as? TelegramMediaImage {
-                node.setImage(imageReference: .message(message: MessageReference(self.message), media: image))
+            if let paidContent = media as? TelegramMediaPaidContent {
+                let mediaIndex = self.mediaIndex ?? 0
+                if case let .full(fullMedia) = paidContent.extendedMedia[Int(mediaIndex)], let image = fullMedia as? TelegramMediaImage {
+                    node.setImage(userLocation: .peer(self.message.id.peerId), imageReference: .message(message: MessageReference(self.message), media: image))
+                }
+            } else if let invoice = media as? TelegramMediaInvoice, let extendedMedia = invoice.extendedMedia, case let .full(fullMedia) = extendedMedia, let image = fullMedia as? TelegramMediaImage {
+                node.setImage(userLocation: .peer(self.message.id.peerId), imageReference: .message(message: MessageReference(self.message), media: image))
             } else if let image = media as? TelegramMediaImage {
-                node.setImage(imageReference: .message(message: MessageReference(self.message), media: image))
+                node.setImage(userLocation: .peer(self.message.id.peerId), imageReference: .message(message: MessageReference(self.message), media: image))
                 break
             } else if let file = media as? TelegramMediaFile, file.mimeType.hasPrefix("image/") {
-                node.setFile(context: self.context, fileReference: .message(message: MessageReference(self.message), media: file))
+                node.setFile(context: self.context, userLocation: .peer(self.message.id.peerId), fileReference: .message(message: MessageReference(self.message), media: file))
                 break
             } else if let webpage = media as? TelegramMediaWebpage, case let .Loaded(content) = webpage.content {
                 if let image = content.image {
-                    node.setImage(imageReference: .message(message: MessageReference(self.message), media: image))
+                    node.setImage(userLocation: .peer(self.message.id.peerId), imageReference: .message(message: MessageReference(self.message), media: image))
                     break
                 } else if let file = content.file, file.mimeType.hasPrefix("image/") {
-                    node.setFile(context: self.context, fileReference: .message(message: MessageReference(self.message), media: file))
+                    node.setFile(context: self.context, userLocation: .peer(self.message.id.peerId), fileReference: .message(message: MessageReference(self.message), media: file))
                     break
                 }
             }
         }
         
-        if let location = self.location {
+        if let _ = message.adAttribute {
+            node._title.set(.single(self.presentationData.strings.Gallery_Ad))
+        } else if let location = self.location {
             node._title.set(.single(self.presentationData.strings.Items_NOfM("\(location.index + 1)", "\(location.count)").string))
         }
                 
@@ -167,12 +192,23 @@ class ChatImageGalleryItem: GalleryItem {
             if self.displayInfoOnTop {
                 node.titleContentView?.setMessage(self.message, presentationData: self.presentationData, accountPeerId: self.context.account.peerId)
             }
-            node.setMessage(self.message, displayInfo: !self.displayInfoOnTop)
+            node.setMessage(self.message, displayInfo: !self.displayInfoOnTop, translateToLanguage: self.translateToLanguage, peerIsCopyProtected: self.peerIsCopyProtected, isSecret: self.isSecret)
         }
     }
     
     func thumbnailItem() -> (Int64, GalleryThumbnailItem)? {
-        if let id = self.message.groupInfo?.stableId {
+        if let paidContent = self.message.paidContent {
+            var mediaReference: AnyMediaReference?
+            let mediaIndex = self.mediaIndex ?? 0
+            if case let .full(fullMedia) = paidContent.extendedMedia[Int(mediaIndex)], let m = fullMedia as? TelegramMediaImage {
+                mediaReference = .message(message: MessageReference(self.message), media: m)
+            }
+            if let mediaReference = mediaReference {
+                if let item = ChatMediaGalleryThumbnailItem(account: self.context.account, userLocation: .peer(self.message.id.peerId), mediaReference: mediaReference) {
+                    return (0, item)
+                }
+            }
+        } else if let id = self.message.groupInfo?.stableId {
             var mediaReference: AnyMediaReference?
             for m in self.message.media {
                 if let m = m as? TelegramMediaImage {
@@ -182,7 +218,7 @@ class ChatImageGalleryItem: GalleryItem {
                 }
             }
             if let mediaReference = mediaReference {
-                if let item = ChatMediaGalleryThumbnailItem(account: self.context.account, mediaReference: mediaReference) {
+                if let item = ChatMediaGalleryThumbnailItem(account: self.context.account, userLocation: .peer(self.message.id.peerId), mediaReference: mediaReference) {
                     return (Int64(id), item)
                 }
             }
@@ -194,12 +230,17 @@ class ChatImageGalleryItem: GalleryItem {
 final class ChatImageGalleryItemNode: ZoomableContentGalleryItemNode {
     private let context: AccountContext
     private var message: Message?
+    private var translateToLanguage: String?
+    private var peerIsCopyProtected: Bool = false
+    private var isSecret: Bool = false
     private let presentationData: PresentationData
     
     private let imageNode: TransformImageNode
     private var recognizedContentNode: RecognizedContentContainer?
     
     private let recognitionOverlayContentNode: ImageRecognitionOverlayContentNode
+    
+    private let moreBarButton: MoreHeaderButton
     
     private var tilingNode: TilingNode?
     fileprivate let _ready = Promise<Void>()
@@ -218,8 +259,21 @@ final class ChatImageGalleryItemNode: ZoomableContentGalleryItemNode {
     private let dataDisposable = MetaDisposable()
     private let recognitionDisposable = MetaDisposable()
     private var status: MediaResourceStatus?
+    private var fetchedDimensions: PixelDimensions?
     
     private let pagingEnabledPromise = ValuePromise<Bool>(true)
+    
+    private var currentSpeechHolder: SpeechSynthesizerHolder?
+    
+    override var baseNavigationController: () -> NavigationController? {
+        didSet {
+            if let _ = self.baseNavigationController() {
+                self.moreBarButton.isHidden = false
+            } else {
+                self.moreBarButton.isHidden = true
+            }
+        }
+    }
     
     init(context: AccountContext, presentationData: PresentationData, performAction: @escaping (GalleryControllerInteractionTapAction) -> Void, openActionOptions: @escaping (GalleryControllerInteractionTapAction, Message) -> Void, present: @escaping (ViewController, Any?) -> Void) {
         self.context = context
@@ -237,6 +291,10 @@ final class ChatImageGalleryItemNode: ZoomableContentGalleryItemNode {
         self.statusNode = RadialStatusNode(backgroundNodeColor: UIColor(white: 0.0, alpha: 0.5))
         self.statusNode.frame = CGRect(origin: CGPoint(), size: CGSize(width: 50.0, height: 50.0))
         self.statusNode.isHidden = true
+        
+        self.moreBarButton = MoreHeaderButton()
+        self.moreBarButton.isUserInteractionEnabled = true
+        self.moreBarButton.setContent(.more(optionsCircleImage(dark: false)))
         
         super.init()
         
@@ -275,6 +333,11 @@ final class ChatImageGalleryItemNode: ZoomableContentGalleryItemNode {
                 }
             }
         }
+        
+        self.moreBarButton.addTarget(self, action: #selector(self.moreButtonPressed), forControlEvents: .touchUpInside)
+        self.moreBarButton.contextAction = { [weak self] sourceNode, gesture in
+            self?.openMoreMenu(sourceNode: sourceNode, gesture: gesture)
+        }
     }
     
     override func isPagingEnabled() -> Signal<Bool, NoError> {
@@ -305,18 +368,21 @@ final class ChatImageGalleryItemNode: ZoomableContentGalleryItemNode {
         transition.updateFrame(node: self.statusNode, frame: CGRect(origin: CGPoint(), size: statusSize))
     }
     
-    fileprivate func setMessage(_ message: Message, displayInfo: Bool) {
+    fileprivate func setMessage(_ message: Message, displayInfo: Bool, translateToLanguage: String?, peerIsCopyProtected: Bool, isSecret: Bool) {
         self.message = message
-        self.imageNode.captureProtected = message.isCopyProtected()
-        self.footerContentNode.setMessage(message, displayInfo: displayInfo)
+        self.translateToLanguage = translateToLanguage
+        self.peerIsCopyProtected = peerIsCopyProtected
+        self.isSecret = isSecret
+        self.imageNode.captureProtected = message.id.peerId.namespace == Namespaces.Peer.SecretChat || message.isCopyProtected() || peerIsCopyProtected || isSecret || message.paidContent != nil
+        self.footerContentNode.setMessage(message, displayInfo: displayInfo, translateToLanguage: translateToLanguage, peerIsCopyProtected: peerIsCopyProtected)
     }
     
-    fileprivate func setImage(imageReference: ImageMediaReference) {
+    fileprivate func setImage(userLocation: MediaResourceUserLocation, imageReference: ImageMediaReference) {
         if self.contextAndMedia == nil || !self.contextAndMedia!.1.media.isEqual(to: imageReference.media) {
             if let largestSize = largestRepresentationForPhoto(imageReference.media) {
                 let displaySize = largestSize.dimensions.cgSize.fitted(CGSize(width: 1280.0, height: 1280.0)).dividedByScreenScale().integralFloor
                 self.imageNode.asyncLayout()(TransformImageArguments(corners: ImageCorners(), imageSize: displaySize, boundingSize: displaySize, intrinsicInsets: UIEdgeInsets()))()
-                let signal: Signal<(TransformImageArguments) -> DrawingContext?, NoError> = chatMessagePhotoInternal(photoData: chatMessagePhotoDatas(postbox: self.context.account.postbox, photoReference: imageReference, tryAdditionalRepresentations: true, synchronousLoad: false), synchronousLoad: false)
+                let signal: Signal<(TransformImageArguments) -> DrawingContext?, NoError> = chatMessagePhotoInternal(photoData: chatMessagePhotoDatas(postbox: self.context.account.postbox, userLocation: userLocation, photoReference: imageReference, tryAdditionalRepresentations: true, synchronousLoad: false), synchronousLoad: false)
                 |> map { [weak self] _, quality, generate -> (TransformImageArguments) -> DrawingContext? in
                     Queue.mainQueue().async {
                         guard let strongSelf = self else {
@@ -327,8 +393,8 @@ final class ChatImageGalleryItemNode: ZoomableContentGalleryItemNode {
                             strongSelf.statusNodeContainer.isHidden = true
                             
                             Queue.concurrentDefaultQueue().async {
-                                if let message = strongSelf.message, !message.isCopyProtected() && !imageReference.media.flags.contains(.hasStickers) {
-                                    strongSelf.recognitionDisposable.set((recognizedContent(engine: strongSelf.context.engine, image: { return generate(TransformImageArguments(corners: ImageCorners(), imageSize: displaySize, boundingSize: displaySize, intrinsicInsets: UIEdgeInsets()))?.generateImage() }, messageId: message.id)
+                                if let message = strongSelf.message, !message.isCopyProtected() && !imageReference.media.flags.contains(.hasStickers) && message.paidContent == nil {
+                                    strongSelf.recognitionDisposable.set((recognizedContent(context: strongSelf.context, image: { return generate(TransformImageArguments(corners: ImageCorners(), imageSize: displaySize, boundingSize: displaySize, intrinsicInsets: UIEdgeInsets()))?.generateImage() }, messageId: message.id)
                                     |> deliverOnMainQueue).start(next: { [weak self] results in
                                         if let strongSelf = self {
                                             strongSelf.recognizedContentNode?.removeFromSupernode()
@@ -363,10 +429,17 @@ final class ChatImageGalleryItemNode: ZoomableContentGalleryItemNode {
                                                             window.rootViewController?.present(controller, animated: true)
                                                         }
                                                     case .speak:
-                                                        let _ = speakText(context: strongSelf.context, text: string)
+                                                        if let speechHolder = speakText(context: strongSelf.context, text: string) {
+                                                            speechHolder.completion = { [weak self, weak speechHolder] in
+                                                                if let strongSelf = self, strongSelf.currentSpeechHolder == speechHolder {
+                                                                    strongSelf.currentSpeechHolder = nil
+                                                                }
+                                                            }
+                                                            strongSelf.currentSpeechHolder = speechHolder
+                                                        }
                                                     case .translate:
                                                         if let parentController = strongSelf.baseNavigationController()?.topViewController as? ViewController {
-                                                            let controller = TranslateScreen(context: strongSelf.context, text: string, fromLanguage: nil)
+                                                            let controller = TranslateScreen(context: strongSelf.context, text: string, canCopy: true, fromLanguage: nil)
                                                             controller.pushController = { [weak parentController] c in
                                                                 (parentController?.navigationController as? NavigationController)?._keepModalDismissProgress = true
                                                                 parentController?.push(c)
@@ -406,17 +479,24 @@ final class ChatImageGalleryItemNode: ZoomableContentGalleryItemNode {
                 
                 self.zoomableContent = (largestSize.dimensions.cgSize, self.imageNode)
                 
-                self.fetchDisposable.set(fetchedMediaResource(mediaBox: self.context.account.postbox.mediaBox, reference: imageReference.resourceReference(largestSize.resource)).start())
+                self.fetchDisposable.set(fetchedMediaResource(mediaBox: self.context.account.postbox.mediaBox, userLocation: userLocation, userContentType: .image, reference: imageReference.resourceReference(largestSize.resource)).start())
                 self.setupStatus(resource: largestSize.resource)
             } else {
                 self._ready.set(.single(Void()))
             }
+            
+            var barButtonItems: [UIBarButtonItem] = []
             if imageReference.media.flags.contains(.hasStickers) {
                 let rightBarButtonItem = UIBarButtonItem(image: generateTintedImage(image: UIImage(bundleImageName: "Media Gallery/Stickers"), color: .white), style: .plain, target: self, action: #selector(self.openStickersButtonPressed))
-                self._rightBarButtonItems.set(.single([rightBarButtonItem]))
-            } else {
-                self._rightBarButtonItems.set(.single([]))
+                rightBarButtonItem.accessibilityLabel = self.presentationData.strings.Gallery_VoiceOver_Stickers
+                barButtonItems.append(rightBarButtonItem)
             }
+            if self.message != nil {
+                let moreMenuItem = UIBarButtonItem(customDisplayNode: self.moreBarButton)!
+                moreMenuItem.accessibilityLabel = self.presentationData.strings.Common_More
+                barButtonItems.append(moreMenuItem)
+            }
+            self._rightBarButtonItems.set(.single(barButtonItems))
         }
         self.contextAndMedia = (self.context, imageReference.abstract)
     }
@@ -451,6 +531,226 @@ final class ChatImageGalleryItemNode: ZoomableContentGalleryItemNode {
         self.zoomableContent = (size, tilingNode)
         
         self._ready.set(.single(Void()))
+    }
+    
+    @objc private func moreButtonPressed() {
+        self.moreBarButton.play()
+        self.moreBarButton.contextAction?(self.moreBarButton.containerNode, nil)
+    }
+    
+    private func adMenuMainItems() -> Signal<[ContextMenuItem], NoError> {
+        guard let message = self.message, let adAttribute = message.adAttribute else {
+            return .single([])
+        }
+        
+        let context = self.context
+        let presentationData = self.presentationData
+        var actions: [ContextMenuItem] = []
+        if adAttribute.canReport {
+            actions.append(.action(ContextMenuActionItem(text: presentationData.strings.Chat_ContextMenu_AboutAd, textColor: .primary, textLayout: .twoLinesMax, textFont: .custom(font: Font.regular(presentationData.listsFontSize.baseDisplaySize - 1.0), height: nil, verticalOffset: nil), badge: nil, icon: { theme in
+                return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Info"), color: theme.actionSheet.primaryTextColor)
+            }, iconSource: nil, action: { [weak self] _, f in
+                f(.dismissWithoutContent)
+                if let navigationController = self?.baseNavigationController() as? NavigationController {
+                    navigationController.pushViewController(AdsInfoScreen(context: context, mode: .channel))
+                }
+            })))
+            
+            actions.append(.action(ContextMenuActionItem(text: presentationData.strings.Chat_ContextMenu_ReportAd, textColor: .primary, textLayout: .twoLinesMax, textFont: .custom(font: Font.regular(presentationData.listsFontSize.baseDisplaySize - 1.0), height: nil, verticalOffset: nil), badge: nil, icon: { theme in
+                return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Restrict"), color: theme.actionSheet.primaryTextColor)
+            }, iconSource: nil, action: { [weak self] _, f in
+                f(.default)
+                
+                let _ = (context.engine.messages.reportAdMessage(peerId: message.id.peerId, opaqueId: adAttribute.opaqueId, option: nil)
+                |> deliverOnMainQueue).start(next: { [weak self] result in
+                    if case let .options(title, options) = result {
+                        if let navigationController = self?.baseNavigationController() as? NavigationController {
+                            navigationController.pushViewController(
+                                AdsReportScreen(
+                                    context: context,
+                                    peerId: message.id.peerId,
+                                    opaqueId: adAttribute.opaqueId,
+                                    title: title,
+                                    options: options,
+                                    forceDark: true,
+                                    completed: {
+                                        if let navigationController = self?.baseNavigationController() as? NavigationController, let chatController = navigationController.viewControllers.last as? ChatController {
+                                            chatController.removeAd(opaqueId: adAttribute.opaqueId)
+                                        }
+                                    }
+                                )
+                            )
+                        }
+                    }
+                })
+            })))
+            
+            actions.append(.separator)
+                           
+            actions.append(.action(ContextMenuActionItem(text: presentationData.strings.Chat_ContextMenu_RemoveAd, textColor: .primary, textLayout: .twoLinesMax, textFont: .custom(font: Font.regular(presentationData.listsFontSize.baseDisplaySize - 1.0), height: nil, verticalOffset: nil), badge: nil, icon: { theme in
+                return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Clear"), color: theme.actionSheet.primaryTextColor)
+            }, iconSource: nil, action: { [weak self] c, _ in
+                c?.dismiss(completion: {
+                    var replaceImpl: ((ViewController) -> Void)?
+                    let controller = context.sharedContext.makePremiumDemoController(context: context, subject: .noAds, forceDark: true, action: {
+                        let controller = context.sharedContext.makePremiumIntroController(context: context, source: .ads, forceDark: true, dismissed: nil)
+                        replaceImpl?(controller)
+                    }, dismissed: nil)
+                    replaceImpl = { [weak controller] c in
+                        controller?.replace(with: c)
+                    }
+                    if let navigationController = self?.baseNavigationController() as? NavigationController {
+                        navigationController.pushViewController(controller)
+                    }
+                })
+            })))
+        } else {
+            actions.append(.action(ContextMenuActionItem(text: presentationData.strings.SponsoredMessageMenu_Info, textColor: .primary, textLayout: .twoLinesMax, textFont: .custom(font: Font.regular(presentationData.listsFontSize.baseDisplaySize - 1.0), height: nil, verticalOffset: nil), badge: nil, icon: { theme in
+                return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Info"), color: theme.actionSheet.primaryTextColor)
+            }, iconSource: nil, action: { [weak self] _, f in
+                f(.dismissWithoutContent)
+                if let navigationController = self?.baseNavigationController() as? NavigationController {
+                    navigationController.pushViewController(AdInfoScreen(context: context, forceDark: true))
+                }
+            })))
+            
+            let premiumConfiguration = PremiumConfiguration.with(appConfiguration: context.currentAppConfiguration.with { $0 })
+            if !context.isPremium && !premiumConfiguration.isPremiumDisabled {
+                actions.append(.action(ContextMenuActionItem(text: presentationData.strings.SponsoredMessageMenu_Hide, textColor: .primary, textLayout: .twoLinesMax, textFont: .custom(font: Font.regular(presentationData.listsFontSize.baseDisplaySize - 1.0), height: nil, verticalOffset: nil), badge: nil, icon: { theme in
+                    return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Clear"), color: theme.actionSheet.primaryTextColor)
+                }, iconSource: nil, action: { [weak self] c, _ in
+                    c?.dismiss(completion: {
+                        var replaceImpl: ((ViewController) -> Void)?
+                        let controller = context.sharedContext.makePremiumDemoController(context: context, subject: .noAds, forceDark: true, action: {
+                            let controller = context.sharedContext.makePremiumIntroController(context: context, source: .ads, forceDark: true, dismissed: nil)
+                            replaceImpl?(controller)
+                        }, dismissed: nil)
+                        replaceImpl = { [weak controller] c in
+                            controller?.replace(with: c)
+                        }
+                        if let navigationController = self?.baseNavigationController() as? NavigationController {
+                            navigationController.pushViewController(controller)
+                        }
+                    })
+                })))
+            }
+            
+            if !message.text.isEmpty {
+                actions.append(.separator)
+                actions.append(.action(ContextMenuActionItem(text: presentationData.strings.Conversation_ContextMenuCopy, icon: { theme in
+                    return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Copy"), color: theme.actionSheet.primaryTextColor)
+                }, action: { [weak self] _, f in
+                    var messageEntities: [MessageTextEntity]?
+                    for attribute in message.attributes {
+                        if let attribute = attribute as? TextEntitiesMessageAttribute {
+                            messageEntities = attribute.entities
+                        }
+                    }
+                    
+                    storeMessageTextInPasteboard(message.text, entities: messageEntities)
+                    
+                    Queue.mainQueue().after(0.2, {
+                        guard let self, let controller = self.galleryController() else {
+                            return
+                        }
+                        controller.present(UndoOverlayController(presentationData: self.presentationData, content: .copy(text: presentationData.strings.Conversation_MessageCopied), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), in: .window(.root))
+                    })
+                    
+                    f(.default)
+                })))
+            }
+        }
+
+        return .single(actions)
+    }
+
+    private func contextMenuMainItems() -> Signal<[ContextMenuItem], NoError> {
+        let peer: Signal<EnginePeer?, NoError>
+        if let message = self.message {
+            peer = self.context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: message.id.peerId))
+        } else {
+            peer = .single(nil)
+        }
+    
+        let context = self.context
+        return peer
+        |> map { [weak self] peer -> [ContextMenuItem] in
+            guard let self else {
+                return []
+            }
+            var items: [ContextMenuItem] = []
+            if let message = self.message {
+                items.append(.action(ContextMenuActionItem(text: self.presentationData.strings.SharedMedia_ViewInChat, icon: { theme in generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/GoToMessage"), color: theme.contextMenu.primaryColor)}, action: { [weak self] _, f in
+                    if let self, let peer, let navigationController = self.baseNavigationController() {
+                        self.beginCustomDismiss(true)
+                        
+                        context.sharedContext.navigateToChatController(NavigateToChatControllerParams(navigationController: navigationController, context: context, chatLocation: .peer(peer), subject: .message(id: .id(message.id), highlight: ChatControllerSubject.MessageHighlight(quote: nil), timecode: nil, setupReply: false)))
+                        
+                        Queue.mainQueue().after(0.3) {
+                            self.completeCustomDismiss(false)
+                        }
+                    }
+                    f(.default)
+                })))
+                
+                if !message.isCopyProtected() && !self.peerIsCopyProtected && message.paidContent == nil, let media = self.contextAndMedia?.1 {
+                    items.append(.action(ContextMenuActionItem(text: self.presentationData.strings.Gallery_SaveImage, icon: { theme in generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Download"), color: theme.actionSheet.primaryTextColor) }, action: { [weak self] _, f in
+                        f(.default)
+                        
+                        let _ = (SaveToCameraRoll.saveToCameraRoll(context: context, postbox: context.account.postbox, userLocation: .peer(message.id.peerId), mediaReference: media)
+                        |> deliverOnMainQueue).start(completed: { [weak self] in
+                            guard let strongSelf = self else {
+                                return
+                            }
+                            guard let controller = strongSelf.galleryController() else {
+                                return
+                            }
+                            controller.present(UndoOverlayController(presentationData: strongSelf.presentationData, content: .mediaSaved(text: strongSelf.presentationData.strings.Gallery_ImageSaved), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), in: .window(.root))
+                        })
+                    })))
+                }
+            }
+            
+            if let peer, let message = self.message, canSendMessagesToPeer(peer._asPeer()) {
+                items.append(.action(ContextMenuActionItem(text: self.presentationData.strings.Conversation_ContextMenuReply, icon: { theme in generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Reply"), color: theme.contextMenu.primaryColor)}, action: { [weak self] _, f in
+                    if let self, let navigationController = self.baseNavigationController() {
+                        self.beginCustomDismiss(true)
+                        
+                        context.sharedContext.navigateToChatController(NavigateToChatControllerParams(navigationController: navigationController, context: context, chatLocation: .peer(peer), subject: .message(id: .id(message.id), highlight: ChatControllerSubject.MessageHighlight(quote: nil), timecode: nil, setupReply: true)))
+                        
+                        Queue.mainQueue().after(0.3) {
+                            self.completeCustomDismiss(false)
+                        }
+                    }
+                    f(.default)
+                })))
+            }
+            
+            if self.canDelete() {
+                items.append(.action(ContextMenuActionItem(text: self.presentationData.strings.Common_Delete, textColor: .destructive, icon: { theme in generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Delete"), color: theme.contextMenu.destructiveColor) }, action: { [weak self] _, f in
+                    f(.default)
+
+                    if let strongSelf = self {
+                        strongSelf.footerContentNode.deleteButtonPressed()
+                    }
+                })))
+            }
+            return items
+        }
+    }
+    
+    private func openMoreMenu(sourceNode: ASDisplayNode, gesture: ContextGesture?) {
+        let items: Signal<[ContextMenuItem], NoError>
+        if let message = self.message, let _ = message.adAttribute {
+            items = self.adMenuMainItems()
+        } else {
+            items = self.contextMenuMainItems()
+        }
+        guard let controller = self.baseNavigationController()?.topViewController as? ViewController else {
+            return
+        }
+        let contextController = ContextController(presentationData: self.presentationData.withUpdated(theme: defaultDarkColorPresentationTheme), source: .reference(HeaderContextReferenceContentSource(controller: controller, sourceNode: self.moreBarButton.referenceNode)), items: items |> map { ContextController.Items(content: .list($0)) }, gesture: gesture)
+        controller.presentInGlobalOverlay(contextController)
     }
     
     @objc func openStickersButtonPressed() {
@@ -507,9 +807,9 @@ final class ChatImageGalleryItemNode: ZoomableContentGalleryItemNode {
         })
     }
     
-    func setFile(context: AccountContext, fileReference: FileMediaReference) {
-        if self.contextAndMedia == nil || !self.contextAndMedia!.1.media.isEqual(to: fileReference.media) {
-            if var largestSize = fileReference.media.dimensions {
+    func setFile(context: AccountContext, userLocation: MediaResourceUserLocation, fileReference: FileMediaReference, force: Bool = false) {
+        if self.contextAndMedia == nil || !self.contextAndMedia!.1.media.isEqual(to: fileReference.media) || force {
+            if var largestSize = (fileReference.media.dimensions ?? self.fetchedDimensions) {
                 var displaySize = largestSize.cgSize.dividedByScreenScale()
                 if let previewDimensions = largestImageRepresentation(fileReference.media.previewRepresentations)?.dimensions {
                     let previewAspect = CGFloat(previewDimensions.width) / CGFloat(previewDimensions.height)
@@ -533,12 +833,38 @@ final class ChatImageGalleryItemNode: ZoomableContentGalleryItemNode {
                         strongSelf.updateImageFromFile(path: data.path)
                     }))
                 } else {*/
-                    self.imageNode.setSignal(chatMessageImageFile(account: context.account, fileReference: fileReference, thumbnail: false), dispatchOnDisplayLink: false)
+                    self.imageNode.setSignal(chatMessageImageFile(account: context.account, userLocation: userLocation, fileReference: fileReference, thumbnail: false), dispatchOnDisplayLink: false)
                 //}
                 
                 self.zoomableContent = (largestSize.cgSize, self.imageNode)
                 self.setupStatus(resource: fileReference.media.resource)
+                
+                var barButtonItems: [UIBarButtonItem] = []
+                if self.message != nil {
+                    let moreMenuItem = UIBarButtonItem(customDisplayNode: self.moreBarButton)!
+                    moreMenuItem.accessibilityLabel = self.presentationData.strings.Common_More
+                    barButtonItems.append(moreMenuItem)
+                }
+                self._rightBarButtonItems.set(.single(barButtonItems))
+                
+                self.fetchDisposable.set(fetchedMediaResource(mediaBox: self.context.account.postbox.mediaBox, userLocation: userLocation, userContentType: .image, reference: fileReference.resourceReference(fileReference.media.resource)).start())
             } else {
+                let _ = (chatMessageFileDatas(account: context.account, userLocation: userLocation, fileReference: fileReference, progressive: false, fetched: true)
+                |> mapToSignal { value -> Signal<UIImage?, NoError> in
+                    if value._2, let path = value._1, let data = try? Data(contentsOf: URL(fileURLWithPath: path)) {
+                        return .single(UIImage(data: data))
+                    }
+                    return .complete()
+                }
+                |> deliverOnMainQueue).start(next: { [weak self] image in
+                    if let self, let image {
+                        self.fetchedDimensions = PixelDimensions(image.size)
+                        self.setFile(context: context, userLocation: userLocation, fileReference: fileReference, force: true)
+                    }
+                })
+                
+                
+                
                 self._ready.set(.single(Void()))
             }
         }
@@ -756,12 +1082,12 @@ final class ChatImageGalleryItemNode: ZoomableContentGalleryItemNode {
     override func visibilityUpdated(isVisible: Bool) {
         super.visibilityUpdated(isVisible: isVisible)
         
-        if let (_, mediaReference) = self.contextAndMedia, let _ = mediaReference.concrete(TelegramMediaFile.self) {
+        /*if let (_, mediaReference) = self.contextAndMedia, let _ = mediaReference.concrete(TelegramMediaFile.self) {
             if isVisible {
             } else {
                 self.fetchDisposable.set(nil)
             }
-        }
+        }*/
     }
     
     override func title() -> Signal<String, NoError> {
@@ -796,7 +1122,7 @@ final class ChatImageGalleryItemNode: ZoomableContentGalleryItemNode {
                     case .Fetching:
                         self.context.account.postbox.mediaBox.cancelInteractiveResourceFetch(resource.resource)
                     case .Remote:
-                        self.fetchDisposable.set(fetchedMediaResource(mediaBox: self.context.account.postbox.mediaBox, reference: resource, statsCategory: statsCategory ?? .generic).start())
+                    self.fetchDisposable.set(fetchedMediaResource(mediaBox: self.context.account.postbox.mediaBox, userLocation: (self.message?.id.peerId).flatMap(MediaResourceUserLocation.peer) ?? .other, userContentType: .image, reference: resource, statsCategory: statsCategory ?? .generic).start())
                     default:
                         break
                 }
@@ -1112,7 +1438,7 @@ extension UIBezierPath {
 }
 
 private func generateMaskImage(size: CGSize, recognitions: [RecognizedContent]) -> UIImage? {
-    return generateImage(size, opaque: false, rotatedContext: { size, c in
+    return generateImage(size, opaque: false, scale: 1.0, rotatedContext: { size, c in
         let bounds = CGRect(origin: CGPoint(), size: size)
         c.clear(bounds)
         
@@ -1217,6 +1543,9 @@ private class ImageRecognitionOverlayContentNode: GalleryOverlayContentNode {
     var action: ((Bool) -> Void)?
     private var appeared = false
     
+    private var validLayout: (CGSize, LayoutMetrics, UIEdgeInsets)?
+    private var interfaceIsHidden: Bool = false
+    
     init(theme: PresentationTheme) {
         self.backgroundNode = ASImageNode()
         self.backgroundNode.displaysAsynchronously = false
@@ -1241,13 +1570,25 @@ private class ImageRecognitionOverlayContentNode: GalleryOverlayContentNode {
         self.selectedIconNode.isHidden = true
         
         super.init()
-        
+                
         self.buttonNode.addTarget(self, action: #selector(self.buttonPressed), forControlEvents: .touchUpInside)
         self.addSubnode(self.buttonNode)
         self.buttonNode.addSubnode(self.backgroundNode)
         self.buttonNode.addSubnode(self.selectedBackgroundNode)
         self.buttonNode.addSubnode(self.iconNode)
         self.buttonNode.addSubnode(self.selectedIconNode)
+        
+        self.buttonNode.highligthedChanged = { [weak self] highlighted in
+            if let strongSelf = self {
+                if highlighted {
+                    strongSelf.iconNode.layer.removeAnimation(forKey: "opacity")
+                    strongSelf.iconNode.alpha = 0.4
+                } else {
+                    strongSelf.iconNode.alpha = 1.0
+                    strongSelf.iconNode.layer.animateAlpha(from: 0.4, to: 1.0, duration: 0.2)
+                }
+            }
+        }
     }
     
     @objc private func buttonPressed() {
@@ -1255,6 +1596,10 @@ private class ImageRecognitionOverlayContentNode: GalleryOverlayContentNode {
         self.buttonNode.isSelected = newValue
         self.selectedBackgroundNode.isHidden = !newValue
         self.selectedIconNode.isHidden = !newValue
+        
+        if !newValue && !self.interfaceIsHidden, let (size, metrics, insets) = self.validLayout {
+            self.updateLayout(size: size, metrics: metrics, insets: insets, isHidden: self.interfaceIsHidden, transition: .animated(duration: 0.3, curve: .easeInOut))
+        }
         
         self.action?(newValue)
         
@@ -1273,8 +1618,9 @@ private class ImageRecognitionOverlayContentNode: GalleryOverlayContentNode {
         self.buttonNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.2)
     }
     
-    private var interfaceIsHidden: Bool = false
     override func updateLayout(size: CGSize, metrics: LayoutMetrics, insets: UIEdgeInsets, isHidden: Bool, transition: ContainedViewLayoutTransition) {
+        self.validLayout = (size, metrics, insets)
+        
         self.interfaceIsHidden = isHidden
         
         let buttonSize = CGSize(width: 32.0, height: 32.0)
@@ -1291,7 +1637,14 @@ private class ImageRecognitionOverlayContentNode: GalleryOverlayContentNode {
             }
         }
         
-        transition.updateFrame(node: self.buttonNode, frame: CGRect(x: size.width - insets.right - buttonSize.width - 24.0, y: insets.top - 50.0, width: buttonSize.width + 24.0, height: buttonSize.height + 24.0))
+        var buttonPosition: CGPoint
+        if isHidden && !self.buttonNode.isSelected {
+            buttonPosition = CGPoint(x: size.width - insets.right - buttonSize.width - 59.0, y: -50.0)
+        } else {
+            buttonPosition = CGPoint(x: size.width - insets.right - buttonSize.width - (self.buttonNode.isSelected ? 24.0 : 59.0), y: insets.top - 50.0)
+        }
+        
+        transition.updateFrame(node: self.buttonNode, frame: CGRect(origin: buttonPosition, size: CGSize(width: buttonSize.width + 24.0, height: buttonSize.height + 24.0)))
     }
     
     override func animateIn(previousContentNode: GalleryOverlayContentNode?, transition: ContainedViewLayoutTransition) {

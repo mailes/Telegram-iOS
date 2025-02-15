@@ -30,7 +30,8 @@ typedef enum
 {
     TGPhotoEditorDoneButtonSend,
     TGPhotoEditorDoneButtonCheck,
-    TGPhotoEditorDoneButtonDone
+    TGPhotoEditorDoneButtonDone,
+    TGPhotoEditorDoneButtonSchedule
 } TGPhotoEditorDoneButton;
 
 @interface TGPhotoToolbarView : UIView
@@ -65,7 +66,9 @@ typedef enum
 - (void)setEditButtonsHighlighted:(TGPhotoEditorTab)buttons;
 - (void)setEditButtonsDisabled:(TGPhotoEditorTab)buttons;
 
+- (void)setCenterButtonsHidden:(bool)hidden animated:(bool)animated;
 - (void)setAllButtonsHidden:(bool)hidden animated:(bool)animated;
+- (void)setCancelDoneButtonsHidden:(bool)hidden animated:(bool)animated;
 
 @property (nonatomic, readonly) TGPhotoEditorTab currentTabs;
 - (void)setToolbarTabs:(TGPhotoEditorTab)tabs animated:(bool)animated;

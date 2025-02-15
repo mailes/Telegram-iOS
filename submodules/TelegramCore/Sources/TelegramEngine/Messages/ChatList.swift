@@ -7,6 +7,7 @@ public final class EngineChatList: Equatable {
     }
 
     public typealias MessageTagSummaryInfo = ChatListMessageTagSummaryInfo
+    public typealias StoryStats = PeerStoryStats
 
     public enum PinnedItem {
         public typealias Id = PinnedItemId
@@ -28,17 +29,26 @@ public final class EngineChatList: Equatable {
     }
     
     public struct ForumTopicData: Equatable {
+        public var id: Int64
         public var title: String
-        public let iconFileId: Int64?
-        public let iconColor: Int32
+        public var iconFileId: Int64?
+        public var iconColor: Int32
         public var maxOutgoingReadMessageId: EngineMessage.Id
+        public var isUnread: Bool
         
-        public init(title: String, iconFileId: Int64?, iconColor: Int32, maxOutgoingReadMessageId: EngineMessage.Id) {
+        public init(id: Int64, title: String, iconFileId: Int64?, iconColor: Int32, maxOutgoingReadMessageId: EngineMessage.Id, isUnread: Bool) {
+            self.id = id
             self.title = title
             self.iconFileId = iconFileId
             self.iconColor = iconColor
             self.maxOutgoingReadMessageId = maxOutgoingReadMessageId
+            self.isUnread = isUnread
         }
+    }
+    
+    public enum MediaDraftContentType: Int32 {
+        case audio
+        case video
     }
 
     public final class Item: Equatable {
@@ -119,8 +129,14 @@ public final class EngineChatList: Equatable {
         public let hasUnseenMentions: Bool
         public let hasUnseenReactions: Bool
         public let forumTopicData: ForumTopicData?
+        public let topForumTopicItems: [EngineChatList.ForumTopicData]
         public let hasFailed: Bool
         public let isContact: Bool
+        public let autoremoveTimeout: Int32?
+        public let storyStats: StoryStats?
+        public let displayAsTopicList: Bool
+        public let isPremiumRequiredToMessage: Bool
+        public let mediaDraftContentType: EngineChatList.MediaDraftContentType?
 
         public init(
             id: Id,
@@ -135,8 +151,14 @@ public final class EngineChatList: Equatable {
             hasUnseenMentions: Bool,
             hasUnseenReactions: Bool,
             forumTopicData: ForumTopicData?,
+            topForumTopicItems: [EngineChatList.ForumTopicData],
             hasFailed: Bool,
-            isContact: Bool
+            isContact: Bool,
+            autoremoveTimeout: Int32?,
+            storyStats: StoryStats?,
+            displayAsTopicList: Bool,
+            isPremiumRequiredToMessage: Bool,
+            mediaDraftContentType: EngineChatList.MediaDraftContentType?
         ) {
             self.id = id
             self.index = index
@@ -150,8 +172,14 @@ public final class EngineChatList: Equatable {
             self.hasUnseenMentions = hasUnseenMentions
             self.hasUnseenReactions = hasUnseenReactions
             self.forumTopicData = forumTopicData
+            self.topForumTopicItems = topForumTopicItems
             self.hasFailed = hasFailed
             self.isContact = isContact
+            self.autoremoveTimeout = autoremoveTimeout
+            self.storyStats = storyStats
+            self.displayAsTopicList = displayAsTopicList
+            self.isPremiumRequiredToMessage = isPremiumRequiredToMessage
+            self.mediaDraftContentType = mediaDraftContentType
         }
         
         public static func ==(lhs: Item, rhs: Item) -> Bool {
@@ -191,10 +219,28 @@ public final class EngineChatList: Equatable {
             if lhs.forumTopicData != rhs.forumTopicData {
                 return false
             }
+            if lhs.topForumTopicItems != rhs.topForumTopicItems {
+                return false
+            }
             if lhs.hasFailed != rhs.hasFailed {
                 return false
             }
             if lhs.isContact != rhs.isContact {
+                return false
+            }
+            if lhs.autoremoveTimeout != rhs.autoremoveTimeout {
+                return false
+            }
+            if lhs.storyStats != rhs.storyStats {
+                return false
+            }
+            if lhs.displayAsTopicList != rhs.displayAsTopicList {
+                return false
+            }
+            if lhs.isPremiumRequiredToMessage != rhs.isPremiumRequiredToMessage {
+                return false
+            }
+            if lhs.mediaDraftContentType != rhs.mediaDraftContentType {
                 return false
             }
             return true
@@ -395,16 +441,50 @@ public extension EngineChatList.RelativePosition {
     }
 }
 
+private func calculateIsPremiumRequiredToMessage(isPremium: Bool, targetPeer: Peer, cachedIsPremiumRequired: Bool) -> Bool {
+    if isPremium {
+        return false
+    }
+    guard let targetPeer = targetPeer as? TelegramUser else {
+        return false
+    }
+    if !targetPeer.flags.contains(.requirePremium) {
+        return false
+    }
+    return cachedIsPremiumRequired
+}
+
 extension EngineChatList.Item {
-    convenience init?(_ entry: ChatListEntry) {
+    convenience init?(_ entry: ChatListEntry, isPremium: Bool, displayAsTopicList: Bool) {
         switch entry {
-        case let .MessageEntry(index, messages, readState, isRemovedFromTotalUnreadCount, embeddedState, renderedPeer, presence, tagSummaryInfo, forumTopicData, hasFailed, isContact):
+        case let .MessageEntry(entryData):
+            let index = entryData.index
+            let messages = entryData.messages
+            let readState = entryData.readState
+            let isRemovedFromTotalUnreadCount = entryData.isRemovedFromTotalUnreadCount
+            let embeddedState = entryData.embeddedInterfaceState
+            let renderedPeer = entryData.renderedPeer
+            let presence = entryData.presence
+            let tagSummaryInfo = entryData.summaryInfo
+            let forumTopicData = entryData.forumTopicData
+            let topForumTopics = entryData.topForumTopics
+            let hasFailed = entryData.hasFailed
+            let isContact = entryData.isContact
+            let autoremoveTimeout = entryData.autoremoveTimeout
+            
+            var isPremiumRequiredToMessage = false
+            if let targetPeer = renderedPeer.chatMainPeer, let extractedData = entryData.extractedCachedData?.base as? ExtractedChatListItemCachedData {
+                isPremiumRequiredToMessage = calculateIsPremiumRequiredToMessage(isPremium: isPremium, targetPeer: targetPeer, cachedIsPremiumRequired: extractedData.isPremiumRequiredToMessage)
+            }
+            
             var draft: EngineChatList.Draft?
+            var mediaDraftContentType: EngineChatList.MediaDraftContentType?
             if let embeddedState = embeddedState, let _ = embeddedState.overrideChatTimestamp {
                 if let opaqueState = _internal_decodeStoredChatInterfaceState(state: embeddedState) {
                     if let text = opaqueState.synchronizeableInputState?.text {
                         draft = EngineChatList.Draft(text: text, entities: opaqueState.synchronizeableInputState?.entities ?? [])
                     }
+                    mediaDraftContentType = opaqueState.mediaDraftState?.contentType
                 }
             }
             
@@ -425,11 +505,30 @@ extension EngineChatList.Item {
             }
             
             var forumTopicDataValue: EngineChatList.ForumTopicData?
-            if let forumTopicData = forumTopicData?.data.get(MessageHistoryThreadData.self) {
-                forumTopicDataValue = EngineChatList.ForumTopicData(title: forumTopicData.info.title, iconFileId: forumTopicData.info.icon, iconColor: forumTopicData.info.iconColor, maxOutgoingReadMessageId: MessageId(peerId: index.messageIndex.id.peerId, namespace: Namespaces.Message.Cloud, id: forumTopicData.maxOutgoingReadId))
+            if let forumTopicData = forumTopicData {
+                let id = forumTopicData.id
+                if let forumTopicData = forumTopicData.info.data.get(MessageHistoryThreadData.self) {
+                    forumTopicDataValue = EngineChatList.ForumTopicData(id: id, title: forumTopicData.info.title, iconFileId: forumTopicData.info.icon, iconColor: forumTopicData.info.iconColor, maxOutgoingReadMessageId: MessageId(peerId: index.messageIndex.id.peerId, namespace: Namespaces.Message.Cloud, id: forumTopicData.maxOutgoingReadId), isUnread: forumTopicData.incomingUnreadCount > 0)
+                }
+            }
+            
+            var topForumTopicItems: [EngineChatList.ForumTopicData] = []
+            for item in topForumTopics {
+                if let forumTopicData = item.info.data.get(MessageHistoryThreadData.self) {
+                    topForumTopicItems.append(EngineChatList.ForumTopicData(id: item.id, title: forumTopicData.info.title, iconFileId: forumTopicData.info.icon, iconColor: forumTopicData.info.iconColor, maxOutgoingReadMessageId: MessageId(peerId: index.messageIndex.id.peerId, namespace: Namespaces.Message.Cloud, id: forumTopicData.maxOutgoingReadId), isUnread: forumTopicData.incomingUnreadCount > 0))
+                }
             }
             
             let readCounters = readState.flatMap(EnginePeerReadCounters.init)
+            
+            if let channel = renderedPeer.peer as? TelegramChannel {
+                if channel.flags.contains(.isForum) {
+                    draft = nil
+                } else {
+                    forumTopicDataValue = nil
+                    topForumTopicItems = []
+                }
+            }
 
             self.init(
                 id: .chatList(index.messageIndex.id.peerId),
@@ -444,8 +543,14 @@ extension EngineChatList.Item {
                 hasUnseenMentions: hasUnseenMentions,
                 hasUnseenReactions: hasUnseenReactions,
                 forumTopicData: forumTopicDataValue,
+                topForumTopicItems: topForumTopicItems,
                 hasFailed: hasFailed,
-                isContact: isContact
+                isContact: isContact,
+                autoremoveTimeout: autoremoveTimeout,
+                storyStats: entryData.storyStats,
+                displayAsTopicList: displayAsTopicList,
+                isPremiumRequiredToMessage: isPremiumRequiredToMessage,
+                mediaDraftContentType: mediaDraftContentType
             )
         case .HoleEntry:
             return nil
@@ -485,7 +590,7 @@ extension EngineChatList.AdditionalItem.PromoInfo {
 
 extension EngineChatList.AdditionalItem {
     convenience init?(_ entry: ChatListAdditionalItemEntry) {
-        guard let item = EngineChatList.Item(entry.entry) else {
+        guard let item = EngineChatList.Item(entry.entry, isPremium: false, displayAsTopicList: false) else {
             return nil
         }
         guard let promoInfo = (entry.info as? PromoChatListItem).flatMap(EngineChatList.AdditionalItem.PromoInfo.init) else {
@@ -496,14 +601,21 @@ extension EngineChatList.AdditionalItem {
 }
 
 public extension EngineChatList {
-    convenience init(_ view: ChatListView) {
+    convenience init(_ view: ChatListView, accountPeerId: PeerId) {
         var isLoading = false
+        
+        var displaySavedMessagesAsTopicList = false
+        if let value = view.displaySavedMessagesAsTopicList?.get(EngineDisplaySavedChatsAsTopics.self) {
+            displaySavedMessagesAsTopicList = value.value
+        }
+        
+        let isPremium = view.accountPeer?.isPremium ?? false
 
         var items: [EngineChatList.Item] = []
         loop: for entry in view.entries {
             switch entry {
             case .MessageEntry:
-                if let item = EngineChatList.Item(entry) {
+                if let item = EngineChatList.Item(entry, isPremium: isPremium, displayAsTopicList: entry.index.messageIndex.id.peerId == accountPeerId ? displaySavedMessagesAsTopicList : false) {
                     items.append(item)
                 }
             case .HoleEntry:

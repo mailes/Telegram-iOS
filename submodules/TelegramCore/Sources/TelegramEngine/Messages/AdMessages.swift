@@ -8,13 +8,18 @@ private class AdMessagesHistoryContextImpl {
         enum CodingKeys: String, CodingKey {
             case opaqueId
             case messageType
-            case displayAvatar
+            case title
             case text
             case textEntities
             case media
-            case target
-            case messageId
-            case startParam
+            case contentMedia
+            case color
+            case backgroundEmojiId
+            case url
+            case buttonText
+            case sponsorInfo
+            case additionalInfo
+            case canReport
         }
         
         enum MessageType: Int32, Codable {
@@ -22,78 +27,51 @@ private class AdMessagesHistoryContextImpl {
             case recommended = 1
         }
         
-        enum Target: Equatable, Codable {
-            enum DecodingError: Error {
-                case generic
-            }
-            
-            enum CodingKeys: String, CodingKey {
-                case peer
-                case invite
-            }
-            
-            struct Invite: Equatable, Codable {
-                var title: String
-                var joinHash: String
-            }
-            
-            case peer(PeerId)
-            case invite(Invite)
-            
-            init(from decoder: Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                
-                if let peer = try container.decodeIfPresent(Int64.self, forKey: .peer) {
-                    self = .peer(PeerId(peer))
-                } else if let invite = try container.decodeIfPresent(Invite.self, forKey: .invite) {
-                    self = .invite(invite)
-                } else {
-                    throw DecodingError.generic
-                }
-            }
-            
-            func encode(to encoder: Encoder) throws {
-                var container = encoder.container(keyedBy: CodingKeys.self)
-                
-                switch self {
-                case let .peer(peerId):
-                    try container.encode(peerId.toInt64(), forKey: .peer)
-                case let .invite(invite):
-                    try container.encode(invite, forKey: .invite)
-                }
-            }
-        }
-
         public let opaqueId: Data
         public let messageType: MessageType
-        public let displayAvatar: Bool
+        public let title: String
         public let text: String
         public let textEntities: [MessageTextEntity]
         public let media: [Media]
-        public let target: Target
-        public let messageId: MessageId?
-        public let startParam: String?
+        public let contentMedia: [Media]
+        public let color: PeerNameColor?
+        public let backgroundEmojiId: Int64?
+        public let url: String
+        public let buttonText: String
+        public let sponsorInfo: String?
+        public let additionalInfo: String?
+        public let canReport: Bool
 
         public init(
             opaqueId: Data,
             messageType: MessageType,
-            displayAvatar: Bool,
+            title: String,
             text: String,
             textEntities: [MessageTextEntity],
             media: [Media],
-            target: Target,
-            messageId: MessageId?,
-            startParam: String?
+            contentMedia: [Media],
+            color: PeerNameColor?,
+            backgroundEmojiId: Int64?,
+            url: String,
+            buttonText: String,
+            sponsorInfo: String?,
+            additionalInfo: String?,
+            canReport: Bool
         ) {
             self.opaqueId = opaqueId
             self.messageType = messageType
-            self.displayAvatar = displayAvatar
+            self.title = title
             self.text = text
             self.textEntities = textEntities
             self.media = media
-            self.target = target
-            self.messageId = messageId
-            self.startParam = startParam
+            self.contentMedia = contentMedia
+            self.color = color
+            self.backgroundEmojiId = backgroundEmojiId
+            self.url = url
+            self.buttonText = buttonText
+            self.sponsorInfo = sponsorInfo
+            self.additionalInfo = additionalInfo
+            self.canReport = canReport
         }
 
         public init(from decoder: Decoder) throws {
@@ -107,8 +85,7 @@ private class AdMessagesHistoryContextImpl {
                 self.messageType = .sponsored
             }
             
-            self.displayAvatar = try container.decodeIfPresent(Bool.self, forKey: .displayAvatar) ?? false
-            
+            self.title = try container.decode(String.self, forKey: .title)
             self.text = try container.decode(String.self, forKey: .text)
             self.textEntities = try container.decode([MessageTextEntity].self, forKey: .textEntities)
 
@@ -116,10 +93,22 @@ private class AdMessagesHistoryContextImpl {
             self.media = mediaData.compactMap { data -> Media? in
                 return PostboxDecoder(buffer: MemoryBuffer(data: data)).decodeRootObject() as? Media
             }
+            
+            let contentMediaData = try container.decode([Data].self, forKey: .contentMedia)
+            self.contentMedia = contentMediaData.compactMap { data -> Media? in
+                return PostboxDecoder(buffer: MemoryBuffer(data: data)).decodeRootObject() as? Media
+            }
+            
+            self.color = try container.decodeIfPresent(Int32.self, forKey: .color).flatMap { PeerNameColor(rawValue: $0) }
+            self.backgroundEmojiId = try container.decodeIfPresent(Int64.self, forKey: .backgroundEmojiId)
 
-            self.target = try container.decode(Target.self, forKey: .target)
-            self.messageId = try container.decodeIfPresent(MessageId.self, forKey: .messageId)
-            self.startParam = try container.decodeIfPresent(String.self, forKey: .startParam)
+            self.url = try container.decode(String.self, forKey: .url)
+            self.buttonText = try container.decode(String.self, forKey: .buttonText)
+            
+            self.sponsorInfo = try container.decodeIfPresent(String.self, forKey: .sponsorInfo)
+            self.additionalInfo = try container.decodeIfPresent(String.self, forKey: .additionalInfo)
+            
+            self.canReport = try container.decodeIfPresent(Bool.self, forKey: .canReport) ?? false
         }
 
         public func encode(to encoder: Encoder) throws {
@@ -127,7 +116,7 @@ private class AdMessagesHistoryContextImpl {
 
             try container.encode(self.opaqueId, forKey: .opaqueId)
             try container.encode(self.messageType.rawValue, forKey: .messageType)
-            try container.encode(self.displayAvatar, forKey: .displayAvatar)
+            try container.encode(self.title, forKey: .title)
             try container.encode(self.text, forKey: .text)
             try container.encode(self.textEntities, forKey: .textEntities)
 
@@ -137,10 +126,24 @@ private class AdMessagesHistoryContextImpl {
                 return encoder.makeData()
             }
             try container.encode(mediaData, forKey: .media)
+            
+            let contentMediaData = self.contentMedia.map { media -> Data in
+                let encoder = PostboxEncoder()
+                encoder.encodeRootObject(media)
+                return encoder.makeData()
+            }
+            try container.encode(contentMediaData, forKey: .contentMedia)
 
-            try container.encode(self.target, forKey: .target)
-            try container.encodeIfPresent(self.messageId, forKey: .messageId)
-            try container.encodeIfPresent(self.startParam, forKey: .startParam)
+            try container.encodeIfPresent(self.color?.rawValue, forKey: .color)
+            try container.encodeIfPresent(self.backgroundEmojiId, forKey: .backgroundEmojiId)
+            
+            try container.encode(self.url, forKey: .url)
+            try container.encode(self.buttonText, forKey: .buttonText)
+            
+            try container.encodeIfPresent(self.sponsorInfo, forKey: .sponsorInfo)
+            try container.encodeIfPresent(self.additionalInfo, forKey: .additionalInfo)
+            
+            try container.encode(self.canReport, forKey: .canReport)
         }
 
         public static func ==(lhs: CachedMessage, rhs: CachedMessage) -> Bool {
@@ -148,6 +151,9 @@ private class AdMessagesHistoryContextImpl {
                 return false
             }
             if lhs.messageType != rhs.messageType {
+                return false
+            }
+            if lhs.title != rhs.title {
                 return false
             }
             if lhs.text != rhs.text {
@@ -164,13 +170,27 @@ private class AdMessagesHistoryContextImpl {
                     return false
                 }
             }
-            if lhs.target != rhs.target {
+            if lhs.contentMedia.count != rhs.contentMedia.count {
                 return false
             }
-            if lhs.messageId != rhs.messageId {
+            for i in 0 ..< lhs.contentMedia.count {
+                if !lhs.contentMedia[i].isEqual(to: rhs.contentMedia[i]) {
+                    return false
+                }
+            }
+            if lhs.url != rhs.url {
                 return false
             }
-            if lhs.startParam != rhs.startParam {
+            if lhs.buttonText != rhs.buttonText {
+                return false
+            }
+            if lhs.sponsorInfo != rhs.sponsorInfo {
+                return false
+            }
+            if lhs.additionalInfo != rhs.additionalInfo {
+                return false
+            }
+            if lhs.canReport != rhs.canReport {
                 return false
             }
             return true
@@ -179,13 +199,6 @@ private class AdMessagesHistoryContextImpl {
         func toMessage(peerId: PeerId, transaction: Transaction) -> Message? {
             var attributes: [MessageAttribute] = []
 
-            let target: AdMessageAttribute.MessageTarget
-            switch self.target {
-            case let .peer(peerId):
-                target = .peer(id: peerId, message: self.messageId, startParam: self.startParam)
-            case let .invite(invite):
-                target = .join(title: invite.title, joinHash: invite.joinHash)
-            }
             let mappedMessageType: AdMessageAttribute.MessageType
             switch self.messageType {
             case .sponsored:
@@ -193,7 +206,7 @@ private class AdMessagesHistoryContextImpl {
             case .recommended:
                 mappedMessageType = .recommended
             }
-            attributes.append(AdMessageAttribute(opaqueId: self.opaqueId, messageType: mappedMessageType, displayAvatar: self.displayAvatar, target: target))
+            attributes.append(AdMessageAttribute(opaqueId: self.opaqueId, messageType: mappedMessageType, url: self.url, buttonText: self.buttonText, sponsorInfo: self.sponsorInfo, additionalInfo: self.additionalInfo, canReport: self.canReport, hasContentMedia: !self.contentMedia.isEmpty))
             if !self.textEntities.isEmpty {
                 let attribute = TextEntitiesMessageAttribute(entities: self.textEntities)
                 attributes.append(attribute)
@@ -205,39 +218,40 @@ private class AdMessagesHistoryContextImpl {
                 messagePeers[peer.id] = peer
             }
             
-            let author: Peer
-            switch self.target {
-            case let .peer(peerId):
-                if let peer = transaction.getPeer(peerId) {
-                    author = peer
-                } else {
-                    return nil
-                }
-            case let .invite(invite):
-                author = TelegramChannel(
-                    id: PeerId(namespace: Namespaces.Peer.CloudChannel, id: PeerId.Id._internalFromInt64Value(1)),
-                    accessHash: nil,
-                    title: invite.title,
-                    username: nil,
-                    photo: [],
-                    creationDate: 0,
-                    version: 0,
-                    participationStatus: .left,
-                    info: .broadcast(TelegramChannelBroadcastInfo(flags: [])),
-                    flags: [],
-                    restrictionInfo: nil,
-                    adminRights: nil,
-                    bannedRights: nil,
-                    defaultBannedRights: nil,
-                    usernames: []
-                )
-            }
-            
+            let author: Peer = TelegramChannel(
+                id: PeerId(namespace: Namespaces.Peer.CloudChannel, id: PeerId.Id._internalFromInt64Value(1)),
+                accessHash: nil,
+                title: self.title,
+                username: nil,
+                photo: [],
+                creationDate: 0,
+                version: 0,
+                participationStatus: .left,
+                info: .broadcast(TelegramChannelBroadcastInfo(flags: [])),
+                flags: [],
+                restrictionInfo: nil,
+                adminRights: nil,
+                bannedRights: nil,
+                defaultBannedRights: nil,
+                usernames: [],
+                storiesHidden: nil,
+                nameColor: self.color ?? .blue,
+                backgroundEmojiId: self.backgroundEmojiId,
+                profileColor: nil,
+                profileBackgroundEmojiId: nil,
+                emojiStatus: nil,
+                approximateBoostLevel: nil,
+                subscriptionUntilDate: nil,
+                verificationIconFileId: nil
+            )
             messagePeers[author.id] = author
-
+            
+            let messageHash = (self.text.hashValue &+ 31 &* peerId.hashValue) &* 31 &+ author.id.hashValue
+            let messageStableVersion = UInt32(bitPattern: Int32(truncatingIfNeeded: messageHash))
+            
             return Message(
                 stableId: 0,
-                stableVersion: 0,
+                stableVersion: messageStableVersion,
                 id: MessageId(peerId: peerId, namespace: Namespaces.Message.Local, id: 0),
                 globallyUniqueId: nil,
                 groupingKey: nil,
@@ -248,16 +262,18 @@ private class AdMessagesHistoryContextImpl {
                 tags: [],
                 globalTags: [],
                 localTags: [],
+                customTags: [],
                 forwardInfo: nil,
                 author: author,
                 text: self.text,
                 attributes: attributes,
-                media: self.media,
+                media: !self.contentMedia.isEmpty ? self.contentMedia : self.media,
                 peers: messagePeers,
                 associatedMessages: SimpleDictionary<MessageId, Message>(),
                 associatedMessageIds: [],
                 associatedMedia: [:],
-                associatedThreadInfo: nil
+                associatedThreadInfo: nil,
+                associatedStories: [:]
             )
         }
     }
@@ -387,6 +403,8 @@ private class AdMessagesHistoryContextImpl {
         self.queue = queue
         self.account = account
         self.peerId = peerId
+        
+        let accountPeerId = account.peerId
 
         self.stateValue = State(interPostInterval: nil, messages: [])
 
@@ -403,14 +421,14 @@ private class AdMessagesHistoryContextImpl {
             }
         })
 
-        let signal: Signal<(interPostInterval: Int32?, messages: [Message]), NoError> = account.postbox.transaction { transaction -> Api.InputChannel? in
-            return transaction.getPeer(peerId).flatMap(apiInputChannel)
+        let signal: Signal<(interPostInterval: Int32?, messages: [Message]), NoError> = account.postbox.transaction { transaction -> Api.InputPeer? in
+            return transaction.getPeer(peerId).flatMap(apiInputPeer)
         }
-        |> mapToSignal { inputChannel -> Signal<(interPostInterval: Int32?, messages: [Message]), NoError> in
-            guard let inputChannel = inputChannel else {
+        |> mapToSignal { inputPeer -> Signal<(interPostInterval: Int32?, messages: [Message]), NoError> in
+            guard let inputPeer else {
                 return .single((nil, []))
             }
-            return account.network.request(Api.functions.channels.getSponsoredMessages(channel: inputChannel))
+            return account.network.request(Api.functions.messages.getSponsoredMessages(peer: inputPeer))
             |> map(Optional.init)
             |> `catch` { _ -> Signal<Api.messages.SponsoredMessages?, NoError> in
                 return .single(nil)
@@ -423,95 +441,51 @@ private class AdMessagesHistoryContextImpl {
                 return account.postbox.transaction { transaction -> (interPostInterval: Int32?, messages: [Message]) in
                     switch result {
                     case let .sponsoredMessages(_, postsBetween, messages, chats, users):
-                        var peers: [Peer] = []
-                        var peerPresences: [PeerId: Api.User] = [:]
-
-                        for chat in chats {
-                            if let groupOrChannel = parseTelegramGroupOrChannel(chat: chat) {
-                                peers.append(groupOrChannel)
-                            }
-                        }
-                        for user in users {
-                            let telegramUser = TelegramUser(user: user)
-                            peers.append(telegramUser)
-                            peerPresences[telegramUser.id] = user
-                        }
-
-                        updatePeers(transaction: transaction, peers: peers, update: { _, updated -> Peer in
-                            return updated
-                        })
-
-                        updatePeerPresences(transaction: transaction, accountPeerId: account.peerId, peerPresences: peerPresences)
+                        let parsedPeers = AccumulatedPeers(transaction: transaction, chats: chats, users: users)
+                        updatePeers(transaction: transaction, accountPeerId: accountPeerId, peers: parsedPeers)
 
                         var parsedMessages: [CachedMessage] = []
 
                         for message in messages {
                             switch message {
-                            case let .sponsoredMessage(flags, randomId, fromId, chatInvite, chatInviteHash, channelPost, startParam, message, entities):
+                            case let .sponsoredMessage(flags, randomId, url, title, message, entities, photo, media, color, buttonText, sponsorInfo, additionalInfo):
                                 var parsedEntities: [MessageTextEntity] = []
                                 if let entities = entities {
                                     parsedEntities = messageTextEntitiesFromApiEntities(entities)
                                 }
                                 
                                 let isRecommended = (flags & (1 << 5)) != 0
-                                let displayAvatar = (flags & (1 << 6)) != 0
+                                let canReport = (flags & (1 << 12)) != 0
                                 
-                                let _ = chatInvite
-                                let _ = chatInviteHash
-                                
-                                var target: CachedMessage.Target?
-                                if let fromId = fromId {
-                                    target = .peer(fromId.peerId)
-                                } else if let chatInvite = chatInvite, let chatInviteHash = chatInviteHash {
-                                    switch chatInvite {
-                                    case let .chatInvite(flags, title, _, photo, participantsCount, participants):
-                                        let photo = telegramMediaImageFromApiPhoto(photo).flatMap({ smallestImageRepresentation($0.representations) })
-                                        let flags: ExternalJoiningChatState.Invite.Flags = .init(isChannel: (flags & (1 << 0)) != 0, isBroadcast: (flags & (1 << 1)) != 0, isPublic: (flags & (1 << 2)) != 0, isMegagroup: (flags & (1 << 3)) != 0, requestNeeded: (flags & (1 << 6)) != 0)
-                                        
-                                        let _ = photo
-                                        let _ = flags
-                                        let _ = participantsCount
-                                        let _ = participants
-                                        
-                                        target = .invite(CachedMessage.Target.Invite(
-                                            title: title,
-                                            joinHash: chatInviteHash
-                                        ))
-                                    case let .chatInvitePeek(chat, _):
-                                        if let peer = parseTelegramGroupOrChannel(chat: chat) {
-                                            target = .invite(CachedMessage.Target.Invite(
-                                                title: peer.debugDisplayTitle,
-                                                joinHash: chatInviteHash
-                                            ))
-                                        }
-                                    case let .chatInviteAlready(chat):
-                                        if let peer = parseTelegramGroupOrChannel(chat: chat) {
-                                            target = .invite(CachedMessage.Target.Invite(
-                                                title: peer.debugDisplayTitle,
-                                                joinHash: chatInviteHash
-                                            ))
-                                        }
+                                var nameColorIndex: Int32?
+                                var backgroundEmojiId: Int64?
+                                if let color = color {
+                                    switch color {
+                                    case let .peerColor(_, color, backgroundEmojiIdValue):
+                                        nameColorIndex = color
+                                        backgroundEmojiId = backgroundEmojiIdValue
                                     }
                                 }
                                 
-                                var messageId: MessageId?
-                                if let fromId = fromId, let channelPost = channelPost {
-                                    messageId = MessageId(peerId: fromId.peerId, namespace: Namespaces.Message.Cloud, id: channelPost)
-                                }
-
-                                if let target = target {
-                                    parsedMessages.append(CachedMessage(
-                                        opaqueId: randomId.makeData(),
-                                        messageType: isRecommended ? .recommended : .sponsored,
-                                        displayAvatar: displayAvatar,
-                                        text: message,
-                                        textEntities: parsedEntities,
-                                        media: [],
-                                        target: target,
-                                        messageId: messageId,
-                                        startParam: startParam
-                                    ))
-                                }
+                                let photo = photo.flatMap { telegramMediaImageFromApiPhoto($0) }
+                                let (contentMedia, _, _, _, _) = textMediaAndExpirationTimerFromApiMedia(media, peerId)
+                                
+                                parsedMessages.append(CachedMessage(
+                                    opaqueId: randomId.makeData(),
+                                    messageType: isRecommended ? .recommended : .sponsored,
+                                    title: title,
+                                    text: message,
+                                    textEntities: parsedEntities,
+                                    media: photo.flatMap { [$0] } ?? [],
+                                    contentMedia: contentMedia.flatMap { [$0] } ?? [],
+                                    color: nameColorIndex.flatMap { PeerNameColor(rawValue: $0) },
+                                    backgroundEmojiId: backgroundEmojiId,
+                                    url: url,
+                                    buttonText: buttonText,
+                                    sponsorInfo: sponsorInfo,
+                                    additionalInfo: additionalInfo,
+                                    canReport: canReport
+                                ))
                             }
                         }
 
@@ -542,20 +516,49 @@ private class AdMessagesHistoryContextImpl {
     }
 
     func markAsSeen(opaqueId: Data) {
-        let signal: Signal<Never, NoError> = account.postbox.transaction { transaction -> Api.InputChannel? in
-            return transaction.getPeer(self.peerId).flatMap(apiInputChannel)
+        let signal: Signal<Never, NoError> = account.postbox.transaction { transaction -> Api.InputPeer? in
+            return transaction.getPeer(self.peerId).flatMap(apiInputPeer)
         }
-        |> mapToSignal { inputChannel -> Signal<Never, NoError> in
-            guard let inputChannel = inputChannel else {
+        |> mapToSignal { inputPeer -> Signal<Never, NoError> in
+            guard let inputPeer else {
                 return .complete()
             }
-            return self.account.network.request(Api.functions.channels.viewSponsoredMessage(channel: inputChannel, randomId: Buffer(data: opaqueId)))
+            return self.account.network.request(Api.functions.messages.viewSponsoredMessage(peer: inputPeer, randomId: Buffer(data: opaqueId)))
             |> `catch` { _ -> Signal<Api.Bool, NoError> in
                 return .single(.boolFalse)
             }
             |> ignoreValues
         }
         self.maskAsSeenDisposables.set(signal.start(), forKey: opaqueId)
+    }
+    
+    func markAction(opaqueId: Data, media: Bool, fullscreen: Bool) {
+        _internal_markAdAction(account: self.account, peerId: self.peerId, opaqueId: opaqueId, media: media, fullscreen: fullscreen)
+    }
+    
+    func remove(opaqueId: Data) {
+        if var stateValue = self.stateValue {
+            if let index = stateValue.messages.firstIndex(where: { $0.adAttribute?.opaqueId == opaqueId }) {
+                stateValue.messages.remove(at: index)
+                self.stateValue = stateValue
+            }
+        }
+        
+        let peerId = self.peerId
+        let _ = (self.account.postbox.transaction { transaction -> Void in
+            let key = ValueBoxKey(length: 8)
+            key.setInt64(0, value: peerId.toInt64())
+            let id = ItemCacheEntryId(collectionId: Namespaces.CachedItemCollection.cachedAdMessageStates, key: key)
+            guard var cachedState = transaction.retrieveItemCacheEntry(id: id)?.get(CachedState.self) else {
+                return
+            }
+            if let index = cachedState.messages.firstIndex(where: { $0.opaqueId == opaqueId }) {
+                cachedState.messages.remove(at: index)
+                if let entry = CodableEntry(cachedState) {
+                    transaction.putItemCacheEntry(id: id, entry: entry)
+                }
+            }
+        }).start()
     }
 }
 
@@ -590,4 +593,41 @@ public class AdMessagesHistoryContext {
             impl.markAsSeen(opaqueId: opaqueId)
         }
     }
+    
+    public func markAction(opaqueId: Data, media: Bool, fullscreen: Bool) {
+        self.impl.with { impl in
+            impl.markAction(opaqueId: opaqueId, media: media, fullscreen: fullscreen)
+        }
+    }
+    
+    public func remove(opaqueId: Data) {
+        self.impl.with { impl in
+            impl.remove(opaqueId: opaqueId)
+        }
+    }
+}
+
+
+func _internal_markAdAction(account: Account, peerId: EnginePeer.Id, opaqueId: Data, media: Bool, fullscreen: Bool) {
+    let signal: Signal<Never, NoError> = account.postbox.transaction { transaction -> Api.InputPeer? in
+        return transaction.getPeer(peerId).flatMap(apiInputPeer)
+    }
+    |> mapToSignal { inputPeer -> Signal<Never, NoError> in
+        guard let inputPeer else {
+            return .complete()
+        }
+        var flags: Int32 = 0
+        if media {
+            flags |= (1 << 0)
+        }
+        if fullscreen {
+            flags |= (1 << 1)
+        }
+        return account.network.request(Api.functions.messages.clickSponsoredMessage(flags: flags, peer: inputPeer, randomId: Buffer(data: opaqueId)))
+        |> `catch` { _ -> Signal<Api.Bool, NoError> in
+            return .single(.boolFalse)
+        }
+        |> ignoreValues
+    }
+    let _ = signal.start()
 }

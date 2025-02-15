@@ -23,15 +23,28 @@ public enum ContainerViewLayoutSizeClass {
 public struct LayoutMetrics: Equatable {
     public let widthClass: ContainerViewLayoutSizeClass
     public let heightClass: ContainerViewLayoutSizeClass
+    public let orientation: UIInterfaceOrientation?
     
-    public init(widthClass: ContainerViewLayoutSizeClass, heightClass: ContainerViewLayoutSizeClass) {
+    public init(widthClass: ContainerViewLayoutSizeClass, heightClass: ContainerViewLayoutSizeClass, orientation: UIInterfaceOrientation?) {
         self.widthClass = widthClass
         self.heightClass = heightClass
+        self.orientation = orientation
     }
     
     public init() {
         self.widthClass = .compact
         self.heightClass = .compact
+        self.orientation = nil
+    }
+}
+
+public extension LayoutMetrics {
+    var isTablet: Bool {
+        if case .regular = self.widthClass {
+            return true
+        } else {
+            return false
+        }
     }
 }
 
@@ -75,6 +88,14 @@ public struct ContainerViewLayout: Equatable {
     
     public func withUpdatedIntrinsicInsets(_ intrinsicInsets: UIEdgeInsets) -> ContainerViewLayout {
         return ContainerViewLayout(size: self.size, metrics: self.metrics, deviceMetrics: self.deviceMetrics, intrinsicInsets: intrinsicInsets, safeInsets: self.safeInsets, additionalInsets: self.additionalInsets, statusBarHeight: self.statusBarHeight, inputHeight: self.inputHeight, inputHeightIsInteractivellyChanging: self.inputHeightIsInteractivellyChanging, inVoiceOver: self.inVoiceOver)
+    }
+    
+    public func withUpdatedSafeInsets(_ safeInsets: UIEdgeInsets) -> ContainerViewLayout {
+        return ContainerViewLayout(size: self.size, metrics: self.metrics, deviceMetrics: self.deviceMetrics, intrinsicInsets: self.intrinsicInsets, safeInsets: safeInsets, additionalInsets: self.additionalInsets, statusBarHeight: self.statusBarHeight, inputHeight: self.inputHeight, inputHeightIsInteractivellyChanging: self.inputHeightIsInteractivellyChanging, inVoiceOver: self.inVoiceOver)
+    }
+    
+    public func withUpdatedAdditionalInsets(_ additionalInsets: UIEdgeInsets) -> ContainerViewLayout {
+        return ContainerViewLayout(size: self.size, metrics: self.metrics, deviceMetrics: self.deviceMetrics, intrinsicInsets: self.intrinsicInsets, safeInsets: self.safeInsets, additionalInsets: additionalInsets, statusBarHeight: self.statusBarHeight, inputHeight: self.inputHeight, inputHeightIsInteractivellyChanging: self.inputHeightIsInteractivellyChanging, inVoiceOver: self.inVoiceOver)
     }
     
     public func withUpdatedInputHeight(_ inputHeight: CGFloat?) -> ContainerViewLayout {
@@ -160,6 +181,6 @@ public extension ContainerViewLayout {
     }
     
     var standardInputHeight: CGFloat {
-        return self.deviceMetrics.keyboardHeight(inLandscape: self.orientation == .landscape) + self.deviceMetrics.predictiveInputHeight(inLandscape: self.orientation == .landscape)
+        return self.deviceMetrics.standardInputHeight(inLandscape: self.orientation == .landscape)
     }
 }

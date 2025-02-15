@@ -260,6 +260,8 @@
         pickerController.hasSilentPosting = strongController.hasSilentPosting;
         pickerController.hasSchedule = strongController.hasSchedule;
         pickerController.reminder = strongController.reminder;
+        pickerController.forum = strongController.forum;
+        pickerController.isSuggesting = strongController.isSuggesting;
         pickerController.presentScheduleController = strongController.presentScheduleController;
         pickerController.presentTimerController = strongController.presentTimerController;
         [strongController pushViewController:pickerController animated:true];
@@ -361,6 +363,16 @@
 {
     _reminder = reminder;
     self.pickerController.reminder = reminder;
+}
+
+- (void)setForum:(bool)forum {
+    _forum = forum;
+    self.pickerController.forum = forum;
+}
+
+- (void)setIsSuggesting:(bool)isSuggesting {
+    _isSuggesting = isSuggesting;
+    self.pickerController.isSuggesting = isSuggesting;
 }
 
 - (void)setPresentScheduleController:(void (^)(bool, void (^)(int32_t)))presentScheduleController {
@@ -479,7 +491,7 @@
         };
         
         _selectionChangedDisposable = [[SMetaDisposable alloc] init];
-        [_selectionChangedDisposable setDisposable:[[_selectionContext selectionChangedSignal] startWithNext:^(__unused id next)
+        [_selectionChangedDisposable setDisposable:[[_selectionContext selectionChangedSignal] startStrictWithNext:^(__unused id next)
         {
             __strong TGMediaAssetsController *strongSelf = weakSelf;
             if (strongSelf == nil)
@@ -528,7 +540,7 @@
             }
 
             UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification, text);
-        }]];
+        } file:__FILE_NAME__ line:__LINE__]];
         
         if (intent == TGMediaAssetsControllerSendMediaIntent || intent == TGMediaAssetsControllerSetProfilePhotoIntent || intent == TGMediaAssetsControllerSetSignupProfilePhotoIntent || intent == TGMediaAssetsControllerPassportIntent || intent == TGMediaAssetsControllerPassportMultipleIntent)
             _editingContext = [[TGMediaEditingContext alloc] init];
@@ -537,29 +549,38 @@
         
         if (allowGrouping)
         {
+            if (_groupingChangedDisposable) {
+                [_groupingChangedDisposable dispose];
+            }
             _groupingChangedDisposable = [[SMetaDisposable alloc] init];
-            [_groupingChangedDisposable setDisposable:[_selectionContext.groupingChangedSignal startWithNext:^(NSNumber *next)
+            [_groupingChangedDisposable setDisposable:[_selectionContext.groupingChangedSignal startStrictWithNext:^(NSNumber *next)
             {
                 __strong TGMediaAssetsController *strongSelf = weakSelf;
                 if (strongSelf == nil)
                     return;
                 
                 [strongSelf->_toolbarView setCenterButtonSelected:next.boolValue];
-            }]];
+            } file:__FILE_NAME__ line:__LINE__]];
             
             if (_editingContext != nil)
             {
+                if (_timersChangedDisposable) {
+                    [_timersChangedDisposable dispose];
+                }
                 _timersChangedDisposable = [[SMetaDisposable alloc] init];
-                [_timersChangedDisposable setDisposable:[_editingContext.timersUpdatedSignal startWithNext:^(__unused NSNumber *next)
+                [_timersChangedDisposable setDisposable:[_editingContext.timersUpdatedSignal startStrictWithNext:^(__unused NSNumber *next)
                 {
                     updateGroupingButtonVisibility();
-                }]];
+                } file:__FILE_NAME__ line:__LINE__]];
                 
+                if (_adjustmentsChangedDisposable) {
+                    [_adjustmentsChangedDisposable dispose];
+                }
                 _adjustmentsChangedDisposable = [[SMetaDisposable alloc] init];
-                [_adjustmentsChangedDisposable setDisposable:[_editingContext.adjustmentsUpdatedSignal startWithNext:^(__unused NSNumber *next)
+                [_adjustmentsChangedDisposable setDisposable:[_editingContext.adjustmentsUpdatedSignal startStrictWithNext:^(__unused NSNumber *next)
                 {
                     updateGroupingButtonVisibility();
-                }]];
+                } file:__FILE_NAME__ line:__LINE__]];
             }
         }
     }
@@ -571,6 +592,9 @@
     self.delegate = nil;
     [_selectionChangedDisposable dispose];
     [_tooltipDismissDisposable dispose];
+    [_timersChangedDisposable dispose];
+    [_adjustmentsChangedDisposable dispose];
+    [_groupingChangedDisposable dispose];
 }
 
 - (void)loadView
@@ -582,6 +606,10 @@
         if (@available(iOS 11.0, *)) {
             hasOnScreenNavigation = (self.viewLoaded && self.view.safeAreaInsets.bottom > FLT_EPSILON) || _context.safeAreaInset.bottom > FLT_EPSILON;
         }
+    }
+    
+    if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad && _intent == TGMediaAssetsControllerSendFileIntent) {
+        hasOnScreenNavigation = false;
     }
 
 #pragma clang diagnostic push
@@ -804,16 +832,16 @@
 
 #pragma mark -
 
-- (void)completeWithAvatarImage:(UIImage *)image
+- (void)completeWithAvatarImage:(UIImage *)image commit:(void(^)(void))commit
 {
     if (self.avatarCompletionBlock != nil)
-        self.avatarCompletionBlock(image);
+        self.avatarCompletionBlock(image, commit);
 }
 
-- (void)completeWithAvatarVideo:(AVAsset *)asset adjustments:(TGVideoEditAdjustments *)adjustments image:(UIImage *)image
+- (void)completeWithAvatarVideo:(AVAsset *)asset adjustments:(TGVideoEditAdjustments *)adjustments image:(UIImage *)image commit:(void(^)(void))commit
 {
     if (self.avatarVideoCompletionBlock != nil)
-        self.avatarVideoCompletionBlock(image, asset, adjustments);
+        self.avatarVideoCompletionBlock(image, asset, adjustments, commit);
 }
 
 - (void)completeWithCurrentItem:(TGMediaAsset *)currentItem silentPosting:(bool)silentPosting scheduleTime:(int32_t)scheduleTime
@@ -914,6 +942,7 @@
     NSInteger num = 0;
     bool grouping = selectionContext.grouping;
     
+    NSNumber *price;
     bool hasAnyTimers = false;
     if (editingContext != nil || grouping)
     {
@@ -922,6 +951,9 @@
             if ([editingContext timerForItem:asset] != nil) {
                 hasAnyTimers = true;
             }
+            if (price == nil) {
+                price = [editingContext priceForItem:asset];
+            }
             id<TGMediaEditAdjustments> adjustments = [editingContext adjustmentsForItem:asset];
             if ([adjustments isKindOfClass:[TGVideoEditAdjustments class]]) {
                 TGVideoEditAdjustments *videoAdjustments = (TGVideoEditAdjustments *)adjustments;
@@ -929,10 +961,8 @@
                     grouping = false;
                 }
             }
-            for (TGPhotoPaintEntity *entity in adjustments.paintingData.entities) {
-                if (entity.animated) {
-                    grouping = true;
-                }
+            if (adjustments.paintingData.hasAnimation) {
+                grouping = false;
             }
         }
     }
@@ -956,6 +986,8 @@
                 caption = nil;
             }
         }
+        
+        bool spoiler = [editingContext spoilerForItem:item];
         
         switch (asset.type)
         {
@@ -1028,6 +1060,13 @@
                             dict[@"timer"] = timer;
                         else if (groupedId != nil && !hasAnyTimers)
                             dict[@"groupedId"] = groupedId;
+                        
+                        if (price != nil)
+                            dict[@"price"] = price;
+                        
+                        if (spoiler) {
+                            dict[@"spoiler"] = @true;
+                        }
                         
                         id generatedItem = descriptionGenerator(dict, caption, nil, asset.identifier);
                         return generatedItem;
@@ -1105,6 +1144,13 @@
                                 else if (groupedId != nil && !hasAnyTimers)
                                     dict[@"groupedId"] = groupedId;
                                 
+                                if (price != nil)
+                                    dict[@"price"] = price;
+                                
+                                if (spoiler) {
+                                    dict[@"spoiler"] = @true;
+                                }
+                                
                                 id generatedItem = descriptionGenerator(dict, caption, nil, asset.identifier);
                                 return generatedItem;
                             }];
@@ -1149,14 +1195,7 @@
                             if (adjustments.paintingData.stickers.count > 0)
                                 dict[@"stickers"] = adjustments.paintingData.stickers;
                             
-                            bool animated = false;
-                            for (TGPhotoPaintEntity *entity in adjustments.paintingData.entities) {
-                                if (entity.animated) {
-                                    animated = true;
-                                    break;
-                                }
-                            }
-                              
+                            bool animated = adjustments.paintingData.hasAnimation;
                             if (animated) {
                                 dict[@"isAnimation"] = @true;
                                 if ([adjustments isKindOfClass:[PGPhotoEditorValues class]]) {
@@ -1187,6 +1226,13 @@
                                 dict[@"timer"] = timer;
                             else if (groupedId != nil && !hasAnyTimers)
                                 dict[@"groupedId"] = groupedId;
+                            
+                            if (price != nil)
+                                dict[@"price"] = price;
+                            
+                            if (spoiler) {
+                                dict[@"spoiler"] = @true;
+                            }
                             
                             id generatedItem = descriptionGenerator(dict, caption, nil, asset.identifier);
                             return generatedItem;
@@ -1227,6 +1273,13 @@
                         
                         if (groupedId != nil)
                             dict[@"groupedId"] = groupedId;
+                        
+                        if (price != nil)
+                            dict[@"price"] = price;
+                        
+                        if (spoiler) {
+                            dict[@"spoiler"] = @true;
+                        }
                         
                         id generatedItem = descriptionGenerator(dict, caption, nil, asset.identifier);
                         return generatedItem;
@@ -1296,6 +1349,13 @@
                             dict[@"timer"] = timer;
                         else if (groupedId != nil && !hasAnyTimers)
                             dict[@"groupedId"] = groupedId;
+                        
+                        if (price != nil)
+                            dict[@"price"] = price;
+                        
+                        if (spoiler) {
+                            dict[@"spoiler"] = @true;
+                        }
                         
                         id generatedItem = descriptionGenerator(dict, caption, nil, asset.identifier);
                         return generatedItem;
@@ -1374,6 +1434,13 @@
                     if (timer != nil)
                         dict[@"timer"] = timer;
                     
+                    if (price != nil)
+                        dict[@"price"] = price;
+                    
+                    if (spoiler) {
+                        dict[@"spoiler"] = @true;
+                    }
+                    
                     id generatedItem = descriptionGenerator(dict, caption, nil, asset.identifier);
                     return generatedItem;
                 }]];
@@ -1387,8 +1454,7 @@
                 break;
         }
         
-        if (groupedId != nil && i == 10)
-        {
+        if (groupedId != nil && i == 10) {
             i = 0;
             groupedId = @([self generateGroupedId]);
         }
@@ -1423,10 +1489,8 @@
                     grouping = false;
                 }
             }
-            for (TGPhotoPaintEntity *entity in adjustments.paintingData.entities) {
-                if (entity.animated) {
-                    grouping = true;
-                }
+            if (adjustments.paintingData.hasAnimation) {
+                grouping = false;
             }
         }
     }
@@ -1444,6 +1508,8 @@
                 caption = nil;
             }
         }
+        
+        bool spoiler = [editingContext spoilerForItem:asset];
         
         if ([asset isKindOfClass:[UIImage class]]) {
             if (intent == TGMediaAssetsControllerSendFileIntent)
@@ -1482,6 +1548,10 @@
                     
                     if (groupedId != nil && !hasAnyTimers)
                         dict[@"groupedId"] = groupedId;
+                    
+                    if (spoiler) {
+                        dict[@"spoiler"] = @true;
+                    }
                     
                     id generatedItem = descriptionGenerator(dict, caption, nil, nil);
                     return generatedItem;
@@ -1529,6 +1599,10 @@
                     
                     if (groupedId != nil && !hasAnyTimers)
                         dict[@"groupedId"] = groupedId;
+                    
+                    if (spoiler) {
+                        dict[@"spoiler"] = @true;
+                    }
                     
                     id generatedItem = descriptionGenerator(dict, caption, nil, nil);
                     return generatedItem;
@@ -1606,6 +1680,10 @@
                     else if (groupedId != nil && !hasAnyTimers)
                         dict[@"groupedId"] = groupedId;
                     
+                    if (spoiler) {
+                        dict[@"spoiler"] = @true;
+                    }
+                    
                     id generatedItem = descriptionGenerator(dict, caption, nil, nil);
                     return generatedItem;
                 }];
@@ -1667,9 +1745,9 @@
     }
 }
 
-- (void)send:(bool)silently
+- (void)send:(bool)silently whenOnline:(bool)whenOnlne
 {
-    [self completeWithCurrentItem:nil silentPosting:silently scheduleTime:0];
+    [self completeWithCurrentItem:nil silentPosting:silently scheduleTime:whenOnlne ? 0x7ffffffe : 0];
 }
 
 - (void)schedule:(bool)media {
@@ -1829,11 +1907,11 @@
         _tooltipDismissDisposable = [[SMetaDisposable alloc] init];
     
     __weak TGTooltipContainerView *weakContainerView = _groupingTooltipContainerView;
-    [_tooltipDismissDisposable setDisposable:[[[SSignal complete] delay:duration onQueue:[SQueue mainQueue]] startWithNext:nil completed:^{
+    [_tooltipDismissDisposable setDisposable:[[[SSignal complete] delay:duration onQueue:[SQueue mainQueue]] startStrictWithNext:nil completed:^{
         __strong TGTooltipContainerView *strongContainerView = weakContainerView;
         if (strongContainerView != nil)
             [strongContainerView hideTooltip];
-    }]];
+    } file:__FILE_NAME__ line:__LINE__]];
 }
 
 - (BOOL)prefersStatusBarHidden
@@ -1850,7 +1928,7 @@
 
 @implementation TGMediaAssetsPallete
 
-+ (instancetype)palleteWithDark:(bool)dark backgroundColor:(UIColor *)backgroundColor selectionColor:(UIColor *)selectionColor separatorColor:(UIColor *)separatorColor textColor:(UIColor *)textColor secondaryTextColor:(UIColor *)secondaryTextColor accentColor:(UIColor *)accentColor destructiveColor:(UIColor *)destructiveColor barBackgroundColor:(UIColor *)barBackgroundColor barSeparatorColor:(UIColor *)barSeparatorColor navigationTitleColor:(UIColor *)navigationTitleColor badge:(UIImage *)badge badgeTextColor:(UIColor *)badgeTextColor sendIconImage:(UIImage *)sendIconImage doneIconImage:(UIImage *)doneIconImage maybeAccentColor:(UIColor *)maybeAccentColor
++ (instancetype)palleteWithDark:(bool)dark backgroundColor:(UIColor *)backgroundColor selectionColor:(UIColor *)selectionColor separatorColor:(UIColor *)separatorColor textColor:(UIColor *)textColor secondaryTextColor:(UIColor *)secondaryTextColor accentColor:(UIColor *)accentColor destructiveColor:(UIColor *)destructiveColor barBackgroundColor:(UIColor *)barBackgroundColor barSeparatorColor:(UIColor *)barSeparatorColor navigationTitleColor:(UIColor *)navigationTitleColor badge:(UIImage *)badge badgeTextColor:(UIColor *)badgeTextColor sendIconImage:(UIImage *)sendIconImage doneIconImage:(UIImage *)doneIconImage scheduleIconImage:(UIImage *)scheduleIconImage maybeAccentColor:(UIColor *)maybeAccentColor
 {
     TGMediaAssetsPallete *pallete = [[TGMediaAssetsPallete alloc] init];
     pallete->_isDark = dark;
@@ -1868,6 +1946,7 @@
     pallete->_badgeTextColor = badgeTextColor;
     pallete->_sendIconImage = sendIconImage;
     pallete->_doneIconImage = doneIconImage;
+    pallete->_scheduleIconImage = scheduleIconImage;
     pallete->_maybeAccentColor = maybeAccentColor;
     return pallete;
 }

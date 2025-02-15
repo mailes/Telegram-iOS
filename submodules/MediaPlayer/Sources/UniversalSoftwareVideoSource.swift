@@ -3,6 +3,7 @@ import Foundation
 import UIKit
 #else
 import AppKit
+import TGUIKit
 #endif
 import SwiftSignalKit
 import Postbox
@@ -21,13 +22,17 @@ private func readPacketCallback(userData: UnsafeMutableRawPointer?, buffer: Unsa
     context.currentReadBytes += readCount
     
     let semaphore = DispatchSemaphore(value: 0)
-    data = context.mediaBox.resourceData(context.fileReference.media.resource, size: context.size, in: requestRange, mode: .partial)
+    
+    data = context.mediaBox.resourceData(context.source.resource, size: context.size, in: requestRange, mode: .partial)
+    
     let requiredDataIsNotLocallyAvailable = context.requiredDataIsNotLocallyAvailable
     var fetchedData: Data?
     let fetchDisposable = MetaDisposable()
     let isInitialized = context.videoStream != nil || context.automaticallyFetchHeader
     let mediaBox = context.mediaBox
-    let reference = context.fileReference.resourceReference(context.fileReference.media.resource)
+    
+    let source = context.source
+    
     let disposable = data.start(next: { result in
         let (data, isComplete) = result
         if data.count == readCount || isComplete {
@@ -35,7 +40,12 @@ private func readPacketCallback(userData: UnsafeMutableRawPointer?, buffer: Unsa
             semaphore.signal()
         } else {
             if isInitialized {
-                fetchDisposable.set(fetchedMediaResource(mediaBox: mediaBox, reference: reference, ranges: [(requestRange, .maximum)]).start())
+                switch source {
+                case let .file(userLocation, userContentType, fileReference):
+                    fetchDisposable.set(fetchedMediaResource(mediaBox: mediaBox, userLocation: userLocation, userContentType: userContentType, reference: fileReference.resourceReference(fileReference.media.resource), ranges: [(requestRange, .maximum)]).start())
+                case .direct:
+                    break
+                }
             }
             requiredDataIsNotLocallyAvailable?()
         }
@@ -60,9 +70,12 @@ private func readPacketCallback(userData: UnsafeMutableRawPointer?, buffer: Unsa
         }
         let fetchedCount = Int32(fetchedData.count)
         context.readingOffset += Int64(fetchedCount)
+        if fetchedCount == 0 {
+            return FFMPEG_CONSTANT_AVERROR_EOF
+        }
         return fetchedCount
     } else {
-        return 0
+        return FFMPEG_CONSTANT_AVERROR_EOF
     }
 }
 
@@ -98,7 +111,7 @@ private final class SoftwareVideoStream {
 
 private final class UniversalSoftwareVideoSourceImpl {
     fileprivate let mediaBox: MediaBox
-    fileprivate let fileReference: FileMediaReference
+    fileprivate let source: UniversalSoftwareVideoSource.Source
     fileprivate let size: Int64
     fileprivate let automaticallyFetchHeader: Bool
     
@@ -115,14 +128,26 @@ private final class UniversalSoftwareVideoSourceImpl {
     fileprivate var currentNumberOfReads: Int = 0
     fileprivate var currentReadBytes: Int64 = 0
     
-    init?(mediaBox: MediaBox, fileReference: FileMediaReference, state: ValuePromise<UniversalSoftwareVideoSourceState>, cancelInitialization: Signal<Bool, NoError>, automaticallyFetchHeader: Bool, hintVP9: Bool = false) {
-        guard let size = fileReference.media.size else {
-            return nil
+    init?(
+        mediaBox: MediaBox,
+        source: UniversalSoftwareVideoSource.Source,
+        state: ValuePromise<UniversalSoftwareVideoSourceState>,
+        cancelInitialization: Signal<Bool, NoError>,
+        automaticallyFetchHeader: Bool,
+        hintVP9: Bool = false
+    ) {
+        switch source {
+        case let .file(_, _, fileReference):
+            guard let size = fileReference.media.size else {
+                return nil
+            }
+            self.size = size
+        case let .direct(_, sizeValue):
+            self.size = sizeValue
         }
         
         self.mediaBox = mediaBox
-        self.fileReference = fileReference
-        self.size = size
+        self.source = source
         self.automaticallyFetchHeader = automaticallyFetchHeader
         
         self.state = state
@@ -130,9 +155,17 @@ private final class UniversalSoftwareVideoSourceImpl {
         
         self.cancelRead = cancelInitialization
         
-        let ioBufferSize = 1 * 1024
+        let ioBufferSize = 64 * 1024
         
-        guard let avIoContext = FFMpegAVIOContext(bufferSize: Int32(ioBufferSize), opaqueContext: Unmanaged.passUnretained(self).toOpaque(), readPacket: readPacketCallback, writePacket: nil, seek: seekCallback) else {
+        let isSeekable: Bool
+        switch source {
+        case .file:
+            isSeekable = true
+        case .direct:
+            isSeekable = false
+        }
+        
+        guard let avIoContext = FFMpegAVIOContext(bufferSize: Int32(ioBufferSize), opaqueContext: Unmanaged.passUnretained(self).toOpaque(), readPacket: readPacketCallback, writePacket: nil, seek: seekCallback, isSeekable: isSeekable) else {
             return nil
         }
         self.avIoContext = avIoContext
@@ -143,7 +176,7 @@ private final class UniversalSoftwareVideoSourceImpl {
         }
         avFormatContext.setIO(avIoContext)
         
-        if !avFormatContext.openInput() {
+        if !avFormatContext.openInput(withDirectFilePath: nil) {
             return nil
         }
         
@@ -176,7 +209,7 @@ private final class UniversalSoftwareVideoSourceImpl {
             let rotationAngle: Double = metrics.rotationAngle
             let aspect = Double(metrics.width) / Double(metrics.height)
             
-            if let codec = FFMpegAVCodec.find(forId: codecId) {
+            if let codec = FFMpegAVCodec.find(forId: codecId, preferHardwareAccelerationCapable: false) {
                 let codecContext = FFMpegAVCodecContext(codec: codec)
                 if avFormatContext.codecParams(atStreamIndex: streamIndex, to: codecContext) {
                     if codecContext.open() {
@@ -289,7 +322,7 @@ private enum UniversalSoftwareVideoSourceState {
 
 private final class UniversalSoftwareVideoSourceThreadParams: NSObject {
     let mediaBox: MediaBox
-    let fileReference: FileMediaReference
+    let source: UniversalSoftwareVideoSource.Source
     let state: ValuePromise<UniversalSoftwareVideoSourceState>
     let cancelInitialization: Signal<Bool, NoError>
     let automaticallyFetchHeader: Bool
@@ -297,14 +330,14 @@ private final class UniversalSoftwareVideoSourceThreadParams: NSObject {
     
     init(
         mediaBox: MediaBox,
-        fileReference: FileMediaReference,
+        source: UniversalSoftwareVideoSource.Source,
         state: ValuePromise<UniversalSoftwareVideoSourceState>,
         cancelInitialization: Signal<Bool, NoError>,
         automaticallyFetchHeader: Bool,
         hintVP9: Bool
     ) {
         self.mediaBox = mediaBox
-        self.fileReference = fileReference
+        self.source = source
         self.state = state
         self.cancelInitialization = cancelInitialization
         self.automaticallyFetchHeader = automaticallyFetchHeader
@@ -333,7 +366,7 @@ private final class UniversalSoftwareVideoSourceThread: NSObject {
         let timer = Timer(fireAt: .distantFuture, interval: 0.0, target: UniversalSoftwareVideoSourceThread.self, selector: #selector(UniversalSoftwareVideoSourceThread.none), userInfo: nil, repeats: false)
         runLoop.add(timer, forMode: .common)
         
-        let source = UniversalSoftwareVideoSourceImpl(mediaBox: params.mediaBox, fileReference: params.fileReference, state: params.state, cancelInitialization: params.cancelInitialization, automaticallyFetchHeader: params.automaticallyFetchHeader)
+        let source = UniversalSoftwareVideoSourceImpl(mediaBox: params.mediaBox, source: params.source, state: params.state, cancelInitialization: params.cancelInitialization, automaticallyFetchHeader: params.automaticallyFetchHeader)
         Thread.current.threadDictionary["source"] = source
         
         while true {
@@ -375,6 +408,27 @@ public enum UniversalSoftwareVideoSourceTakeFrameResult {
 }
 
 public final class UniversalSoftwareVideoSource {
+    public enum Source {
+        case file(
+            userLocation: MediaResourceUserLocation,
+            userContentType: MediaResourceUserContentType,
+            fileReference: FileMediaReference
+        )
+        case direct(
+            resource: MediaResource,
+            size: Int64
+        )
+        
+        var resource: MediaResource {
+            switch self {
+            case let .file(_, _, fileReference):
+                return fileReference.media.resource
+            case let .direct(resource, _):
+                return resource
+            }
+        }
+    }
+    
     private let thread: Thread
     private let stateValue: ValuePromise<UniversalSoftwareVideoSourceState> = ValuePromise(.initializing, ignoreRepeated: true)
     private let cancelInitialization: ValuePromise<Bool> = ValuePromise(false)
@@ -391,8 +445,8 @@ public final class UniversalSoftwareVideoSource {
         }
     }
     
-    public init(mediaBox: MediaBox, fileReference: FileMediaReference, automaticallyFetchHeader: Bool = false, hintVP9: Bool = false) {
-        self.thread = Thread(target: UniversalSoftwareVideoSourceThread.self, selector: #selector(UniversalSoftwareVideoSourceThread.entryPoint(_:)), object: UniversalSoftwareVideoSourceThreadParams(mediaBox: mediaBox, fileReference: fileReference, state: self.stateValue, cancelInitialization: self.cancelInitialization.get(), automaticallyFetchHeader: automaticallyFetchHeader, hintVP9: hintVP9))
+    public init(mediaBox: MediaBox, source: Source, automaticallyFetchHeader: Bool = false, hintVP9: Bool = false) {
+        self.thread = Thread(target: UniversalSoftwareVideoSourceThread.self, selector: #selector(UniversalSoftwareVideoSourceThread.entryPoint(_:)), object: UniversalSoftwareVideoSourceThreadParams(mediaBox: mediaBox, source: source, state: self.stateValue, cancelInitialization: self.cancelInitialization.get(), automaticallyFetchHeader: automaticallyFetchHeader, hintVP9: hintVP9))
         self.thread.name = "UniversalSoftwareVideoSource"
         self.thread.start()
     }

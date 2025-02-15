@@ -14,13 +14,14 @@ import PeerAvatarGalleryUI
 import GalleryUI
 import MediaResources
 import WebsiteType
+import StoryContainerScreen
 
 public enum ChatMessageGalleryControllerData {
     case url(String)
     case pass(TelegramMediaFile)
     case instantPage(InstantPageGalleryController, Int, Media)
     case map(TelegramMediaMap)
-    case stickerPack(StickerPackReference)
+    case stickerPack(StickerPackReference, TelegramMediaFile?)
     case audio(TelegramMediaFile)
     case document(TelegramMediaFile, Bool)
     case gallery(Signal<GalleryController, NoError>)
@@ -28,19 +29,20 @@ public enum ChatMessageGalleryControllerData {
     case chatAvatars(AvatarGalleryController, Media)
     case theme(TelegramMediaFile)
     case other(Media)
+    case story(Signal<StoryContainerScreen, NoError>)
 }
 
 private func instantPageBlockMedia(pageId: MediaId, block: InstantPageBlock, media: [MediaId: Media], counter: inout Int) -> [InstantPageGalleryEntry] {
     switch block {
         case let .image(id, caption, _, _):
             if let m = media[id] {
-                let result = [InstantPageGalleryEntry(index: Int32(counter), pageId: pageId, media: InstantPageMedia(index: counter, media: m, url: nil, caption: caption.text, credit: caption.credit), caption: caption.text, credit: caption.credit, location: InstantPageGalleryEntryLocation(position: Int32(counter), totalCount: 0))]
+                let result = [InstantPageGalleryEntry(index: Int32(counter), pageId: pageId, media: InstantPageMedia(index: counter, media: EngineMedia(m), url: nil, caption: caption.text, credit: caption.credit), caption: caption.text, credit: caption.credit, location: InstantPageGalleryEntryLocation(position: Int32(counter), totalCount: 0))]
                 counter += 1
                 return result
             }
         case let .video(id, caption, _, _):
             if let m = media[id] {
-                let result = [InstantPageGalleryEntry(index: Int32(counter), pageId: pageId, media: InstantPageMedia(index: counter, media: m, url: nil, caption: caption.text, credit: caption.credit), caption: caption.text, credit: caption.credit, location: InstantPageGalleryEntryLocation(position: Int32(counter), totalCount: 0))]
+                let result = [InstantPageGalleryEntry(index: Int32(counter), pageId: pageId, media: InstantPageMedia(index: counter, media: EngineMedia(m), url: nil, caption: caption.text, credit: caption.credit), caption: caption.text, credit: caption.credit, location: InstantPageGalleryEntryLocation(position: Int32(counter), totalCount: 0))]
                 counter += 1
                 return result
             }
@@ -79,7 +81,7 @@ public func instantPageGalleryMedia(webpageId: MediaId, page: InstantPage, galle
     }
     
     if !found {
-        result.insert(InstantPageGalleryEntry(index: Int32(counter), pageId: webpageId, media: InstantPageMedia(index: counter, media: galleryMedia, url: nil, caption: nil, credit: nil), caption: nil, credit: nil, location: InstantPageGalleryEntryLocation(position: Int32(counter), totalCount: 0)), at: 0)
+        result.insert(InstantPageGalleryEntry(index: Int32(counter), pageId: webpageId, media: InstantPageMedia(index: counter, media: EngineMedia(galleryMedia), url: nil, caption: nil, credit: nil), caption: nil, credit: nil, location: InstantPageGalleryEntryLocation(position: Int32(counter), totalCount: 0)), at: 0)
     }
     
     for i in 0 ..< result.count {
@@ -89,7 +91,7 @@ public func instantPageGalleryMedia(webpageId: MediaId, page: InstantPage, galle
     return result
 }
 
-public func chatMessageGalleryControllerData(context: AccountContext, chatLocation: ChatLocation?, chatLocationContextHolder: Atomic<ChatLocationContextHolder?>?, message: Message, navigationController: NavigationController?, standalone: Bool, reverseMessageGalleryOrder: Bool, mode: ChatControllerInteractionOpenMessageMode, source: GalleryControllerItemSource?, synchronousLoad: Bool, actionInteraction: GalleryControllerActionInteraction?) -> ChatMessageGalleryControllerData? {
+public func chatMessageGalleryControllerData(context: AccountContext, chatLocation: ChatLocation?, chatFilterTag: MemoryBuffer?, chatLocationContextHolder: Atomic<ChatLocationContextHolder?>?, message: Message, mediaIndex: Int? = nil, navigationController: NavigationController?, standalone: Bool, reverseMessageGalleryOrder: Bool, mode: ChatControllerInteractionOpenMessageMode, source: GalleryControllerItemSource?, synchronousLoad: Bool, actionInteraction: GalleryControllerActionInteraction?) -> ChatMessageGalleryControllerData? {
     var standalone = standalone
     if message.id.peerId.namespace == Namespaces.Peer.CloudUser && message.id.namespace != Namespaces.Message.Cloud {
         standalone = true
@@ -100,24 +102,38 @@ public func chatMessageGalleryControllerData(context: AccountContext, chatLocati
     var instantPageMedia: (TelegramMediaWebpage, [InstantPageGalleryEntry])?
     if message.media.isEmpty, let entities = message.textEntitiesAttribute?.entities, entities.count == 1, let firstEntity = entities.first, case let .CustomEmoji(_, fileId) = firstEntity.type, let file = message.associatedMedia[MediaId(namespace: Namespaces.Media.CloudFile, id: fileId)] as? TelegramMediaFile {
         for attribute in file.attributes {
-            if case let .CustomEmoji(_, _, reference) = attribute {
+            if case let .CustomEmoji(_, _, _, reference) = attribute {
                 if let reference = reference {
-                    return .stickerPack(reference)
+                    return .stickerPack(reference, file)
                 }
                 break
             }
         }
     }
     for media in message.media {
-        if let invoice = media as? TelegramMediaInvoice, let extendedMedia = invoice.extendedMedia, case let .full(fullMedia) = extendedMedia {
+        if let paidContent = media as? TelegramMediaPaidContent, let extendedMedia = paidContent.extendedMedia.first, case .full = extendedMedia {
+            standalone = true
+            galleryMedia = paidContent
+        } else if let invoice = media as? TelegramMediaInvoice, let extendedMedia = invoice.extendedMedia, case let .full(fullMedia) = extendedMedia {
             standalone = true
             galleryMedia = fullMedia
         } else if let action = media as? TelegramMediaAction {
             switch action.action {
-            case let .photoUpdated(image):
+            case let .photoUpdated(image), let .suggestedProfilePhoto(image):
                 if let peer = messageMainPeer(EngineMessage(message)), let image = image {
-                    let promise: Promise<[AvatarGalleryEntry]> = Promise([AvatarGalleryEntry.image(image.imageId, image.reference, image.representations.map({ ImageRepresentationWithReference(representation: $0, reference: .media(media: .message(message: MessageReference(message), media: media), resource: $0.resource)) }), image.videoRepresentations.map({ VideoRepresentationWithReference(representation: $0, reference: .media(media: .message(message: MessageReference(message), media: media), resource: $0.resource)) }), peer._asPeer(), message.timestamp, nil, message.id, image.immediateThumbnailData, "action")])
-                    let galleryController = AvatarGalleryController(context: context, peer: peer._asPeer(), sourceCorners: .roundRect(15.5), remoteEntries: promise, skipInitial: true, replaceRootController: { controller, ready in
+                    var isSuggested = false
+                    if case .suggestedProfilePhoto = action.action {
+                        isSuggested = true
+                    }
+                    let promise: Promise<[AvatarGalleryEntry]> = Promise([AvatarGalleryEntry.image(image.imageId, image.reference, image.representations.map({ ImageRepresentationWithReference(representation: $0, reference: .media(media: .message(message: MessageReference(message), media: media), resource: $0.resource)) }), image.videoRepresentations.map({ VideoRepresentationWithReference(representation: $0, reference: .media(media: .message(message: MessageReference(message), media: media), resource: $0.resource)) }), peer, message.timestamp, nil, message.id, image.immediateThumbnailData, "action", false, nil)])
+                    
+                    let sourceCorners: AvatarGalleryController.SourceCorners
+                    if case .photoUpdated = action.action {
+                        sourceCorners = .roundRect(15.5)
+                    } else {
+                        sourceCorners = .round
+                    }
+                    let galleryController = AvatarGalleryController(context: context, peer: peer, sourceCorners: sourceCorners, remoteEntries: promise, isSuggested: isSuggested, skipInitial: true, replaceRootController: { controller, ready in
                         
                     })
                     return .chatAvatars(galleryController, image)
@@ -185,7 +201,7 @@ public func chatMessageGalleryControllerData(context: AccountContext, chatLocati
             }
         }
         
-        let gallery = InstantPageGalleryController(context: context, webPage: webPage, message: message, entries: instantPageMedia, centralIndex: centralIndex, fromPlayingVideo: autoplayingVideo, landscape: landscape, timecode: timecode, replaceRootController: { [weak navigationController] controller, ready in
+        let gallery = InstantPageGalleryController(context: context, userLocation: chatLocation?.peerId.flatMap(MediaResourceUserLocation.peer) ?? .other, webPage: webPage, message: message, entries: instantPageMedia, centralIndex: centralIndex, fromPlayingVideo: autoplayingVideo, landscape: landscape, timecode: timecode, replaceRootController: { [weak navigationController] controller, ready in
             if let navigationController = navigationController {
                 navigationController.replaceTopController(controller, animated: false, ready: ready)
             }
@@ -198,7 +214,7 @@ public func chatMessageGalleryControllerData(context: AccountContext, chatLocati
             for attribute in file.attributes {
                 if case let .Sticker(_, reference, _) = attribute {
                     if let reference = reference {
-                        return .stickerPack(reference)
+                        return .stickerPack(reference, file)
                     }
                     break
                 }
@@ -223,8 +239,13 @@ public func chatMessageGalleryControllerData(context: AccountContext, chatLocati
                     }*/
                 }
                 
+                var source = source
+                if standalone {
+                    source = .standaloneMessage(message, nil)
+                }
+                
                 if internalDocumentItemSupportsMimeType(file.mimeType, fileName: file.fileName ?? "file") {
-                    let gallery = GalleryController(context: context, source: source ?? .peerMessagesAtId(messageId: message.id, chatLocation: chatLocation ?? .peer(id: message.id.peerId), chatLocationContextHolder: chatLocationContextHolder ?? Atomic<ChatLocationContextHolder?>(value: nil)), invertItemOrder: reverseMessageGalleryOrder, streamSingleVideo: stream, fromPlayingVideo: autoplayingVideo, landscape: landscape, timecode: timecode, synchronousLoad: synchronousLoad, replaceRootController: { [weak navigationController] controller, ready in
+                    let gallery = GalleryController(context: context, source: source ?? .peerMessagesAtId(messageId: message.id, chatLocation: chatLocation ?? .peer(id: message.id.peerId), customTag: chatFilterTag, chatLocationContextHolder: chatLocationContextHolder ?? Atomic<ChatLocationContextHolder?>(value: nil)), invertItemOrder: reverseMessageGalleryOrder, streamSingleVideo: stream, fromPlayingVideo: autoplayingVideo, landscape: landscape, timecode: timecode, synchronousLoad: synchronousLoad, replaceRootController: { [weak navigationController] controller, ready in
                         navigationController?.replaceTopController(controller, animated: false, ready: ready)
                         }, baseNavigationController: navigationController, actionInteraction: actionInteraction)
                     return .gallery(.single(gallery))
@@ -235,7 +256,13 @@ public func chatMessageGalleryControllerData(context: AccountContext, chatLocati
                 }
             }
             
-            if message.containsSecretMedia {
+            if let adAttribute = message.adAttribute, adAttribute.hasContentMedia {
+                let gallery = GalleryController(context: context, source: .standaloneMessage(message, mediaIndex), invertItemOrder: reverseMessageGalleryOrder, streamSingleVideo: stream, fromPlayingVideo: autoplayingVideo, landscape: landscape, timecode: nil, playbackRate: 1.0, synchronousLoad: synchronousLoad, replaceRootController: { [weak navigationController] controller, ready in
+                    navigationController?.replaceTopController(controller, animated: false, ready: ready)
+                }, baseNavigationController: navigationController, actionInteraction: actionInteraction)
+                gallery.temporaryDoNotWaitForReady = autoplayingVideo
+                return .gallery(.single(gallery))
+            } else if message.containsSecretMedia {
                 let gallery = SecretMediaPreviewController(context: context, messageId: message.id)
                 return .secretGallery(gallery)
             } else {
@@ -249,10 +276,17 @@ public func chatMessageGalleryControllerData(context: AccountContext, chatLocati
                     }
                 }
                 
+                var openChatLocation = chatLocation ?? .peer(id: message.id.peerId)
+                var openChatLocationContextHolder = chatLocationContextHolder ?? Atomic<ChatLocationContextHolder?>(value: nil)
+                if chatLocation?.peerId != message.id.peerId {
+                    openChatLocation = .peer(id: message.id.peerId)
+                    openChatLocationContextHolder = Atomic<ChatLocationContextHolder?>(value: nil)
+                }
+                
                 return .gallery(startState
                 |> deliverOnMainQueue
                 |> map { startState in
-                    let gallery = GalleryController(context: context, source: source ?? (standalone ? .standaloneMessage(message) : .peerMessagesAtId(messageId: message.id, chatLocation: chatLocation ?? .peer(id: message.id.peerId), chatLocationContextHolder: chatLocationContextHolder ?? Atomic<ChatLocationContextHolder?>(value: nil))), invertItemOrder: reverseMessageGalleryOrder, streamSingleVideo: stream, fromPlayingVideo: autoplayingVideo, landscape: landscape, timecode: startState.timecode, playbackRate: startState.rate, synchronousLoad: synchronousLoad, replaceRootController: { [weak navigationController] controller, ready in
+                    let gallery = GalleryController(context: context, source: source ?? (standalone ? .standaloneMessage(message, mediaIndex) : .peerMessagesAtId(messageId: message.id, chatLocation: openChatLocation, customTag: chatFilterTag, chatLocationContextHolder: openChatLocationContextHolder)), invertItemOrder: reverseMessageGalleryOrder, streamSingleVideo: stream, fromPlayingVideo: autoplayingVideo, landscape: landscape, timecode: startState.timecode, playbackRate: startState.rate, synchronousLoad: synchronousLoad, replaceRootController: { [weak navigationController] controller, ready in
                         navigationController?.replaceTopController(controller, animated: false, ready: ready)
                     }, baseNavigationController: navigationController, actionInteraction: actionInteraction)
                     gallery.temporaryDoNotWaitForReady = autoplayingVideo
@@ -273,8 +307,8 @@ public enum ChatMessagePreviewControllerData {
     case gallery(GalleryController)
 }
 
-public func chatMessagePreviewControllerData(context: AccountContext, chatLocation: ChatLocation?, chatLocationContextHolder: Atomic<ChatLocationContextHolder?>?, message: Message, standalone: Bool, reverseMessageGalleryOrder: Bool, navigationController: NavigationController?) -> ChatMessagePreviewControllerData? {
-    if let mediaData = chatMessageGalleryControllerData(context: context, chatLocation: chatLocation, chatLocationContextHolder: chatLocationContextHolder, message: message, navigationController: navigationController, standalone: standalone, reverseMessageGalleryOrder: reverseMessageGalleryOrder, mode: .default, source: nil, synchronousLoad: true, actionInteraction: nil) {
+public func chatMessagePreviewControllerData(context: AccountContext, chatLocation: ChatLocation?, chatFilterTag: MemoryBuffer?, chatLocationContextHolder: Atomic<ChatLocationContextHolder?>?, message: Message, standalone: Bool, reverseMessageGalleryOrder: Bool, navigationController: NavigationController?) -> ChatMessagePreviewControllerData? {
+    if let mediaData = chatMessageGalleryControllerData(context: context, chatLocation: chatLocation, chatFilterTag: chatFilterTag, chatLocationContextHolder: chatLocationContextHolder, message: message, navigationController: navigationController, standalone: standalone, reverseMessageGalleryOrder: reverseMessageGalleryOrder, mode: .default, source: nil, synchronousLoad: true, actionInteraction: nil) {
         switch mediaData {
             case .gallery:
                 break
@@ -287,8 +321,8 @@ public func chatMessagePreviewControllerData(context: AccountContext, chatLocati
     return nil
 }
 
-public func chatMediaListPreviewControllerData(context: AccountContext, chatLocation: ChatLocation?, chatLocationContextHolder: Atomic<ChatLocationContextHolder?>?, message: Message, standalone: Bool, reverseMessageGalleryOrder: Bool, navigationController: NavigationController?) -> Signal<ChatMessagePreviewControllerData?, NoError> {
-    if let mediaData = chatMessageGalleryControllerData(context: context, chatLocation: chatLocation, chatLocationContextHolder: chatLocationContextHolder, message: message, navigationController: navigationController, standalone: standalone, reverseMessageGalleryOrder: reverseMessageGalleryOrder, mode: .default, source: nil, synchronousLoad: true, actionInteraction: nil) {
+public func chatMediaListPreviewControllerData(context: AccountContext, chatLocation: ChatLocation?, chatFilterTag: MemoryBuffer?, chatLocationContextHolder: Atomic<ChatLocationContextHolder?>?, message: Message, standalone: Bool, reverseMessageGalleryOrder: Bool, navigationController: NavigationController?) -> Signal<ChatMessagePreviewControllerData?, NoError> {
+    if let mediaData = chatMessageGalleryControllerData(context: context, chatLocation: chatLocation, chatFilterTag: chatFilterTag, chatLocationContextHolder: chatLocationContextHolder, message: message, navigationController: navigationController, standalone: standalone, reverseMessageGalleryOrder: reverseMessageGalleryOrder, mode: .default, source: nil, synchronousLoad: true, actionInteraction: nil) {
         switch mediaData {
             case let .gallery(gallery):
                 return gallery

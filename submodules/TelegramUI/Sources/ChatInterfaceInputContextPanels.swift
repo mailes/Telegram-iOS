@@ -3,17 +3,19 @@ import UIKit
 import TelegramCore
 import AccountContext
 import ChatPresentationInterfaceState
+import ChatControllerInteraction
+import ChatInputContextPanelNode
 
 private func inputQueryResultPriority(_ result: ChatPresentationInputQueryResult) -> (Int, Bool) {
     switch result {
         case let .stickers(items):
             return (0, !items.isEmpty)
-        case let .hashtags(items):
+        case let .hashtags(items, _):
             return (1, !items.isEmpty)
         case let .mentions(items):
             return (2, !items.isEmpty)
         case let .commands(items):
-            return (3, !items.isEmpty)
+            return (3, !items.commands.isEmpty || items.hasShortcuts)
         case let .contextRequestResult(_, result):
             var nonEmpty = false
             if let result = result, !result.results.isEmpty {
@@ -26,10 +28,6 @@ private func inputQueryResultPriority(_ result: ChatPresentationInputQueryResult
 }
 
 func inputContextPanelForChatPresentationIntefaceState(_ chatPresentationInterfaceState: ChatPresentationInterfaceState, context: AccountContext, currentPanel: ChatInputContextPanelNode?, controllerInteraction: ChatControllerInteraction, interfaceInteraction: ChatPanelInterfaceInteraction?, chatPresentationContext: ChatPresentationContext) -> ChatInputContextPanelNode? {
-    guard let _ = chatPresentationInterfaceState.renderedPeer?.peer else {
-        return nil
-    }
-    
     if chatPresentationInterfaceState.showCommands, let renderedPeer = chatPresentationInterfaceState.renderedPeer {
         if let currentPanel = currentPanel as? CommandMenuChatInputContextPanelNode {
             return currentPanel
@@ -78,8 +76,15 @@ func inputContextPanelForChatPresentationIntefaceState(_ chatPresentationInterfa
     }
     
     switch inputQueryResult {
-        case let .stickers(results):
-            if !results.isEmpty {
+        case let .stickers(unfilteredResults):
+            if !unfilteredResults.isEmpty {
+                var results: [FoundStickerItem] = []
+                for result in unfilteredResults {
+                    if !results.contains(where: { $0.file.fileId == result.file.fileId }) {
+                        results.append(result)
+                    }
+                }
+                
                 let query = chatPresentationInterfaceState.interfaceState.composeInputState.inputText.string
                 
                 if let currentPanel = currentPanel as? InlineReactionSearchPanel {
@@ -93,15 +98,19 @@ func inputContextPanelForChatPresentationIntefaceState(_ chatPresentationInterfa
                     return panel
                 }
             }
-        case let .hashtags(results):
-            if !results.isEmpty {
+        case let .hashtags(results, query):
+            var peer: EnginePeer?
+            if let chatPeer = chatPresentationInterfaceState.renderedPeer?.peer as? TelegramChannel, chatPeer.addressName != nil {
+                peer = EnginePeer(chatPeer)
+            }
+            if !results.isEmpty || (peer != nil && query.count >= 4) {
                 if let currentPanel = currentPanel as? HashtagChatInputContextPanelNode {
-                    currentPanel.updateResults(results)
+                    currentPanel.updateResults(results, query: query, peer: peer)
                     return currentPanel
                 } else {
                     let panel = HashtagChatInputContextPanelNode(context: context, theme: chatPresentationInterfaceState.theme, strings: chatPresentationInterfaceState.strings, fontSize: chatPresentationInterfaceState.fontSize, chatPresentationContext: controllerInteraction.presentationContext)
                     panel.interfaceInteraction = interfaceInteraction
-                    panel.updateResults(results)
+                    panel.updateResults(results, query: query, peer: peer)
                     return panel
                 }
             }
@@ -132,21 +141,21 @@ func inputContextPanelForChatPresentationIntefaceState(_ chatPresentationInterfa
                 return nil
             }
         case let .commands(commands):
-            if !commands.isEmpty {
+            if !commands.commands.isEmpty || commands.hasShortcuts {
                 if let currentPanel = currentPanel as? CommandChatInputContextPanelNode {
-                    currentPanel.updateResults(commands)
+                    currentPanel.updateResults(commands.commands, accountPeer: commands.accountPeer, hasShortcuts: commands.hasShortcuts, query: commands.query)
                     return currentPanel
                 } else {
                     let panel = CommandChatInputContextPanelNode(context: context, theme: chatPresentationInterfaceState.theme, strings: chatPresentationInterfaceState.strings, fontSize: chatPresentationInterfaceState.fontSize, chatPresentationContext: controllerInteraction.presentationContext)
                     panel.interfaceInteraction = interfaceInteraction
-                    panel.updateResults(commands)
+                    panel.updateResults(commands.commands, accountPeer: commands.accountPeer, hasShortcuts: commands.hasShortcuts, query: commands.query)
                     return panel
                 }
             } else {
                 return nil
             }
         case let .contextRequestResult(_, results):
-            if let results = results, (!results.results.isEmpty || results.switchPeer != nil) {
+            if let results = results, (!results.results.isEmpty || results.switchPeer != nil || results.webView != nil) {
                 switch results.presentation {
                     case .list:
                         if let currentPanel = currentPanel as? VerticalListContextResultsChatInputContextPanelNode {

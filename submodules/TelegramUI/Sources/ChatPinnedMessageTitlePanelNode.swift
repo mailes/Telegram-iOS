@@ -21,6 +21,8 @@ import ChatPresentationInterfaceState
 import TextNodeWithEntities
 import AnimationCache
 import MultiAnimationRenderer
+import TranslateUI
+import ChatControllerInteraction
 
 private enum PinnedMessageAnimation {
     case slideToTop
@@ -70,6 +72,8 @@ final class ChatPinnedMessageTitlePanelNode: ChatTitleAccessoryPanelNode {
     private var currentLayout: (CGFloat, CGFloat, CGFloat)?
     private var currentMessage: ChatPinnedMessage?
     private var previousMediaReference: AnyMediaReference?
+    private var currentTranslateToLanguage: (fromLang: String, toLang: String)?
+    private let translationDisposable = MetaDisposable()
     
     private var isReplyThread: Bool = false
     
@@ -229,6 +233,7 @@ final class ChatPinnedMessageTitlePanelNode: ChatTitleAccessoryPanelNode {
     deinit {
         self.fetchDisposable.dispose()
         self.statusDisposable?.dispose()
+        self.translationDisposable.dispose()
     }
     
     private var theme: PresentationTheme?
@@ -254,7 +259,7 @@ final class ChatPinnedMessageTitlePanelNode: ChatTitleAccessoryPanelNode {
             |> map { status -> Bool in
                 return status == .pinnedMessage
             }
-            |> deliverOnMainQueue).start(next: { [weak self] isLoading in
+            |> deliverOnMainQueue).startStrict(next: { [weak self] isLoading in
                 guard let strongSelf = self else {
                     return
                 }
@@ -317,10 +322,15 @@ final class ChatPinnedMessageTitlePanelNode: ChatTitleAccessoryPanelNode {
             messageUpdated = true
         }
         
+        var isStarsPayment = false
         if let message = interfaceState.pinnedMessage, !message.message.isRestricted(platform: "ios", contentSettings: self.context.currentContentSettings.with { $0 }) {
             for attribute in message.message.attributes {
                 if let attribute = attribute as? ReplyMarkupMessageAttribute, attribute.flags.contains(.inline), attribute.rows.count == 1, attribute.rows[0].buttons.count == 1 {
-                    actionTitle = attribute.rows[0].buttons[0].title
+                    let title = attribute.rows[0].buttons[0].title
+                    actionTitle = title
+                    if case .payment = attribute.rows[0].buttons[0].action, title.contains("⭐️") {
+                        isStarsPayment = true
+                    }
                 }
             }
         } else {
@@ -425,7 +435,20 @@ final class ChatPinnedMessageTitlePanelNode: ChatTitleAccessoryPanelNode {
             self.actionButtonBackgroundNode.isHidden = false
             self.actionButtonTitleNode.isHidden = false
             
-            self.actionButtonTitleNode.attributedText = NSAttributedString(string: actionTitle, font: Font.with(size: 15.0, design: .round, weight: .semibold, traits: [.monospacedNumbers]), textColor:  interfaceState.theme.list.itemCheckColors.foregroundColor)
+            let attributedTitle: NSAttributedString
+            if isStarsPayment {
+                let updatedTitle = actionTitle.replacingOccurrences(of: "⭐️", with: " # ")
+                let buttonAttributedString = NSMutableAttributedString(string: updatedTitle, font: Font.with(size: 15.0, design: .round, weight: .semibold, traits: [.monospacedNumbers]), textColor:  interfaceState.theme.list.itemCheckColors.foregroundColor)
+                if let range = buttonAttributedString.string.range(of: "#"), let starImage = UIImage(bundleImageName: "Item List/PremiumIcon") {
+                    buttonAttributedString.addAttribute(.attachment, value: starImage, range: NSRange(range, in: buttonAttributedString.string))
+                    buttonAttributedString.addAttribute(.foregroundColor, value: interfaceState.theme.list.itemCheckColors.foregroundColor, range: NSRange(range, in: buttonAttributedString.string))
+                    buttonAttributedString.addAttribute(.baselineOffset, value: 1.0, range: NSRange(range, in: buttonAttributedString.string))
+                }
+                attributedTitle = buttonAttributedString
+            } else {
+                attributedTitle = NSAttributedString(string: actionTitle, font: Font.with(size: 15.0, design: .round, weight: .semibold, traits: [.monospacedNumbers]), textColor:  interfaceState.theme.list.itemCheckColors.foregroundColor)
+            }
+            self.actionButtonTitleNode.attributedText = attributedTitle
             
             let actionButtonTitleSize = self.actionButtonTitleNode.updateLayout(CGSize(width: 150.0, height: .greatestFiniteMagnitude))
             let actionButtonSize = CGSize(width: max(actionButtonTitleSize.width + 20.0, 40.0), height: 28.0)
@@ -473,7 +496,25 @@ final class ChatPinnedMessageTitlePanelNode: ChatTitleAccessoryPanelNode {
         self.clippingContainer.frame = CGRect(origin: CGPoint(), size: CGSize(width: width, height: panelHeight))
         self.contentContainer.frame = CGRect(origin: CGPoint(), size: CGSize(width: width, height: panelHeight))
         
-        if self.currentLayout?.0 != width || self.currentLayout?.1 != leftInset || self.currentLayout?.2 != rightInset || messageUpdated || themeUpdated {
+        var translateToLanguage: (fromLang: String, toLang: String)?
+        if let translationState = interfaceState.translationState, translationState.isEnabled {
+            translateToLanguage = (normalizeTranslationLanguage(translationState.fromLang), normalizeTranslationLanguage(translationState.toLang))
+        }
+        
+        var currentTranslateToLanguageUpdated = false
+        if self.currentTranslateToLanguage?.fromLang != translateToLanguage?.fromLang || self.currentTranslateToLanguage?.toLang != translateToLanguage?.toLang {
+            self.currentTranslateToLanguage = translateToLanguage
+            currentTranslateToLanguageUpdated = true
+        }
+        
+        if currentTranslateToLanguageUpdated || messageUpdated, let message = interfaceState.pinnedMessage?.message {
+            if let translation = message.attributes.first(where: { $0 is TranslationMessageAttribute }) as? TranslationMessageAttribute, translation.toLang == translateToLanguage?.toLang {
+            } else if let translateToLanguage {
+                self.translationDisposable.set(translateMessageIds(context: self.context, messageIds: [message.id], fromLang: translateToLanguage.fromLang, toLang: translateToLanguage.toLang).startStrict())
+            }
+        }
+        
+        if self.currentLayout?.0 != width || self.currentLayout?.1 != leftInset || self.currentLayout?.2 != rightInset || messageUpdated || themeUpdated || currentTranslateToLanguageUpdated {
             self.currentLayout = (width, leftInset, rightInset)
             
             let previousMessageWasNil = self.currentMessage == nil
@@ -481,7 +522,7 @@ final class ChatPinnedMessageTitlePanelNode: ChatTitleAccessoryPanelNode {
             
             if let currentMessage = self.currentMessage, let currentLayout = self.currentLayout {
                 self.dustNode?.update(revealed: false, animated: false)
-                self.enqueueTransition(width: currentLayout.0, panelHeight: panelHeight, leftInset: currentLayout.1, rightInset: currentLayout.2, transition: .immediate, animation: messageUpdatedAnimation, pinnedMessage: currentMessage, theme: interfaceState.theme, strings: interfaceState.strings, nameDisplayOrder: interfaceState.nameDisplayOrder, dateTimeFormat: interfaceState.dateTimeFormat, accountPeerId: self.context.account.peerId, firstTime: previousMessageWasNil, isReplyThread: isReplyThread)
+                self.enqueueTransition(width: currentLayout.0, panelHeight: panelHeight, leftInset: currentLayout.1, rightInset: currentLayout.2, transition: .immediate, animation: messageUpdatedAnimation, pinnedMessage: currentMessage, theme: interfaceState.theme, strings: interfaceState.strings, nameDisplayOrder: interfaceState.nameDisplayOrder, dateTimeFormat: interfaceState.dateTimeFormat, accountPeerId: self.context.account.peerId, firstTime: previousMessageWasNil, isReplyThread: isReplyThread, translateToLanguage: translateToLanguage?.toLang)
             }
         }
         
@@ -495,10 +536,10 @@ final class ChatPinnedMessageTitlePanelNode: ChatTitleAccessoryPanelNode {
             }
         }*/
         
-        return LayoutResult(backgroundHeight: panelHeight, insetHeight: panelHeight)
+        return LayoutResult(backgroundHeight: panelHeight, insetHeight: panelHeight, hitTestSlop: 0.0)
     }
     
-    private func enqueueTransition(width: CGFloat, panelHeight: CGFloat, leftInset: CGFloat, rightInset: CGFloat, transition: ContainedViewLayoutTransition, animation: PinnedMessageAnimation?, pinnedMessage: ChatPinnedMessage, theme: PresentationTheme, strings: PresentationStrings, nameDisplayOrder: PresentationPersonNameOrder, dateTimeFormat: PresentationDateTimeFormat, accountPeerId: PeerId, firstTime: Bool, isReplyThread: Bool) {
+    private func enqueueTransition(width: CGFloat, panelHeight: CGFloat, leftInset: CGFloat, rightInset: CGFloat, transition: ContainedViewLayoutTransition, animation: PinnedMessageAnimation?, pinnedMessage: ChatPinnedMessage, theme: PresentationTheme, strings: PresentationStrings, nameDisplayOrder: PresentationPersonNameOrder, dateTimeFormat: PresentationDateTimeFormat, accountPeerId: PeerId, firstTime: Bool, isReplyThread: Bool, translateToLanguage: String?) {
         let message = pinnedMessage.message
         
         var animationTransition: ContainedViewLayoutTransition = .immediate
@@ -555,19 +596,25 @@ final class ChatPinnedMessageTitlePanelNode: ChatTitleAccessoryPanelNode {
             var updatedMediaReference: AnyMediaReference?
             var imageDimensions: CGSize?
             
+            let giveaway = pinnedMessage.message.media.first(where: { $0 is TelegramMediaGiveaway }) as? TelegramMediaGiveaway
+            
             var titleStrings: [AnimatedCountLabelNode.Segment] = []
-            if pinnedMessage.totalCount == 2 {
-                if pinnedMessage.index == 0 {
-                    titleStrings.append(.text(0, NSAttributedString(string: "\(strings.Conversation_PinnedPreviousMessage) ", font: Font.medium(15.0), textColor: theme.chat.inputPanel.panelControlAccentColor)))
+            if let _ = giveaway {
+                titleStrings.append(.text(0, NSAttributedString(string: "\(strings.Conversation_PinnedGiveaway) ", font: Font.medium(15.0), textColor: theme.chat.inputPanel.panelControlAccentColor)))
+            } else {
+                if pinnedMessage.totalCount == 2 {
+                    if pinnedMessage.index == 0 {
+                        titleStrings.append(.text(0, NSAttributedString(string: "\(strings.Conversation_PinnedPreviousMessage) ", font: Font.medium(15.0), textColor: theme.chat.inputPanel.panelControlAccentColor)))
+                    } else {
+                        titleStrings.append(.text(0, NSAttributedString(string: "\(strings.Conversation_PinnedMessage) ", font: Font.medium(15.0), textColor: theme.chat.inputPanel.panelControlAccentColor)))
+                    }
+                } else if pinnedMessage.totalCount > 1 && pinnedMessage.index != pinnedMessage.totalCount - 1 {
+                    titleStrings.append(.text(0, NSAttributedString(string: "\(strings.Conversation_PinnedMessage)", font: Font.medium(15.0), textColor: theme.chat.inputPanel.panelControlAccentColor)))
+                    titleStrings.append(.text(1, NSAttributedString(string: " #", font: Font.medium(15.0), textColor: theme.chat.inputPanel.panelControlAccentColor)))
+                    titleStrings.append(.number(pinnedMessage.index + 1, NSAttributedString(string: "\(pinnedMessage.index + 1)", font: Font.medium(15.0), textColor: theme.chat.inputPanel.panelControlAccentColor)))
                 } else {
                     titleStrings.append(.text(0, NSAttributedString(string: "\(strings.Conversation_PinnedMessage) ", font: Font.medium(15.0), textColor: theme.chat.inputPanel.panelControlAccentColor)))
                 }
-            } else if pinnedMessage.totalCount > 1 && pinnedMessage.index != pinnedMessage.totalCount - 1 {
-                titleStrings.append(.text(0, NSAttributedString(string: "\(strings.Conversation_PinnedMessage)", font: Font.medium(15.0), textColor: theme.chat.inputPanel.panelControlAccentColor)))
-                titleStrings.append(.text(1, NSAttributedString(string: " #", font: Font.medium(15.0), textColor: theme.chat.inputPanel.panelControlAccentColor)))
-                titleStrings.append(.number(pinnedMessage.index + 1, NSAttributedString(string: "\(pinnedMessage.index + 1)", font: Font.medium(15.0), textColor: theme.chat.inputPanel.panelControlAccentColor)))
-            } else {
-                titleStrings.append(.text(0, NSAttributedString(string: "\(strings.Conversation_PinnedMessage) ", font: Font.medium(15.0), textColor: theme.chat.inputPanel.panelControlAccentColor)))
             }
             
             if !message.containsSecretMedia {
@@ -586,6 +633,28 @@ final class ChatPinnedMessageTitlePanelNode: ChatTitleAccessoryPanelNode {
                             imageDimensions = dimensions.cgSize
                         }
                         break
+                    } else if let paidContent = media as? TelegramMediaPaidContent, let firstMedia = paidContent.extendedMedia.first {
+                        switch firstMedia {
+                        case let .preview(dimensions, immediateThumbnailData, _):
+                            let thumbnailMedia = TelegramMediaImage(imageId: MediaId(namespace: 0, id: 0), representations: [], immediateThumbnailData: immediateThumbnailData, reference: nil, partialReference: nil, flags: [])
+                            if let dimensions {
+                                imageDimensions = dimensions.cgSize
+                            }
+                            updatedMediaReference = .standalone(media: thumbnailMedia)
+                        case let .full(fullMedia):
+                            updatedMediaReference = .message(message: MessageReference(message), media: fullMedia)
+                            if let image = fullMedia as? TelegramMediaImage {
+                                if let representation = largestRepresentationForPhoto(image) {
+                                    imageDimensions = representation.dimensions.cgSize
+                                }
+                                break
+                            } else if let file = fullMedia as? TelegramMediaFile {
+                                if let dimensions = file.dimensions {
+                                    imageDimensions = dimensions.cgSize
+                                }
+                                break
+                            }
+                        }
                     }
                 }
             }
@@ -622,35 +691,67 @@ final class ChatPinnedMessageTitlePanelNode: ChatTitleAccessoryPanelNode {
                 mediaUpdated = true
             }
             
+            let hasSpoiler = message.attributes.contains(where: { $0 is MediaSpoilerMessageAttribute })
+            
             var updateImageSignal: Signal<(TransformImageArguments) -> DrawingContext?, NoError>?
             var updatedFetchMediaSignal: Signal<FetchResourceSourceType, FetchResourceError>?
             if mediaUpdated {
                 if let updatedMediaReference = updatedMediaReference, imageDimensions != nil {
                     if let imageReference = updatedMediaReference.concrete(TelegramMediaImage.self) {
-                        updateImageSignal = chatMessagePhotoThumbnail(account: context.account, photoReference: imageReference)
+                        if imageReference.media.representations.isEmpty {
+                            updateImageSignal = chatSecretPhoto(account: context.account, userLocation: .peer(message.id.peerId), photoReference: imageReference, ignoreFullSize: true, synchronousLoad: true)
+                        } else {
+                            updateImageSignal = chatMessagePhotoThumbnail(account: context.account, userLocation: .peer(message.id.peerId), photoReference: imageReference, blurred: hasSpoiler)
+                        }
                     } else if let fileReference = updatedMediaReference.concrete(TelegramMediaFile.self) {
                         if fileReference.media.isAnimatedSticker {
                             let dimensions = fileReference.media.dimensions ?? PixelDimensions(width: 512, height: 512)
-                            updateImageSignal = chatMessageAnimatedSticker(postbox: context.account.postbox, file: fileReference.media, small: false, size: dimensions.cgSize.aspectFitted(CGSize(width: 160.0, height: 160.0)))
-                            updatedFetchMediaSignal = fetchedMediaResource(mediaBox: context.account.postbox.mediaBox, reference: fileReference.resourceReference(fileReference.media.resource))
+                            updateImageSignal = chatMessageAnimatedSticker(postbox: context.account.postbox, userLocation: .peer(message.id.peerId), file: fileReference.media, small: false, size: dimensions.cgSize.aspectFitted(CGSize(width: 160.0, height: 160.0)))
+                            updatedFetchMediaSignal = fetchedMediaResource(mediaBox: context.account.postbox.mediaBox, userLocation: .peer(message.id.peerId), userContentType: MediaResourceUserContentType(file: fileReference.media), reference: fileReference.resourceReference(fileReference.media.resource))
                         } else if fileReference.media.isVideo || fileReference.media.isAnimated {
-                            updateImageSignal = chatMessageVideoThumbnail(account: context.account, fileReference: fileReference)
+                            updateImageSignal = chatMessageVideoThumbnail(account: context.account, userLocation: .peer(message.id.peerId), fileReference: fileReference, blurred: hasSpoiler)
                         } else if let iconImageRepresentation = smallestImageRepresentation(fileReference.media.previewRepresentations) {
-                            updateImageSignal = chatWebpageSnippetFile(account: context.account, mediaReference: fileReference.abstract, representation: iconImageRepresentation)
+                            updateImageSignal = chatWebpageSnippetFile(account: context.account, userLocation: .peer(message.id.peerId), mediaReference: fileReference.abstract, representation: iconImageRepresentation)
                         }
                     }
                 } else {
                     updateImageSignal = .single({ _ in return nil })
                 }
             }
-            let (titleLayout, titleApply) = makeTitleLayout(CGSize(width: width - textLineInset - contentLeftInset - rightInset - textRightInset, height: CGFloat.greatestFiniteMagnitude), titleStrings)
+            let (titleLayout, titleApply) = makeTitleLayout(CGSize(width: width - textLineInset - contentLeftInset - rightInset - textRightInset, height: CGFloat.greatestFiniteMagnitude), .zero, titleStrings)
             
             let (textString, _, isText) = descriptionStringForMessage(contentSettings: context.currentContentSettings.with { $0 }, message: EngineMessage(message), strings: strings, nameDisplayOrder: nameDisplayOrder, dateTimeFormat: dateTimeFormat, accountPeerId: accountPeerId)
             
             let messageText: NSAttributedString
             let textFont = Font.regular(15.0)
-            if isText {
-                let entities = (message.textEntitiesAttribute?.entities ?? []).filter { entity in
+            if let giveaway {
+                let dateString = stringForDateWithoutYear(date: Date(timeIntervalSince1970: TimeInterval(giveaway.untilDate)), timeZone: .current, strings: strings)
+                let currentTime = Int32(CFAbsoluteTimeGetCurrent() + kCFAbsoluteTimeIntervalSince1970)
+                let isFinished = currentTime >= giveaway.untilDate
+                let text: String
+                if isFinished {
+                    let winnersString = strings.Conversation_PinnedGiveaway_Finished_Winners(giveaway.quantity)
+                    text = strings.Conversation_PinnedGiveaway_Finished(winnersString, dateString).string
+                } else {
+                    let winnersString = strings.Conversation_PinnedGiveaway_Ongoing_Winners(giveaway.quantity)
+                    text = strings.Conversation_PinnedGiveaway_Ongoing(winnersString, dateString).string
+                }
+                messageText = NSAttributedString(string: text, font: textFont, textColor: theme.chat.inputPanel.primaryTextColor)
+            } else if isText {
+                var text = message.text
+                var messageEntities = message.textEntitiesAttribute?.entities ?? []
+                
+                if let translateToLanguage = translateToLanguage, !text.isEmpty {
+                    for attribute in message.attributes {
+                        if let attribute = attribute as? TranslationMessageAttribute, !attribute.text.isEmpty, attribute.toLang == translateToLanguage {
+                            text = attribute.text
+                            messageEntities = attribute.entities
+                            break
+                        }
+                    }
+                }
+                
+                let entities = messageEntities.filter { entity in
                     switch entity.type {
                     case .Spoiler, .CustomEmoji:
                         return true
@@ -660,9 +761,9 @@ final class ChatPinnedMessageTitlePanelNode: ChatTitleAccessoryPanelNode {
                 }
                 let textColor = theme.chat.inputPanel.primaryTextColor
                 if entities.count > 0 {
-                    messageText = stringWithAppliedEntities(trimToLineCount(message.text, lineCount: 1), entities: entities, baseColor: textColor, linkColor: textColor, baseFont: textFont, linkFont: textFont, boldFont: textFont, italicFont: textFont, boldItalicFont: textFont, fixedFont: textFont, blockQuoteFont: textFont, underlineLinks: false, message: message)
+                    messageText = stringWithAppliedEntities(trimToLineCount(text, lineCount: 1), entities: entities, baseColor: textColor, linkColor: textColor, baseFont: textFont, linkFont: textFont, boldFont: textFont, italicFont: textFont, boldItalicFont: textFont, fixedFont: textFont, blockQuoteFont: textFont, underlineLinks: false, message: message)
                 } else {
-                    messageText = NSAttributedString(string: foldLineBreaks(textString.string), font: textFont, textColor: textColor)
+                    messageText = NSAttributedString(string: foldLineBreaks(text), font: textFont, textColor: textColor)
                 }
             } else {
                 messageText = NSAttributedString(string: foldLineBreaks(textString.string), font: textFont, textColor: message.media.isEmpty || message.media.first is TelegramMediaWebpage ? theme.chat.inputPanel.primaryTextColor : theme.chat.inputPanel.secondaryTextColor)
@@ -722,7 +823,7 @@ final class ChatPinnedMessageTitlePanelNode: ChatTitleAccessoryPanelNode {
                         if let current = strongSelf.dustNode {
                             dustNode = current
                         } else {
-                            dustNode = InvisibleInkDustNode(textNode: spoilerTextNode.textNode)
+                            dustNode = InvisibleInkDustNode(textNode: spoilerTextNode.textNode, enableAnimations: strongSelf.context.sharedContext.energyUsageSettings.fullTranslucency)
                             strongSelf.dustNode = dustNode
                             strongSelf.contentTextContainer.insertSubnode(dustNode, aboveSubnode: spoilerTextNode.textNode)
                         }
@@ -774,7 +875,7 @@ final class ChatPinnedMessageTitlePanelNode: ChatTitleAccessoryPanelNode {
                         strongSelf.imageNode.setSignal(updateImageSignal)
                     }
                     if let updatedFetchMediaSignal = updatedFetchMediaSignal {
-                        strongSelf.fetchDisposable.set(updatedFetchMediaSignal.start())
+                        strongSelf.fetchDisposable.set(updatedFetchMediaSignal.startStrict())
                     }
                 }
             }
@@ -812,7 +913,11 @@ final class ChatPinnedMessageTitlePanelNode: ChatTitleAccessoryPanelNode {
                     case .text:
                         controllerInteraction.sendMessage(button.title)
                     case let .url(url):
-                        controllerInteraction.openUrl(url, true, nil, nil)
+                        var isConcealed = true
+                        if url.hasPrefix("tg://") {
+                            isConcealed = false
+                        }
+                        controllerInteraction.openUrl(ChatControllerInteraction.OpenUrl(url: url, concealed: isConcealed, progress: Promise()))
                     case .requestMap:
                         controllerInteraction.shareCurrentLocation()
                     case .requestPhone:
@@ -821,7 +926,7 @@ final class ChatPinnedMessageTitlePanelNode: ChatTitleAccessoryPanelNode {
                         controllerInteraction.requestMessageActionCallback(message.id, nil, true, false)
                     case let .callback(requiresPassword, data):
                         controllerInteraction.requestMessageActionCallback(message.id, data, false, requiresPassword)
-                    case let .switchInline(samePeer, query):
+                    case let .switchInline(samePeer, query, peerTypes):
                         var botPeer: Peer?
                         
                         var found = false
@@ -842,23 +947,27 @@ final class ChatPinnedMessageTitlePanelNode: ChatTitleAccessoryPanelNode {
                             peerId = message.id.peerId
                         }
                         if let botPeer = botPeer, let addressName = botPeer.addressName {
-                            controllerInteraction.activateSwitchInline(peerId, "@\(addressName) \(query)")
+                            controllerInteraction.activateSwitchInline(peerId, "@\(addressName) \(query)", peerTypes)
                         }
                     case .payment:
-                        controllerInteraction.openCheckoutOrReceipt(message.id)
+                        controllerInteraction.openCheckoutOrReceipt(message.id, nil)
                     case let .urlAuth(url, buttonId):
                         controllerInteraction.requestMessageActionUrlAuth(url, .message(id: message.id, buttonId: buttonId))
                     case .setupPoll:
                         break
                     case let .openUserProfile(peerId):
                         let _ = (self.context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: peerId))
-                        |> deliverOnMainQueue).start(next: { peer in
+                        |> deliverOnMainQueue).startStandalone(next: { peer in
                             if let peer = peer {
-                                controllerInteraction.openPeer(peer, .info, nil, false)
+                                controllerInteraction.openPeer(peer, .info(nil), nil, .default)
                             }
                         })
                     case let .openWebView(url, simple):
-                        controllerInteraction.openWebView(button.title, url, simple, false)
+                        controllerInteraction.openWebView(button.title, url, simple, .generic)
+                    case .requestPeer:
+                        break
+                    case let .copyText(payload):
+                        controllerInteraction.copyText(payload)
                     }
                     
                     break

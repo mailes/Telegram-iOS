@@ -7,30 +7,44 @@ import UniversalMediaPlayer
 import SwiftSignalKit
 
 public final class AudioWaveformComponent: Component {
+    public enum Style {
+        case bottom
+        case middle
+    }
+    
     public let backgroundColor: UIColor
     public let foregroundColor: UIColor
     public let shimmerColor: UIColor?
+    public let style: Style
     public let samples: Data
     public let peak: Int32
     public let status: Signal<MediaPlayerStatus, NoError>
-    public let seek: (Double) -> Void
+    public let isViewOnceMessage: Bool
+    public let seek: ((Double) -> Void)?
+    public let updateIsSeeking: ((Bool) -> Void)?
     
     public init(
         backgroundColor: UIColor,
         foregroundColor: UIColor,
         shimmerColor: UIColor?,
+        style: Style,
         samples: Data,
         peak: Int32,
         status: Signal<MediaPlayerStatus, NoError>,
-        seek: @escaping (Double) -> Void
+        isViewOnceMessage: Bool,
+        seek: ((Double) -> Void)?,
+        updateIsSeeking: ((Bool) -> Void)?
     ) {
         self.backgroundColor = backgroundColor
         self.foregroundColor = foregroundColor
         self.shimmerColor = shimmerColor
+        self.style = style
         self.samples = samples
         self.peak = peak
         self.status = status
+        self.isViewOnceMessage = isViewOnceMessage
         self.seek = seek
+        self.updateIsSeeking = updateIsSeeking
     }
     
     public static func ==(lhs: AudioWaveformComponent, rhs: AudioWaveformComponent) -> Bool {
@@ -43,10 +57,16 @@ public final class AudioWaveformComponent: Component {
         if lhs.shimmerColor != rhs.shimmerColor {
             return false
         }
+        if lhs.style != rhs.style {
+            return false
+        }
         if lhs.samples != rhs.samples {
             return false
         }
         if lhs.peak != rhs.peak {
+            return false
+        }
+        if lhs.isViewOnceMessage != rhs.isViewOnceMessage {
             return false
         }
         return true
@@ -56,6 +76,9 @@ public final class AudioWaveformComponent: Component {
         private struct ShimmerParams: Equatable {
             var backgroundColor: UIColor
             var foregroundColor: UIColor
+        }
+        
+        public final class CloneLayer: SimpleLayer {
         }
         
         private final class LayerImpl: SimpleLayer {
@@ -68,7 +91,7 @@ public final class AudioWaveformComponent: Component {
                         if self.shimmerParams != nil {
                             if self.shimmerNode == nil {
                                 let shimmerNode = ShimmerEffectNode()
-                                shimmerNode.isLayerBacked = true
+                                shimmerNode.isUserInteractionEnabled = false
                                 self.shimmerNode = shimmerNode
                                 self.addSublayer(shimmerNode.layer)
                                 
@@ -144,6 +167,22 @@ public final class AudioWaveformComponent: Component {
                     }
                 }
             }
+            
+            weak var cloneLayer: CloneLayer? {
+                didSet {
+                    if let cloneLayer = self.cloneLayer {
+                        cloneLayer.contents = self.contents
+                    }
+                }
+            }
+            
+            override public var contents: Any? {
+                didSet {
+                    if let cloneLayer = self.cloneLayer {
+                        cloneLayer.contents = self.contents
+                    }
+                }
+            }
         }
         
         override public static var layerClass: AnyClass {
@@ -170,6 +209,10 @@ public final class AudioWaveformComponent: Component {
         private var isAwaitingScrubbingApplication: Bool = false
         private var statusDisposable: Disposable?
         private var playbackStatusAnimator: ConstantDisplayLinkAnimator?
+        
+        private var sparksView: SparksView?
+        private var progress: CGFloat = 0.0
+        private var lastHeight: CGFloat = 0.0
         
         private var revealProgress: CGFloat = 1.0
         private var animator: DisplayLinkAnimator?
@@ -199,7 +242,6 @@ public final class AudioWaveformComponent: Component {
             let panRecognizer = UIPanGestureRecognizer(target: self, action: #selector(self.panGesture(_:)))
             panRecognizer.delegate = self
             self.addGestureRecognizer(panRecognizer)
-            panRecognizer.isEnabled = false
             self.panRecognizer = panRecognizer
         }
         
@@ -209,6 +251,12 @@ public final class AudioWaveformComponent: Component {
         
         deinit {
             self.statusDisposable?.dispose()
+        }
+        
+        public var cloneLayer: CloneLayer? {
+            didSet {
+                (self.layer as! LayerImpl).cloneLayer = self.cloneLayer
+            }
         }
         
         @objc private func panGesture(_ recognizer: UIPanGestureRecognizer) {
@@ -261,6 +309,7 @@ public final class AudioWaveformComponent: Component {
             if let statusValue = self.playbackStatus, statusValue.duration > 0.0 {
                 self.scrubbingBeginTimestamp = statusValue.timestamp
                 self.scrubbingTimestampValue = statusValue.timestamp
+                self.component?.updateIsSeeking?(true)
                 self.setNeedsDisplay()
             }
         }
@@ -280,7 +329,8 @@ public final class AudioWaveformComponent: Component {
             })
             
             if let scrubbingTimestampValue = scrubbingTimestampValue, apply {
-                self.component?.seek(scrubbingTimestampValue)
+                self.component?.seek?(scrubbingTimestampValue)
+                self.component?.updateIsSeeking?(false)
             }
         }
         
@@ -314,7 +364,7 @@ public final class AudioWaveformComponent: Component {
             }
         }
         
-        func update(component: AudioWaveformComponent, availableSize: CGSize, transition: Transition) -> CGSize {
+        func update(component: AudioWaveformComponent, availableSize: CGSize, transition: ComponentTransition) -> CGSize {
             let size = CGSize(width: availableSize.width, height: availableSize.height)
             
             if self.validSize != size || self.component != component {
@@ -351,6 +401,21 @@ public final class AudioWaveformComponent: Component {
                 })
             }
             
+            if component.isViewOnceMessage {
+                let sparksView: SparksView
+                if let current = self.sparksView {
+                    sparksView = current
+                } else {
+                    sparksView = SparksView()
+                    self.addSubview(sparksView)
+                    self.sparksView = sparksView
+                }
+                sparksView.frame = CGRect(origin: .zero, size: size).insetBy(dx: -10.0, dy: -15.0)
+            } else if let sparksView = self.sparksView {
+                self.sparksView = nil
+                sparksView.removeFromSuperview()
+            }
+            
             return size
         }
         
@@ -368,16 +433,29 @@ public final class AudioWaveformComponent: Component {
             if needsAnimation != (self.playbackStatusAnimator != nil) {
                 if needsAnimation {
                     self.playbackStatusAnimator = ConstantDisplayLinkAnimator(update: { [weak self] in
+                        if let self, let component = self.component, let sparksView = self.sparksView {
+                            sparksView.update(position: CGPoint(x: 10.0 + (sparksView.bounds.width - 20.0) * self.progress, y: sparksView.bounds.height / 2.0 + 8.0), sampleHeight: self.lastHeight, color: component.foregroundColor)
+                        }
                         self?.setNeedsDisplay()
                     })
                     self.playbackStatusAnimator?.isPaused = false
+                    
+                    if let sparksView = self.sparksView {
+                        sparksView.alpha = 1.0
+                        sparksView.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.2)
+                    }
                 } else {
                     self.playbackStatusAnimator?.invalidate()
                     self.playbackStatusAnimator = nil
+                    
+                    if let sparksView = self.sparksView {
+                        sparksView.alpha = 0.0
+                        sparksView.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.2)
+                    }
                 }
             }
         }
-        
+    
         override public func draw(_ rect: CGRect) {
             guard let component = self.component else {
                 return
@@ -405,7 +483,7 @@ public final class AudioWaveformComponent: Component {
                 timestampAndDuration = nil
             }
             
-            let playbackProgress: CGFloat
+            var playbackProgress: CGFloat
             if let (timestamp, duration) = timestampAndDuration {
                 if let scrubbingTimestampValue = self.scrubbingTimestampValue {
                     var progress = CGFloat(scrubbingTimestampValue / duration)
@@ -434,6 +512,10 @@ public final class AudioWaveformComponent: Component {
             } else {
                 playbackProgress = 0.0
             }
+            if component.isViewOnceMessage {
+                playbackProgress = 1.0 - playbackProgress
+            }
+            self.progress = playbackProgress
             
             let sampleWidth: CGFloat = 2.0
             let halfSampleWidth: CGFloat = 1.0
@@ -493,6 +575,7 @@ public final class AudioWaveformComponent: Component {
                 
                 let commonRevealFraction = listViewAnimationCurveSystem(self.revealProgress)
                 
+                var lastHeight: CGFloat = 0.0
                 for i in 0 ..< numSamples {
                     let offset = CGFloat(i) * (sampleWidth + distance)
                     let peakSample = adjustedSamples[i]
@@ -515,6 +598,7 @@ public final class AudioWaveformComponent: Component {
                     let colorMixFraction: CGFloat
                     if startFraction < playbackProgress {
                         colorMixFraction = max(0.0, min(1.0, (playbackProgress - startFraction) / (nextStartFraction - startFraction)))
+                        lastHeight = sampleHeight
                     } else {
                         colorMixFraction = 0.0
                     }
@@ -523,16 +607,22 @@ public final class AudioWaveformComponent: Component {
                     diff = sampleWidth * 1.5
                     
                     let gravityMultiplierY: CGFloat
-                    gravityMultiplierY = 1.0
-                    
-                    /*switch parameters.gravity ?? .bottom {
+                    switch component.style {
                     case .bottom:
-                        return 1
-                    case .center:
-                        return 0.5
-                    }*/
+                        gravityMultiplierY = 1.0
+                    case .middle:
+                        gravityMultiplierY = 0.5
+                    }
                     
-                    context.setFillColor(component.backgroundColor.mixedWith(component.foregroundColor, alpha: colorMixFraction).cgColor)
+                    if component.backgroundColor.alpha > 0.0 {
+                        var backgroundColor = component.backgroundColor
+                        if component.isViewOnceMessage {
+                            backgroundColor = component.foregroundColor.withMultipliedAlpha(0.0)
+                        }
+                        context.setFillColor(backgroundColor.mixedWith(component.foregroundColor, alpha: colorMixFraction).cgColor)
+                    } else {
+                        context.setFillColor(component.foregroundColor.cgColor)
+                    }
                     context.setBlendMode(.copy)
                     
                     let adjustedSampleHeight = sampleHeight - diff
@@ -550,6 +640,8 @@ public final class AudioWaveformComponent: Component {
                         context.fill(adjustedRect)
                     }
                 }
+                
+                self.lastHeight = lastHeight
             }
         }
     }
@@ -558,7 +650,109 @@ public final class AudioWaveformComponent: Component {
         return View(frame: CGRect())
     }
     
-    public func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: Transition) -> CGSize {
+    public func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: ComponentTransition) -> CGSize {
         return view.update(component: self, availableSize: availableSize, transition: transition)
+    }
+}
+
+private struct ContentParticle {
+    var position: CGPoint
+    var direction: CGPoint
+    var velocity: CGFloat
+    var alpha: CGFloat
+    var lifetime: Double
+    var beginTime: Double
+    
+    init(position: CGPoint, direction: CGPoint, velocity: CGFloat, alpha: CGFloat, lifetime: Double, beginTime: Double) {
+        self.position = position
+        self.direction = direction
+        self.velocity = velocity
+        self.alpha = alpha
+        self.lifetime = lifetime
+        self.beginTime = beginTime
+    }
+}
+
+private class SparksView: UIView {
+    private var particles: [ContentParticle] = []
+    private var color: UIColor = .black
+    
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        
+        self.backgroundColor = nil
+        self.isOpaque = false
+    }
+    
+    required public init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+    
+    private var presentationSampleHeight: CGFloat = 0.0
+    private var sampleHeight: CGFloat = 0.0
+    
+    func update(position: CGPoint, sampleHeight: CGFloat, color: UIColor) {
+        self.color = color
+    
+        self.sampleHeight = sampleHeight
+        self.presentationSampleHeight = self.presentationSampleHeight * 0.9 + self.sampleHeight * 0.1
+        
+        let v = CGPoint(x: 1.0, y: 0.0)
+        let c = CGPoint(x: position.x - 4.0, y: position.y + 1.0 - self.presentationSampleHeight * CGFloat(arc4random_uniform(100)) / 100.0)
+
+        let timestamp = CACurrentMediaTime()
+        
+        let dt: CGFloat = 1.0 / 60.0
+        var removeIndices: [Int] = []
+        for i in 0 ..< self.particles.count {
+            let currentTime = timestamp - self.particles[i].beginTime
+            if currentTime > self.particles[i].lifetime {
+                removeIndices.append(i)
+            } else {
+                let input: CGFloat = CGFloat(currentTime / self.particles[i].lifetime)
+                let decelerated: CGFloat = (1.0 - (1.0 - input) * (1.0 - input))
+                self.particles[i].alpha = 1.0 - decelerated
+                
+                var p = self.particles[i].position
+                let d = self.particles[i].direction
+                let v = self.particles[i].velocity
+                p = CGPoint(x: p.x + d.x * v * dt, y: p.y + d.y * v * dt)
+                self.particles[i].position = p
+            }
+        }
+        
+        for i in removeIndices.reversed() {
+            self.particles.remove(at: i)
+        }
+        
+        let newParticleCount = 3
+        for _ in 0 ..< newParticleCount {
+            let degrees: CGFloat = CGFloat(arc4random_uniform(100)) - 65.0
+            let angle: CGFloat = degrees * CGFloat.pi / 180.0
+            
+            let direction = CGPoint(x: v.x * cos(angle) - v.y * sin(angle), y: v.x * sin(angle) + v.y * cos(angle))
+            let velocity = (80.0 + (CGFloat(arc4random()) / CGFloat(UINT32_MAX)) * 4.0) * 0.5
+            
+            let lifetime = Double(0.65 + CGFloat(arc4random_uniform(100)) * 0.01)
+            
+            let particle = ContentParticle(position: c, direction: direction, velocity: velocity, alpha: 1.0, lifetime: lifetime, beginTime: timestamp)
+            self.particles.append(particle)
+        }
+        
+        self.setNeedsDisplay()
+    }
+    
+    override public func draw(_ rect: CGRect) {
+        guard let context = UIGraphicsGetCurrentContext() else {
+            return
+        }
+        
+        context.setFillColor(self.color.cgColor)
+        
+        for particle in self.particles {
+            let size: CGFloat = 1.4
+            context.setAlpha(particle.alpha * 1.0)
+            context.fillEllipse(in: CGRect(origin: CGPoint(x: particle.position.x - size / 2.0, y: particle.position.y - size / 2.0), size: CGSize(width: size, height: size)))
+        }
     }
 }

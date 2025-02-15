@@ -29,7 +29,7 @@ open class ListViewItemHeaderNode: ASDisplayNode {
     private var isFlashingOnScrolling = false
     weak var attachedToItemNode: ListViewItemNode?
     
-    var item: ListViewItemHeader?
+    public var item: ListViewItemHeader?
     
     func updateInternalStickLocationDistanceFactor(_ factor: CGFloat, animated: Bool) {
         self.internalStickLocationDistanceFactor = factor
@@ -43,6 +43,10 @@ open class ListViewItemHeaderNode: ASDisplayNode {
     }
     
     open func updateFlashingOnScrolling(_ isFlashingOnScrolling: Bool, animated: Bool) {
+    }
+    
+    open func getEffectiveAlpha() -> CGFloat {
+        return self.alpha
     }
     
     public init(layerBacked: Bool = false, dynamicBounce: Bool = false, isRotated: Bool = false, seeThrough: Bool = false) {
@@ -124,7 +128,7 @@ open class ListViewItemHeaderNode: ASDisplayNode {
     
     private var cachedLayout: (CGSize, CGFloat, CGFloat)?
     
-    func updateLayoutInternal(size: CGSize, leftInset: CGFloat, rightInset: CGFloat) {
+    public func updateLayoutInternal(size: CGSize, leftInset: CGFloat, rightInset: CGFloat) {
         var update = false
         if let cachedLayout = self.cachedLayout {
             if cachedLayout.0 != size || cachedLayout.1 != leftInset || cachedLayout.2 != rightInset {

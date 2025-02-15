@@ -9,6 +9,11 @@ CGSize aspectFillSize(CGSize size, CGSize bounds) {
     return CGSizeMake(floor(size.width * scale), floor(size.height * scale));
 }
 
+CGSize aspectFitSize(CGSize size, CGSize bounds) {
+    CGFloat scale = MIN(bounds.width / MAX(1.0, size.width), bounds.height / MAX(1.0, size.height));
+    return CGSizeMake(floor(size.width * scale), floor(size.height * scale));
+}
+
 @interface SvgXMLParsingDelegate : NSObject <NSXMLParserDelegate> {
     NSString *_elementName;
     NSString *_currentStyleString;
@@ -356,13 +361,25 @@ UIImage * _Nullable drawSvgImage(NSData * _Nonnull data, CGSize size, UIColor *b
     [_data appendBytes:&command length:sizeof(command)];
 }
 
+- (void)setFillColor:(uint32_t)color opacity:(CGFloat)opacity {
+    uint8_t command = 11;
+    [_data appendBytes:&command length:sizeof(command)];
+    
+    color = ((uint32_t)(opacity * 255.0) << 24) | color;
+    [_data appendBytes:&color length:sizeof(color)];
+}
+
 @end
 
-UIImage * _Nullable renderPreparedImage(NSData * _Nonnull data, CGSize size, UIColor *backgroundColor, CGFloat scale) {
+UIColor *colorWithBGRA(uint32_t bgra)
+{
+    return [[UIColor alloc] initWithRed:(((bgra) & 0xff) / 255.0f) green:(((bgra >> 8) & 0xff) / 255.0f) blue:(((bgra >> 16) & 0xff) / 255.0f) alpha:(((bgra >> 24) & 0xff) / 255.0f)];
+}
+
+UIImage * _Nullable renderPreparedImage(NSData * _Nonnull data, CGSize size, UIColor *backgroundColor, CGFloat scale, bool fit) {
     NSDate *startTime = [NSDate date];
     
     UIColor *foregroundColor = [UIColor whiteColor];
-    
     
     int32_t ptr = 0;
     int32_t width;
@@ -383,6 +400,15 @@ UIImage * _Nullable renderPreparedImage(NSData * _Nonnull data, CGSize size, UIC
     
     bool isTransparent = [backgroundColor isEqual:[UIColor clearColor]];
     
+    CGSize svgSize = CGSizeMake(width, height);
+    CGSize drawingSize;
+    if (fit) {
+        drawingSize = aspectFitSize(svgSize, size);
+        size = drawingSize;
+    } else {
+        drawingSize = aspectFillSize(svgSize, size);
+    }
+    
     UIGraphicsBeginImageContextWithOptions(size, !isTransparent, scale);
     CGContextRef context = UIGraphicsGetCurrentContext();
     if (isTransparent) {
@@ -392,8 +418,7 @@ UIImage * _Nullable renderPreparedImage(NSData * _Nonnull data, CGSize size, UIC
         CGContextFillRect(context, CGRectMake(0.0f, 0.0f, size.width, size.height));
     }
     
-    CGSize svgSize = CGSizeMake(width, height);
-    CGSize drawingSize = aspectFillSize(svgSize, size);
+    
     
     CGFloat renderScale = MAX(size.width / MAX(1.0, svgSize.width), size.height / MAX(1.0, svgSize.height));
     
@@ -531,7 +556,15 @@ UIImage * _Nullable renderPreparedImage(NSData * _Nonnull data, CGSize size, UIC
                 CGContextStrokePath(context);
             }
                 break;
+            case 11:
+            {
+                uint32_t bgra;
+                [data getBytes:&bgra range:NSMakeRange(ptr, sizeof(bgra))];
+                ptr += sizeof(bgra);
                 
+                CGContextSetFillColorWithColor(context, colorWithBGRA(bgra).CGColor);
+                CGContextStrokePath(context);
+            }
             default:
                 break;
         }
@@ -546,7 +579,7 @@ UIImage * _Nullable renderPreparedImage(NSData * _Nonnull data, CGSize size, UIC
     return resultImage;
 }
 
-NSData * _Nullable prepareSvgImage(NSData * _Nonnull data) {
+NSData * _Nullable prepareSvgImage(NSData * _Nonnull data, bool template) {
     NSDate *startTime = [NSDate date];
     
     NSXMLParser *parser = [[NSXMLParser alloc] initWithData:data];
@@ -587,8 +620,12 @@ NSData * _Nullable prepareSvgImage(NSData * _Nonnull data) {
         }
         
         if (shape->fill.type != NSVG_PAINT_NONE) {
-            [context setFillColorWithOpacity:shape->opacity];
-
+            if (template) {
+                [context setFillColorWithOpacity:shape->opacity];
+            } else {
+                [context setFillColor:shape->fill.color opacity:shape->opacity];
+            }
+            
             bool isFirst = true;
             bool hasStartPoint = false;
             CGPoint startPoint;

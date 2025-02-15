@@ -122,8 +122,8 @@ final class StickerPackEmojisItemNode: GridItemNode {
     
     private var boundsChangeTrackerLayer = SimpleLayer()
     
-    private var visibleItemLayers: [EmojiPagerContentComponent.View.ItemLayer.Key: EmojiPagerContentComponent.View.ItemLayer] = [:]
-    private var visibleItemPlaceholderViews: [EmojiPagerContentComponent.View.ItemLayer.Key: EmojiPagerContentComponent.View.ItemPlaceholderView] = [:]
+    private var visibleItemLayers: [EmojiKeyboardItemLayer.Key: EmojiKeyboardItemLayer] = [:]
+    private var visibleItemPlaceholderViews: [EmojiKeyboardItemLayer.Key: EmojiPagerContentComponent.View.ItemPlaceholderView] = [:]
     
     private let containerNode: ASDisplayNode
     private let titleNode: ImmediateTextNode
@@ -191,33 +191,19 @@ final class StickerPackEmojisItemNode: GridItemNode {
             self?.standaloneShimmerEffect?.updateLayer()
         }
         self.boundsChangeTrackerLayer =  boundsChangeTrackerLayer
-        
-        let gestureRecognizer = TapLongTapOrDoubleTapGestureRecognizer(target: self, action: #selector(self.tapGesture(_:)))
-        gestureRecognizer.longTap = { [weak self] point, _ in
-            guard let strongSelf = self else {
-                return
-            }
-
-            if let (item, itemFrame) = strongSelf.item(atPoint: point), let file = item.itemFile {
-                var text = "."
-                var emojiAttribute: ChatTextInputTextCustomEmojiAttribute?
-                loop: for attribute in file.attributes {
-                    switch attribute {
-                    case let .CustomEmoji(_, displayText, _):
-                        text = displayText
-                        emojiAttribute = ChatTextInputTextCustomEmojiAttribute(interactivelySelectedFromPackId: nil, fileId: file.fileId.id, file: file)
-                        break loop
-                    default:
-                        break
-                    }
-                }
-                
-                if let emojiAttribute = emojiAttribute {
-                    strongSelf.item?.interaction.emojiLongPressed(text, emojiAttribute, strongSelf.containerNode, itemFrame)
-                }
+    }
+    
+    func targetItem(at point: CGPoint) -> (TelegramMediaFile, CALayer)? {
+        if let (item, _) = self.item(atPoint: point), let file = item.itemFile {
+            let itemId = EmojiKeyboardItemLayer.Key(
+                groupId: 0,
+                itemId: .animation(.file(file.fileId))
+            )
+            if let itemLayer = self.visibleItemLayers[itemId] {
+                return (file, itemLayer)
             }
         }
-        self.containerNode.view.addGestureRecognizer(gestureRecognizer)
+        return nil
     }
     
     @objc private func tapGesture(_ recognizer: TapLongTapOrDoubleTapGestureRecognizer) {
@@ -229,7 +215,7 @@ final class StickerPackEmojisItemNode: GridItemNode {
                     var emojiAttribute: ChatTextInputTextCustomEmojiAttribute?
                     loop: for attribute in file.attributes {
                         switch attribute {
-                        case let .CustomEmoji(_, displayText, _):
+                        case let .CustomEmoji(_, _, displayText, _):
                             text = displayText
                             emojiAttribute = ChatTextInputTextCustomEmojiAttribute(interactivelySelectedFromPackId: nil, fileId: file.fileId.id, file: file)
                             break loop
@@ -251,7 +237,7 @@ final class StickerPackEmojisItemNode: GridItemNode {
     private func item(atPoint point: CGPoint, extendedHitRange: Bool = false) -> (EmojiPagerContentComponent.Item, CGRect)? {
         let localPoint = point
         
-        var closestItem: (key: EmojiPagerContentComponent.View.ItemLayer.Key, distance: CGFloat)?
+        var closestItem: (key: EmojiKeyboardItemLayer.Key, distance: CGFloat)?
         
         for (key, itemLayer) in self.visibleItemLayers {
             if extendedHitRange {
@@ -311,9 +297,24 @@ final class StickerPackEmojisItemNode: GridItemNode {
         
         self.setNeedsLayout()
     }
+    
+    private var visibleRect: CGRect?
+    override func updateAbsoluteRect(_ absoluteRect: CGRect, within containerSize: CGSize) {
+        var y: CGFloat
+        if absoluteRect.minY > 0.0 {
+            y = 0.0
+        } else {
+            y = absoluteRect.minY * -1.0
+        }
+        var rect = CGRect(origin: CGPoint(x: 0.0, y: y), size: CGSize(width: containerSize.width, height: containerSize.height))
+        rect.size.height += 96.0
+        self.visibleRect = rect
+        
+        self.updateVisibleItems(attemptSynchronousLoads: false, transition: .immediate)
+    }
 
     func updateVisibleItems(attemptSynchronousLoads: Bool, transition: ContainedViewLayoutTransition) {
-        guard let item = self.item, !self.size.width.isZero else {
+        guard let item = self.item, !self.size.width.isZero, let visibleRect = self.visibleRect else {
             return
         }
                 
@@ -322,7 +323,7 @@ final class StickerPackEmojisItemNode: GridItemNode {
         let animationRenderer = item.animationRenderer
         let theme = item.theme
         let items = item.items
-        var validIds = Set<EmojiPagerContentComponent.View.ItemLayer.Key>()
+        var validIds = Set<EmojiKeyboardItemLayer.Key>()
         
         let itemLayout: ItemLayout
         if let current = self.itemLayout, current.width == self.size.width && current.itemsCount == items.count {
@@ -335,35 +336,44 @@ final class StickerPackEmojisItemNode: GridItemNode {
         self.containerNode.frame = CGRect(origin: CGPoint(x: 0.0, y: item.title != nil ? 61.0 : 0.0), size: CGSize(width: itemLayout.width, height: itemLayout.height))
         
         for index in 0 ..< items.count {
+            var itemFrame = itemLayout.frame(itemIndex: index)
+            if !visibleRect.intersects(itemFrame) {
+                continue
+            }
             let item = items[index]
-            let itemId = EmojiPagerContentComponent.View.ItemLayer.Key(
+            let itemId = EmojiKeyboardItemLayer.Key(
                 groupId: 0,
                 itemId: .animation(.file(item.file.fileId))
             )
-            validIds.insert(itemId)
             
             let itemDimensions = item.file.dimensions?.cgSize ?? CGSize(width: 512.0, height: 512.0)
             let itemNativeFitSize = itemDimensions.fitted(CGSize(width: nativeItemSize, height: nativeItemSize))
             let itemVisibleFitSize = itemDimensions.fitted(CGSize(width: itemLayout.visibleItemSize, height: itemLayout.visibleItemSize))
             
+            validIds.insert(itemId)
+            
+            itemFrame.origin.x += floor((itemFrame.width - itemVisibleFitSize.width) / 2.0)
+            itemFrame.origin.y += floor((itemFrame.height - itemVisibleFitSize.height) / 2.0)
+            itemFrame.size = itemVisibleFitSize
+            
             var updateItemLayerPlaceholder = false
             var itemTransition = transition
-            let itemLayer: EmojiPagerContentComponent.View.ItemLayer
+            let itemLayer: EmojiKeyboardItemLayer
             if let current = self.visibleItemLayers[itemId] {
                 itemLayer = current
             } else {
                 updateItemLayerPlaceholder = true
                 itemTransition = .immediate
-                                
+                
                 let animationData = EntityKeyboardAnimationData(file: item.file)
-                itemLayer = EmojiPagerContentComponent.View.ItemLayer(
+                itemLayer = EmojiKeyboardItemLayer(
                     item: EmojiPagerContentComponent.Item(
                         animationData: animationData,
                         content: .animation(animationData),
                         itemFile: item.file,
                         subgroupId: nil,
                         icon: .none,
-                        accentTint: false
+                        tintMode: animationData.isTemplate ? .primary : .none
                     ),
                     context: context,
                     attemptSynchronousLoad: attemptSynchronousLoads,
@@ -384,16 +394,20 @@ final class StickerPackEmojisItemNode: GridItemNode {
                                 if let current = strongSelf.visibleItemPlaceholderViews[itemId] {
                                     placeholderView = current
                                 } else {
+                                    var placeholderContent: EmojiPagerContentComponent.View.ItemPlaceholderView.Content?
+                                    if let immediateThumbnailData = item.file.immediateThumbnailData {
+                                        placeholderContent = .thumbnail(immediateThumbnailData)
+                                    }
                                     placeholderView = EmojiPagerContentComponent.View.ItemPlaceholderView(
                                         context: context,
                                         dimensions: item.file.dimensions?.cgSize ?? CGSize(width: 512.0, height: 512.0),
-                                        immediateThumbnailData: item.file.immediateThumbnailData,
+                                        content: placeholderContent,
                                         shimmerView: nil,//strongSelf.shimmerHostView,
                                         color: theme.chat.inputPanel.primaryTextColor.withMultipliedAlpha(0.08),
                                         size: itemNativeFitSize
                                     )
                                     strongSelf.visibleItemPlaceholderViews[itemId] = placeholderView
-                                    strongSelf.view.insertSubview(placeholderView, at: 0)
+                                    strongSelf.containerNode.view.insertSubview(placeholderView, at: 0)
                                 }
                                 placeholderView.frame = itemLayer.frame
                                 placeholderView.update(size: placeholderView.bounds.size)
@@ -403,7 +417,7 @@ final class StickerPackEmojisItemNode: GridItemNode {
                         } else {
                             if let placeholderView = strongSelf.visibleItemPlaceholderViews[itemId] {
                                 strongSelf.visibleItemPlaceholderViews.removeValue(forKey: itemId)
-                                
+
                                 if duration > 0.0 {
                                     placeholderView.layer.opacity = 0.0
                                     placeholderView.layer.animateAlpha(from: 1.0, to: 0.0, duration: duration, completion: { [weak self, weak placeholderView] _ in
@@ -425,11 +439,16 @@ final class StickerPackEmojisItemNode: GridItemNode {
                 self.visibleItemLayers[itemId] = itemLayer
             }
             
-            var itemFrame = itemLayout.frame(itemIndex: index)
-            
-            itemFrame.origin.x += floor((itemFrame.width - itemVisibleFitSize.width) / 2.0)
-            itemFrame.origin.y += floor((itemFrame.height - itemVisibleFitSize.height) / 2.0)
-            itemFrame.size = itemVisibleFitSize
+            switch itemLayer.item.tintMode {
+            case .none:
+                break
+            case .accent:
+                itemLayer.layerTintColor = theme.list.itemAccentColor.cgColor
+            case .primary:
+                itemLayer.layerTintColor = theme.list.itemPrimaryTextColor.cgColor
+            case let .custom(color):
+                itemLayer.layerTintColor = color.cgColor
+            }
             
             let itemPosition = CGPoint(x: itemFrame.midX, y: itemFrame.midY)
             let itemBounds = CGRect(origin: CGPoint(), size: itemFrame.size)

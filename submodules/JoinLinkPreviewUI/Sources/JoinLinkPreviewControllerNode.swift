@@ -34,7 +34,7 @@ struct JoinLinkPreviewData {
     let isJoined: Bool
 }
 
-final class JoinLinkPreviewControllerNode: ViewControllerTracingNode, UIScrollViewDelegate {
+final class JoinLinkPreviewControllerNode: ViewControllerTracingNode, ASScrollViewDelegate {
     private let context: AccountContext
     private var presentationData: PresentationData
     
@@ -110,7 +110,7 @@ final class JoinLinkPreviewControllerNode: ViewControllerTracingNode, UIScrollVi
         self.dimNode.view.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(self.dimTapGesture(_:))))
         self.addSubnode(self.dimNode)
         
-        self.wrappingScrollNode.view.delegate = self
+        self.wrappingScrollNode.view.delegate = self.wrappedScrollViewDelegate
         self.addSubnode(self.wrappingScrollNode)
                 
         self.cancelButton.addTarget(self, action: #selector(self.cancelButtonPressed), forControlEvents: .touchUpInside)
@@ -236,7 +236,7 @@ final class JoinLinkPreviewControllerNode: ViewControllerTracingNode, UIScrollVi
         
         if let contentNode = self.contentNode {
             transition.updateFrame(node: contentNode, frame: CGRect(origin: CGPoint(x: floor((contentContainerFrame.size.width - contentFrame.size.width) / 2.0), y: 0.0), size: gridSize))
-            contentNode.updateLayout(size: gridSize, isLandscape: layout.size.width > layout.size.height, bottomInset: 0.0, transition: transition)
+            contentNode.updateLayout(size: gridSize, isLandscape: layout.size.width > layout.size.height && layout.metrics.widthClass == .compact, bottomInset: 0.0, transition: transition)
         }
     }
     
@@ -392,16 +392,16 @@ final class JoinLinkPreviewControllerNode: ViewControllerTracingNode, UIScrollVi
         self.setNeedsLayout()
     }
     
-    func setInvitePeer(image: TelegramMediaImageRepresentation?, title: String, memberCount: Int32, members: [EnginePeer], data: JoinLinkPreviewData) {
-        let contentNode = JoinLinkPreviewPeerContentNode(context: self.context, theme: self.presentationData.theme, strings: self.presentationData.strings, content: .invite(isGroup: data.isGroup, image: image, title: title, memberCount: memberCount, members: members))
+    func setInvitePeer(image: TelegramMediaImageRepresentation?, title: String, about: String?, memberCount: Int32, members: [EnginePeer], data: JoinLinkPreviewData) {
+        let contentNode = JoinLinkPreviewPeerContentNode(context: self.context, theme: self.presentationData.theme, strings: self.presentationData.strings, content: .invite(isGroup: data.isGroup, image: image, title: title, about: about, memberCount: memberCount, members: members))
         contentNode.join = { [weak self] in
             self?.join?()
         }
         self.transitionToContentNode(contentNode)
     }
     
-    func setRequestPeer(image: TelegramMediaImageRepresentation?, title: String, about: String?, memberCount: Int32, isGroup: Bool) {
-        let contentNode = JoinLinkPreviewPeerContentNode(context: self.context, theme: self.presentationData.theme, strings: self.presentationData.strings, content: .request(isGroup: isGroup, image: image, title: title, about: about, memberCount: memberCount))
+    func setRequestPeer(image: TelegramMediaImageRepresentation?, title: String, about: String?, memberCount: Int32, isGroup: Bool, isVerified: Bool, isFake: Bool, isScam: Bool) {
+        let contentNode = JoinLinkPreviewPeerContentNode(context: self.context, theme: self.presentationData.theme, strings: self.presentationData.strings, content: .request(isGroup: isGroup, image: image, title: title, about: about, memberCount: memberCount, isVerified: isVerified, isFake: isFake, isScam: isScam))
         contentNode.join = { [weak self] in
             self?.join?()
         }

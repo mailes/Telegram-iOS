@@ -2,6 +2,7 @@ import Postbox
 
 public final class EngineMessage: Equatable {
     public typealias Id = MessageId
+    public typealias StableId = UInt32
     public typealias Index = MessageIndex
     public typealias Tags = MessageTags
     public typealias Attribute = MessageAttribute
@@ -10,6 +11,12 @@ public final class EngineMessage: Equatable {
     public typealias GlobalTags = GlobalMessageTags
     public typealias LocalTags = LocalMessageTags
     public typealias ForwardInfo = MessageForwardInfo
+    public typealias CustomTag = MemoryBuffer
+    
+    public enum InputTag: Hashable {
+        case tag(Tags)
+        case custom(CustomTag)
+    }
     
     private let impl: Message
     
@@ -81,6 +88,9 @@ public final class EngineMessage: Equatable {
     public var associatedThreadInfo: Message.AssociatedThreadInfo? {
         return self.impl.associatedThreadInfo
     }
+    public var associatedStories: [StoryId: CodableEntry] {
+        return self.impl.associatedStories
+    }
     
     public var index: MessageIndex {
         return self.impl.index
@@ -99,6 +109,7 @@ public final class EngineMessage: Equatable {
         tags: EngineMessage.Tags,
         globalTags: EngineMessage.GlobalTags,
         localTags: EngineMessage.LocalTags,
+        customTags: [EngineMessage.CustomTag],
         forwardInfo: EngineMessage.ForwardInfo?,
         author: EnginePeer?,
         text: String,
@@ -108,7 +119,8 @@ public final class EngineMessage: Equatable {
         associatedMessages: [EngineMessage.Id: EngineMessage],
         associatedMessageIds: [EngineMessage.Id],
         associatedMedia: [MediaId: Media],
-        associatedThreadInfo: Message.AssociatedThreadInfo?
+        associatedThreadInfo: Message.AssociatedThreadInfo?,
+        associatedStories: [StoryId: CodableEntry]
     ) {
         var mappedPeers: [PeerId: Peer] = [:]
         for (id, peer) in peers {
@@ -133,6 +145,7 @@ public final class EngineMessage: Equatable {
             tags: tags,
             globalTags: globalTags,
             localTags: localTags,
+            customTags: customTags,
             forwardInfo: forwardInfo,
             author: author?._asPeer(),
             text: text,
@@ -142,7 +155,8 @@ public final class EngineMessage: Equatable {
             associatedMessages: SimpleDictionary(mappedAssociatedMessages),
             associatedMessageIds: associatedMessageIds,
             associatedMedia: associatedMedia,
-            associatedThreadInfo: associatedThreadInfo
+            associatedThreadInfo: associatedThreadInfo,
+            associatedStories: associatedStories
         )
     }
 
@@ -198,6 +212,12 @@ public final class EngineMessage: Equatable {
             return false
         }
         if lhs.associatedThreadInfo != rhs.associatedThreadInfo {
+            return false
+        }
+        if lhs.attributes.count != rhs.attributes.count {
+            return false
+        }
+        if lhs.stableVersion != rhs.stableVersion {
             return false
         }
         return true

@@ -50,7 +50,7 @@ public final class PlatformVideoContent: UniversalVideoContent {
         case file(FileMediaReference)
         case url(String)
         
-        var duration: Int32? {
+        var duration: Double? {
             switch self {
             case let .file(file):
                 return file.media.duration
@@ -70,22 +70,24 @@ public final class PlatformVideoContent: UniversalVideoContent {
     }
     
     public let id: AnyHashable
-    let nativeId: PlatformVideoContentId
+    public let nativeId: PlatformVideoContentId
+    let userLocation: MediaResourceUserLocation
     let content: Content
     public let dimensions: CGSize
-    public let duration: Int32
+    public let duration: Double
     let streamVideo: Bool
     let loopVideo: Bool
     let enableSound: Bool
     let baseRate: Double
     let fetchAutomatically: Bool
     
-    public init(id: PlatformVideoContentId, content: Content, streamVideo: Bool = false, loopVideo: Bool = false, enableSound: Bool = true, baseRate: Double = 1.0, fetchAutomatically: Bool = true) {
+    public init(id: PlatformVideoContentId, userLocation: MediaResourceUserLocation, content: Content, streamVideo: Bool = false, loopVideo: Bool = false, enableSound: Bool = true, baseRate: Double = 1.0, fetchAutomatically: Bool = true) {
         self.id = id
+        self.userLocation = userLocation
         self.nativeId = id
         self.content = content
         self.dimensions = self.content.dimensions?.cgSize ?? CGSize(width: 480, height: 320)
-        self.duration = self.content.duration ?? 0
+        self.duration = self.content.duration ?? 0.0
         self.streamVideo = streamVideo
         self.loopVideo = loopVideo
         self.enableSound = enableSound
@@ -93,8 +95,8 @@ public final class PlatformVideoContent: UniversalVideoContent {
         self.fetchAutomatically = fetchAutomatically
     }
     
-    public func makeContentNode(postbox: Postbox, audioSession: ManagedAudioSession) -> UniversalVideoContentNode & ASDisplayNode {
-        return PlatformVideoContentNode(postbox: postbox, audioSessionManager: audioSession, content: self.content, streamVideo: self.streamVideo, loopVideo: self.loopVideo, enableSound: self.enableSound, baseRate: self.baseRate, fetchAutomatically: self.fetchAutomatically)
+    public func makeContentNode(context: AccountContext, postbox: Postbox, audioSession: ManagedAudioSession) -> UniversalVideoContentNode & ASDisplayNode {
+        return PlatformVideoContentNode(postbox: postbox, audioSessionManager: audioSession, userLocation: self.userLocation, content: self.content, streamVideo: self.streamVideo, loopVideo: self.loopVideo, enableSound: self.enableSound, baseRate: self.baseRate, fetchAutomatically: self.fetchAutomatically)
     }
     
     public func isEqual(to other: UniversalVideoContent) -> Bool {
@@ -115,6 +117,7 @@ public final class PlatformVideoContent: UniversalVideoContent {
 
 private final class PlatformVideoContentNode: ASDisplayNode, UniversalVideoContentNode {
     private let postbox: Postbox
+    private let userLocation: MediaResourceUserLocation
     private let content: PlatformVideoContent.Content
     private let approximateDuration: Double
     private let intrinsicDimensions: CGSize
@@ -136,6 +139,10 @@ private final class PlatformVideoContentNode: ASDisplayNode, UniversalVideoConte
     private let _bufferingStatus = Promise<(RangeSet<Int64>, Int64)?>()
     var bufferingStatus: Signal<(RangeSet<Int64>, Int64)?, NoError> {
         return self._bufferingStatus.get()
+    }
+    
+    var isNativePictureInPictureActive: Signal<Bool, NoError> {
+        return .single(false)
     }
     
     private let _ready = Promise<Void>()
@@ -167,13 +174,14 @@ private final class PlatformVideoContentNode: ASDisplayNode, UniversalVideoConte
     private var dimensions: CGSize?
     private let dimensionsPromise = ValuePromise<CGSize>(CGSize())
     
-    private var validLayout: CGSize?
+    private var validLayout: (size: CGSize, actualSize: CGSize)?
     
-    init(postbox: Postbox, audioSessionManager: ManagedAudioSession, content: PlatformVideoContent.Content, streamVideo: Bool, loopVideo: Bool, enableSound: Bool, baseRate: Double, fetchAutomatically: Bool) {
+    init(postbox: Postbox, audioSessionManager: ManagedAudioSession, userLocation: MediaResourceUserLocation, content: PlatformVideoContent.Content, streamVideo: Bool, loopVideo: Bool, enableSound: Bool, baseRate: Double, fetchAutomatically: Bool) {
         self.postbox = postbox
         self.content = content
         self.approximateDuration = Double(content.duration ?? 1)
         self.audioSessionManager = audioSessionManager
+        self.userLocation = userLocation
         
         self.imageNode = TransformImageNode()
         
@@ -193,14 +201,14 @@ private final class PlatformVideoContentNode: ASDisplayNode, UniversalVideoConte
         
         switch content {
         case let .file(file):
-            self.imageNode.setSignal(internalMediaGridMessageVideo(postbox: postbox, videoReference: file) |> map { [weak self] getSize, getData in
+            self.imageNode.setSignal(internalMediaGridMessageVideo(postbox: postbox, userLocation: self.userLocation, videoReference: file) |> map { [weak self] getSize, getData in
                 Queue.mainQueue().async {
                     if let strongSelf = self, strongSelf.dimensions == nil {
                         if let dimensions = getSize() {
                             strongSelf.dimensions = dimensions
                             strongSelf.dimensionsPromise.set(dimensions)
-                            if let size = strongSelf.validLayout {
-                                strongSelf.updateLayout(size: size, transition: .immediate)
+                            if let validLayout = strongSelf.validLayout {
+                                strongSelf.updateLayout(size: validLayout.size, actualSize: validLayout.actualSize, transition: .immediate)
                             }
                         }
                     }
@@ -367,7 +375,7 @@ private final class PlatformVideoContentNode: ASDisplayNode, UniversalVideoConte
         }
     }
     
-    func updateLayout(size: CGSize, transition: ContainedViewLayoutTransition) {
+    func updateLayout(size: CGSize, actualSize: CGSize, transition: ContainedViewLayoutTransition) {
         transition.updatePosition(node: self.playerNode, position: CGPoint(x: size.width / 2.0, y: size.height / 2.0))
         transition.updateTransformScale(node: self.playerNode, scale: size.width / self.intrinsicDimensions.width)
         
@@ -384,7 +392,7 @@ private final class PlatformVideoContentNode: ASDisplayNode, UniversalVideoConte
             self._status.set(MediaPlayerStatus(generationTimestamp: 0.0, duration: Double(self.approximateDuration), dimensions: CGSize(), timestamp: 0.0, baseRate: 1.0, seekId: 0, status: .buffering(initial: true, whilePlaying: true, progress: 0.0, display: true), soundEnabled: true))
         }
         if !self.hasAudioSession {
-            self.audioSessionDisposable.set(self.audioSessionManager.push(audioSessionType: .play, activate: { [weak self] _ in
+            self.audioSessionDisposable.set(self.audioSessionManager.push(audioSessionType: .play(mixWithOthers: false), activate: { [weak self] _ in
                 self?.hasAudioSession = true
                 self?.player.play()
             }, deactivate: { [weak self] _ in
@@ -426,6 +434,12 @@ private final class PlatformVideoContentNode: ASDisplayNode, UniversalVideoConte
     func playOnceWithSound(playAndRecord: Bool, seek: MediaPlayerSeek, actionAtEnd: MediaPlayerPlayOnceWithSoundActionAtEnd) {
     }
     
+    func setSoundMuted(soundMuted: Bool) {
+    }
+    
+    func continueWithOverridingAmbientMode(isAmbient: Bool) {
+    }
+    
     func setForceAudioToSpeaker(_ forceAudioToSpeaker: Bool) {
     }
     
@@ -436,6 +450,17 @@ private final class PlatformVideoContentNode: ASDisplayNode, UniversalVideoConte
     }
     
     func setBaseRate(_ baseRate: Double) {
+    }
+    
+    func setVideoQuality(_ videoQuality: UniversalVideoContentVideoQuality) {
+    }
+    
+    func videoQualityState() -> (current: Int, preferred: UniversalVideoContentVideoQuality, available: [Int])? {
+        return nil
+    }
+    
+    func videoQualityStateSignal() -> Signal<(current: Int, preferred: UniversalVideoContentVideoQuality, available: [Int])?, NoError> {
+        return .single(nil)
     }
     
     func addPlaybackCompleted(_ f: @escaping () -> Void) -> Int {
@@ -453,5 +478,15 @@ private final class PlatformVideoContentNode: ASDisplayNode, UniversalVideoConte
     }
 
     func setCanPlaybackWithoutHierarchy(_ canPlaybackWithoutHierarchy: Bool) {
+    }
+    
+    func enterNativePictureInPicture() -> Bool {
+        return false
+    }
+    
+    func exitNativePictureInPicture() {
+    }
+    
+    func setNativePictureInPictureIsActive(_ value: Bool) {
     }
 }

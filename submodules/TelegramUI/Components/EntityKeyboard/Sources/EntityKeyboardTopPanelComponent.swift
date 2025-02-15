@@ -24,6 +24,7 @@ final class EntityKeyboardAnimationTopPanelComponent: Component {
     let animationCache: AnimationCache
     let animationRenderer: MultiAnimationRenderer
     let theme: PresentationTheme
+    let customTintColor: UIColor?
     let title: String
     let pressed: () -> Void
     
@@ -36,6 +37,7 @@ final class EntityKeyboardAnimationTopPanelComponent: Component {
         animationRenderer: MultiAnimationRenderer,
         theme: PresentationTheme,
         title: String,
+        customTintColor: UIColor? = nil,
         pressed: @escaping () -> Void
     ) {
         self.context = context
@@ -46,6 +48,7 @@ final class EntityKeyboardAnimationTopPanelComponent: Component {
         self.animationRenderer = animationRenderer
         self.theme = theme
         self.title = title
+        self.customTintColor = customTintColor
         self.pressed = pressed
     }
     
@@ -74,12 +77,15 @@ final class EntityKeyboardAnimationTopPanelComponent: Component {
         if lhs.title != rhs.title {
             return false
         }
+        if lhs.customTintColor != rhs.customTintColor {
+            return false
+        }
         
         return true
     }
     
     final class View: UIView {
-        var itemLayer: EmojiPagerContentComponent.View.ItemLayer?
+        var itemLayer: EmojiKeyboardItemLayer?
         var placeholderView: EmojiPagerContentComponent.View.ItemPlaceholderView?
         var component: EntityKeyboardAnimationTopPanelComponent?
         var titleView: ComponentView<Empty>?
@@ -100,7 +106,7 @@ final class EntityKeyboardAnimationTopPanelComponent: Component {
             }
         }
         
-        func update(component: EntityKeyboardAnimationTopPanelComponent, availableSize: CGSize, state: EmptyComponentState, environment: Environment<EnvironmentType>, transition: Transition) -> CGSize {
+        func update(component: EntityKeyboardAnimationTopPanelComponent, availableSize: CGSize, state: EmptyComponentState, environment: Environment<EnvironmentType>, transition: ComponentTransition) -> CGSize {
             self.component = component
             
             let itemEnvironment = environment[EntityKeyboardTopPanelItemEnvironment.self].value
@@ -109,14 +115,15 @@ final class EntityKeyboardAnimationTopPanelComponent: Component {
             let displaySize = dimensions.aspectFitted(CGSize(width: 44.0, height: 44.0))
             
             if self.itemLayer == nil {
-                let itemLayer = EmojiPagerContentComponent.View.ItemLayer(
+                let tintColor: EmojiPagerContentComponent.Item.TintMode = component.customTintColor.flatMap { .custom($0) } ?? .primary
+                let itemLayer = EmojiKeyboardItemLayer(
                     item: EmojiPagerContentComponent.Item(
                         animationData: component.item,
                         content: .animation(component.item),
                         itemFile: nil,
                         subgroupId: nil,
                         icon: .none,
-                        accentTint: false
+                        tintMode: component.item.isTemplate ? tintColor : .none
                     ),
                     context: component.context,
                     attemptSynchronousLoad: false,
@@ -150,7 +157,7 @@ final class EntityKeyboardAnimationTopPanelComponent: Component {
                 transition.setPosition(layer: itemLayer, position: CGPoint(x: iconFrame.midX, y: iconFrame.midY))
                 transition.setBounds(layer: itemLayer, bounds: CGRect(origin: CGPoint(), size: iconFrame.size))
                 
-                var badge: EmojiPagerContentComponent.View.ItemLayer.Badge?
+                var badge: EmojiKeyboardItemLayer.Badge?
                 if component.isPremiumLocked {
                     badge = .locked
                 } else if component.isFeatured {
@@ -158,7 +165,18 @@ final class EntityKeyboardAnimationTopPanelComponent: Component {
                 }
                 itemLayer.update(transition: transition, size: iconFrame.size, badge: badge, blurredBadgeColor: UIColor(white: 0.0, alpha: 0.1), blurredBadgeBackgroundColor: component.theme.list.plainBackgroundColor)
                 
-                itemLayer.isVisibleForAnimations = true
+                switch itemLayer.item.tintMode {
+                case .none:
+                    break
+                case .primary:
+                    itemLayer.layerTintColor = component.customTintColor?.cgColor ?? component.theme.list.itemPrimaryTextColor.cgColor
+                case .accent:
+                    itemLayer.layerTintColor = component.customTintColor?.cgColor ?? component.theme.list.itemAccentColor.cgColor
+                case let .custom(color):
+                    itemLayer.layerTintColor = component.customTintColor?.cgColor ?? color.cgColor
+                }
+                
+                itemLayer.isVisibleForAnimations = itemEnvironment.isContentInFocus && component.context.sharedContext.energyUsageSettings.loopEmoji
             }
             
             if itemEnvironment.isExpanded {
@@ -206,10 +224,14 @@ final class EntityKeyboardAnimationTopPanelComponent: Component {
         private func updateDisplayPlaceholder(displayPlaceholder: Bool, duration: Double) {
             if displayPlaceholder {
                 if self.placeholderView == nil, let component = self.component {
+                    var placeholderContent: EmojiPagerContentComponent.View.ItemPlaceholderView.Content?
+                    if let immediateThumbnailData = component.item.immediateThumbnailData {
+                        placeholderContent = .thumbnail(immediateThumbnailData)
+                    }
                     let placeholderView = EmojiPagerContentComponent.View.ItemPlaceholderView(
                         context: component.context,
                         dimensions: component.item.dimensions,
-                        immediateThumbnailData: component.item.immediateThumbnailData,
+                        content: placeholderContent,
                         shimmerView: nil,
                         color: component.theme.chat.inputPanel.primaryTextColor.withMultipliedAlpha(0.08),
                         size: CGSize(width: 28.0, height: 28.0)
@@ -240,7 +262,7 @@ final class EntityKeyboardAnimationTopPanelComponent: Component {
         return View(frame: CGRect())
     }
     
-    func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<EnvironmentType>, transition: Transition) -> CGSize {
+    func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<EnvironmentType>, transition: ComponentTransition) -> CGSize {
         return view.update(component: self, availableSize: availableSize, state: state, environment: environment, transition: transition)
     }
 }
@@ -254,11 +276,13 @@ final class EntityKeyboardIconTopPanelComponent: Component {
         case recent
         case saved
         case premium
+        case liked
     }
     
     let icon: Icon
     let theme: PresentationTheme
     let useAccentColor: Bool
+    let customTintColor: UIColor?
     let title: String
     let pressed: () -> Void
     
@@ -266,12 +290,14 @@ final class EntityKeyboardIconTopPanelComponent: Component {
         icon: Icon,
         theme: PresentationTheme,
         useAccentColor: Bool,
+        customTintColor: UIColor?,
         title: String,
         pressed: @escaping () -> Void
     ) {
         self.icon = icon
         self.theme = theme
         self.useAccentColor = useAccentColor
+        self.customTintColor = customTintColor
         self.title = title
         self.pressed = pressed
     }
@@ -284,6 +310,9 @@ final class EntityKeyboardIconTopPanelComponent: Component {
             return false
         }
         if lhs.useAccentColor != rhs.useAccentColor {
+            return false
+        }
+        if lhs.customTintColor != rhs.customTintColor {
             return false
         }
         if lhs.title != rhs.title {
@@ -318,7 +347,7 @@ final class EntityKeyboardIconTopPanelComponent: Component {
             }
         }
         
-        func update(component: EntityKeyboardIconTopPanelComponent, availableSize: CGSize, state: EmptyComponentState, environment: Environment<EnvironmentType>, transition: Transition) -> CGSize {
+        func update(component: EntityKeyboardIconTopPanelComponent, availableSize: CGSize, state: EmptyComponentState, environment: Environment<EnvironmentType>, transition: ComponentTransition) -> CGSize {
             let itemEnvironment = environment[EntityKeyboardTopPanelItemEnvironment.self].value
             
             if self.component?.icon != component.icon {
@@ -332,6 +361,8 @@ final class EntityKeyboardIconTopPanelComponent: Component {
                     image = UIImage(bundleImageName: "Chat/Input/Media/PanelRecentIcon")
                 case .saved:
                     image = UIImage(bundleImageName: "Chat/Input/Media/PanelSavedIcon")
+                case .liked:
+                    image = UIImage(bundleImageName: "Chat/Input/Media/PanelHeartIcon")?.withRenderingMode(.alwaysTemplate)
                 case .premium:
                     image = generateImage(CGSize(width: 44.0, height: 44.0), contextGenerator: { size, context in
                         context.clear(CGRect(origin: CGPoint(), size: size))
@@ -361,14 +392,18 @@ final class EntityKeyboardIconTopPanelComponent: Component {
             self.component = component
             
             let color: UIColor
-            if itemEnvironment.isHighlighted {
-                if component.useAccentColor {
-                    color = component.theme.list.itemAccentColor
-                } else {
-                    color = component.theme.chat.inputMediaPanel.panelHighlightedIconColor
-                }
+            if let customTintColor = component.customTintColor {
+                color = customTintColor
             } else {
-                color = component.theme.chat.inputMediaPanel.panelIconColor
+                if itemEnvironment.isHighlighted {
+                    if component.useAccentColor {
+                        color = component.theme.list.itemAccentColor
+                    } else {
+                        color = component.theme.chat.inputMediaPanel.panelHighlightedIconColor
+                    }
+                } else {
+                    color = component.theme.chat.inputMediaPanel.panelIconColor
+                }
             }
             
             if self.iconView.tintColor != color {
@@ -436,7 +471,7 @@ final class EntityKeyboardIconTopPanelComponent: Component {
         return View(frame: CGRect())
     }
     
-    func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<EnvironmentType>, transition: Transition) -> CGSize {
+    func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<EnvironmentType>, transition: ComponentTransition) -> CGSize {
         return view.update(component: self, availableSize: availableSize, state: state, environment: environment, transition: transition)
     }
 }
@@ -506,7 +541,7 @@ final class EntityKeyboardAvatarTopPanelComponent: Component {
             }
         }
         
-        func update(component: EntityKeyboardAvatarTopPanelComponent, availableSize: CGSize, state: EmptyComponentState, environment: Environment<EnvironmentType>, transition: Transition) -> CGSize {
+        func update(component: EntityKeyboardAvatarTopPanelComponent, availableSize: CGSize, state: EmptyComponentState, environment: Environment<EnvironmentType>, transition: ComponentTransition) -> CGSize {
             let itemEnvironment = environment[EntityKeyboardTopPanelItemEnvironment.self].value
             
             self.avatarNode.setPeer(context: component.context, theme: component.theme, peer: component.peer)
@@ -567,7 +602,7 @@ final class EntityKeyboardAvatarTopPanelComponent: Component {
         return View(frame: CGRect())
     }
     
-    func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<EnvironmentType>, transition: Transition) -> CGSize {
+    func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<EnvironmentType>, transition: ComponentTransition) -> CGSize {
         return view.update(component: self, availableSize: availableSize, state: state, environment: environment, transition: transition)
     }
 }
@@ -711,7 +746,7 @@ final class EntityKeyboardStaticStickersPanelComponent: Component {
             self.updateVisibleItems(transition: .immediate, animateAppearingItems: true)
         }
         
-        private func updateVisibleItems(transition: Transition, animateAppearingItems: Bool) {
+        private func updateVisibleItems(transition: ComponentTransition, animateAppearingItems: Bool) {
             guard let component = self.component, let itemEnvironment = self.itemEnvironment, let itemLayout = self.itemLayout else {
                 return
             }
@@ -819,7 +854,7 @@ final class EntityKeyboardStaticStickersPanelComponent: Component {
             }
         }
         
-        func update(component: EntityKeyboardStaticStickersPanelComponent, availableSize: CGSize, state: EmptyComponentState, environment: Environment<EnvironmentType>, transition: Transition) -> CGSize {
+        func update(component: EntityKeyboardStaticStickersPanelComponent, availableSize: CGSize, state: EmptyComponentState, environment: Environment<EnvironmentType>, transition: ComponentTransition) -> CGSize {
             let itemEnvironment = environment[EntityKeyboardTopPanelItemEnvironment.self].value
             
             var scrollToItem: AnyHashable?
@@ -908,24 +943,29 @@ final class EntityKeyboardStaticStickersPanelComponent: Component {
         return View(frame: CGRect())
     }
     
-    func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<EnvironmentType>, transition: Transition) -> CGSize {
+    func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<EnvironmentType>, transition: ComponentTransition) -> CGSize {
         return view.update(component: self, availableSize: availableSize, state: state, environment: environment, transition: transition)
     }
 }
 
 public final class EntityKeyboardTopPanelItemEnvironment: Equatable {
     public let isExpanded: Bool
+    public let isContentInFocus: Bool
     public let isHighlighted: Bool
     public let highlightedSubgroupId: AnyHashable?
     
-    public init(isExpanded: Bool, isHighlighted: Bool, highlightedSubgroupId: AnyHashable?) {
+    public init(isExpanded: Bool, isContentInFocus: Bool, isHighlighted: Bool, highlightedSubgroupId: AnyHashable?) {
         self.isExpanded = isExpanded
+        self.isContentInFocus = isContentInFocus
         self.isHighlighted = isHighlighted
         self.highlightedSubgroupId = highlightedSubgroupId
     }
     
     public static func ==(lhs: EntityKeyboardTopPanelItemEnvironment, rhs: EntityKeyboardTopPanelItemEnvironment) -> Bool {
         if lhs.isExpanded != rhs.isExpanded {
+            return false
+        }
+        if lhs.isContentInFocus != rhs.isContentInFocus {
             return false
         }
         if lhs.isHighlighted != rhs.isHighlighted {
@@ -1165,27 +1205,30 @@ public final class EntityKeyboardTopPanelComponent: Component {
     
     let id: AnyHashable
     let theme: PresentationTheme
+    let customTintColor: UIColor?
     let items: [Item]
     let containerSideInset: CGFloat
     let defaultActiveItemId: AnyHashable?
     let forceActiveItemId: AnyHashable?
-    let activeContentItemIdUpdated: ActionSlot<(AnyHashable, AnyHashable?, Transition)>
+    let activeContentItemIdUpdated: ActionSlot<(AnyHashable, AnyHashable?, ComponentTransition)>
     let activeContentItemMapping: [AnyHashable: AnyHashable]
     let reorderItems: ([Item]) -> Void
     
     init(
         id: AnyHashable,
         theme: PresentationTheme,
+        customTintColor: UIColor?,
         items: [Item],
         containerSideInset: CGFloat,
         defaultActiveItemId: AnyHashable? = nil,
         forceActiveItemId: AnyHashable? = nil,
-        activeContentItemIdUpdated: ActionSlot<(AnyHashable, AnyHashable?, Transition)>,
+        activeContentItemIdUpdated: ActionSlot<(AnyHashable, AnyHashable?, ComponentTransition)>,
         activeContentItemMapping: [AnyHashable: AnyHashable] = [:],
         reorderItems: @escaping ([Item]) -> Void
     ) {
         self.id = id
         self.theme = theme
+        self.customTintColor = customTintColor
         self.items = items
         self.containerSideInset = containerSideInset
         self.defaultActiveItemId = defaultActiveItemId
@@ -1200,6 +1243,9 @@ public final class EntityKeyboardTopPanelComponent: Component {
             return false
         }
         if lhs.theme !== rhs.theme {
+            return false
+        }
+        if lhs.customTintColor != rhs.customTintColor {
             return false
         }
         if lhs.items != rhs.items {
@@ -1591,7 +1637,7 @@ public final class EntityKeyboardTopPanelComponent: Component {
                         guard let environment = strongSelf.environment else {
                             return
                         }
-                        environment.isExpandedUpdated(false, Transition(animation: .curve(duration: 0.3, curve: .spring)))
+                        environment.isExpandedUpdated(false, ComponentTransition(animation: .curve(duration: 0.3, curve: .spring)))
                     }, queue: .mainQueue())
                     self.draggingStoppedTimer?.start()
                 }
@@ -1605,11 +1651,12 @@ public final class EntityKeyboardTopPanelComponent: Component {
                     guard let environment = self.environment else {
                         return
                     }
-                    environment.isExpandedUpdated(true, Transition(animation: .curve(duration: 0.3, curve: .spring)))
+                    environment.isExpandedUpdated(true, ComponentTransition(animation: .curve(duration: 0.3, curve: .spring)))
                 }
             }
         }
         
+        private var didReorderItems = false
         private func beginReordering(itemView: ComponentHostView<EntityKeyboardTopPanelItemEnvironment>) {
             if let currentReorderingItemView = self.currentReorderingItemView {
                 if let componentView = currentReorderingItemView.componentView {
@@ -1684,8 +1731,10 @@ public final class EntityKeyboardTopPanelComponent: Component {
             self.currentReorderingItemId = nil
             self.temporaryReorderingOrderIndex = nil
             
-            self.component?.reorderItems(self.items)
-            //self.state?.updated(transition: Transition(animation: .curve(duration: 0.3, curve: .spring)))
+            if self.didReorderItems {
+                self.component?.reorderItems(self.items)
+            }
+            //self.state?.updated(transition: ComponentTransition(animation: .curve(duration: 0.3, curve: .spring)))
         }
         
         private func updateReordering(offset: CGFloat) {
@@ -1703,15 +1752,15 @@ public final class EntityKeyboardTopPanelComponent: Component {
                 let containerFrame = itemLayout.containerFrame(at: i)
                 if containerFrame.intersects(localReorderingItemFrame) {
                     let temporaryReorderingOrderIndex: (id: AnyHashable, index: Int) = (currentReorderingItemId, i)
-                    let hadPrevous = self.temporaryReorderingOrderIndex != nil
+                    let hadPrevious = self.temporaryReorderingOrderIndex != nil
                     if self.temporaryReorderingOrderIndex?.id != temporaryReorderingOrderIndex.id || self.temporaryReorderingOrderIndex?.index != temporaryReorderingOrderIndex.index {
                         self.temporaryReorderingOrderIndex = temporaryReorderingOrderIndex
                         
-                        if hadPrevous {
+                        if hadPrevious {
                             self.reorderingHapticFeedback.tap()
                         }
-                        
-                        self.state?.updated(transition: Transition(animation: .curve(duration: 0.3, curve: .spring)))
+                        self.didReorderItems = true
+                        self.state?.updated(transition: ComponentTransition(animation: .curve(duration: 0.3, curve: .spring)))
                     }
                     break
                 }
@@ -1746,7 +1795,7 @@ public final class EntityKeyboardTopPanelComponent: Component {
             }
         }
         
-        private func updateVisibleItems(attemptSynchronousLoads: Bool, transition: Transition) {
+        private func updateVisibleItems(attemptSynchronousLoads: Bool, transition: ComponentTransition) {
             guard let itemLayout = self.itemLayout else {
                 return
             }
@@ -1789,15 +1838,19 @@ public final class EntityKeyboardTopPanelComponent: Component {
                         transition: itemTransition,
                         component: item.content,
                         environment: {
-                            EntityKeyboardTopPanelItemEnvironment(isExpanded: itemLayout.isExpanded, isHighlighted: self.activeContentItemId == item.id, highlightedSubgroupId: self.activeContentItemId == item.id ? self.activeSubcontentItemId : nil)
+                            EntityKeyboardTopPanelItemEnvironment(
+                                isExpanded: itemLayout.isExpanded,
+                                isContentInFocus: self.environment?.isContentInFocus ?? false,
+                                isHighlighted: self.activeContentItemId == item.id,
+                                highlightedSubgroupId: self.activeContentItemId == item.id ? self.activeSubcontentItemId : nil)
                         },
                         containerSize: itemOuterFrame.size
                     )
                     let itemFrame = CGRect(origin: CGPoint(x: itemOuterFrame.minX + floor((itemOuterFrame.width - itemSize.width) / 2.0), y: itemOuterFrame.minY + floor((itemOuterFrame.height - itemSize.height) / 2.0)), size: itemSize)
                     itemTransition.setFrame(view: itemView, frame: itemFrame)
                     
-                    transition.setSublayerTransform(view: itemView, transform: CATransform3DMakeScale(scale, scale, 1.0))
-                    transition.setAlpha(view: itemView, alpha: self.visibilityFraction)
+                    itemTransition.setSublayerTransform(view: itemView, transform: CATransform3DMakeScale(scale, scale, 1.0))
+                    itemTransition.setAlpha(view: itemView, alpha: self.visibilityFraction)
                 }
             }
             var removedIds: [AnyHashable] = []
@@ -1812,9 +1865,13 @@ public final class EntityKeyboardTopPanelComponent: Component {
             }
         }
         
-        func update(component: EntityKeyboardTopPanelComponent, availableSize: CGSize, state: EmptyComponentState, environment: Environment<EnvironmentType>, transition: Transition) -> CGSize {
-            if self.component?.theme !== component.theme {
-                self.highlightedIconBackgroundView.backgroundColor = component.theme.chat.inputMediaPanel.panelHighlightedIconBackgroundColor
+        func update(component: EntityKeyboardTopPanelComponent, availableSize: CGSize, state: EmptyComponentState, environment: Environment<EnvironmentType>, transition: ComponentTransition) -> CGSize {
+            if self.component?.theme !== component.theme || self.component?.customTintColor != component.customTintColor {
+                if let customTintColor = component.customTintColor {
+                    self.highlightedIconBackgroundView.backgroundColor = customTintColor.withAlphaComponent(0.1)
+                } else {
+                    self.highlightedIconBackgroundView.backgroundColor = component.theme.chat.inputMediaPanel.panelHighlightedIconBackgroundColor
+                }
             }
             self.component = component
             self.state = state
@@ -2024,7 +2081,7 @@ public final class EntityKeyboardTopPanelComponent: Component {
                     }
                     
                     let isRound: Bool
-                    if let string = activeContentItemId.base as? String, (string == "featuredTop" || string == "recent" || string == "static" || string == "trending") {
+                    if let string = activeContentItemId.base as? String, (string == "featuredTop" || string == "recent" || string == "static" || string == "trending" || string == "liked") {
                         isRound = true
                     } else {
                         isRound = false
@@ -2058,7 +2115,7 @@ public final class EntityKeyboardTopPanelComponent: Component {
             return CGSize(width: availableSize.width, height: height)
         }
         
-        private func visibilityFractionUpdated(value: CGFloat, transition: Transition) {
+        private func visibilityFractionUpdated(value: CGFloat, transition: ComponentTransition) {
             if self.visibilityFraction == value {
                 return
             }
@@ -2076,7 +2133,7 @@ public final class EntityKeyboardTopPanelComponent: Component {
             }
         }
         
-        private func activeContentItemIdUpdated(itemId: AnyHashable, subcontentItemId: AnyHashable?, transition: Transition) {
+        private func activeContentItemIdUpdated(itemId: AnyHashable, subcontentItemId: AnyHashable?, transition: ComponentTransition) {
             guard let component = self.component, let itemLayout = self.itemLayout else {
                 return
             }
@@ -2088,7 +2145,7 @@ public final class EntityKeyboardTopPanelComponent: Component {
             
             let _ = component
             let _ = itemLayout
-            self.state?.updated(transition: Transition(animation: .curve(duration: 0.4, curve: .spring)))
+            self.state?.updated(transition: ComponentTransition(animation: .curve(duration: 0.4, curve: .spring)))
             
             if let component = self.component, let itemLayout = self.itemLayout {
                 for i in 0 ..< component.items.count {
@@ -2142,7 +2199,7 @@ public final class EntityKeyboardTopPanelComponent: Component {
         return View(frame: CGRect())
     }
     
-    public func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<EnvironmentType>, transition: Transition) -> CGSize {
+    public func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<EnvironmentType>, transition: ComponentTransition) -> CGSize {
         return view.update(component: self, availableSize: availableSize, state: state, environment: environment, transition: transition)
     }
 }

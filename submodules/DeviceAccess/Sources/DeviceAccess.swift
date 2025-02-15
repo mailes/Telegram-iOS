@@ -11,7 +11,6 @@ import AddressBook
 import UserNotifications
 import CoreTelephony
 import TelegramPresentationData
-import LegacyComponents
 import AccountContext
 
 public enum DeviceAccessCameraSubject {
@@ -37,6 +36,7 @@ public enum DeviceAccessLocationSubject {
     case send
     case live
     case tracking
+    case weather
 }
 
 public enum DeviceAccessSubject {
@@ -83,14 +83,24 @@ public final class DeviceAccess {
         return self.locationPromise.get()
     }
     
+    private static let cameraPromise = Promise<Bool?>(nil)
+    static var camera: Signal<Bool?, NoError> {
+        return self.cameraPromise.get()
+    }
+    
+    private static let microphonePromise = Promise<Bool?>(nil)
+    static var microphone: Signal<Bool?, NoError> {
+        return self.microphonePromise.get()
+    }
+    
     public static func isMicrophoneAccessAuthorized() -> Bool? {
         return AVAudioSession.sharedInstance().recordPermission == .granted
     }
     
     public static func isCameraAccessAuthorized() -> Bool {
-        return PGCamera.cameraAuthorizationStatus() == PGCameraAuthorizationStatusAuthorized
+        return AVCaptureDevice.authorizationStatus(for: .video) == .authorized
     }
-    
+        
     public static func authorizationStatus(applicationInForeground: Signal<Bool, NoError>? = nil, siriAuthorization: (() -> AccessType)? = nil, subject: DeviceAccessSubject) -> Signal<AccessType, NoError> {
         switch subject {
             case .notifications:
@@ -249,20 +259,81 @@ public final class DeviceAccess {
                         }
                     }
                 )
+            case .camera:
+                return Signal { subscriber in
+                    let status = AVCaptureDevice.authorizationStatus(for: .video)
+                    switch status {
+                    case .authorized:
+                        subscriber.putNext(.allowed)
+                    case .denied, .restricted:
+                        subscriber.putNext(.denied)
+                    case .notDetermined:
+                        subscriber.putNext(.notDetermined)
+                    @unknown default:
+                        fatalError()
+                    }
+                    subscriber.putCompletion()
+                    return EmptyDisposable
+                }
+                |> then(self.camera
+                    |> mapToSignal { authorized -> Signal<AccessType, NoError> in
+                        if let authorized = authorized {
+                            return .single(authorized ? .allowed : .denied)
+                        } else {
+                            return .complete()
+                        }
+                    }
+                )
+            case .microphone:
+                return Signal { subscriber in
+                    let status = AVCaptureDevice.authorizationStatus(for: .audio)
+                    switch status {
+                    case .authorized:
+                        subscriber.putNext(.allowed)
+                    case .denied, .restricted:
+                        subscriber.putNext(.denied)
+                    case .notDetermined:
+                        subscriber.putNext(.notDetermined)
+                    @unknown default:
+                        fatalError()
+                    }
+                    subscriber.putCompletion()
+                    return EmptyDisposable
+                }
+                |> then(self.microphone
+                    |> mapToSignal { authorized -> Signal<AccessType, NoError> in
+                        if let authorized = authorized {
+                            return .single(authorized ? .allowed : .denied)
+                        } else {
+                            return .complete()
+                        }
+                    }
+                )
             default:
                 return .single(.notDetermined)
         }
     }
     
-    public static func authorizeAccess(to subject: DeviceAccessSubject, onlyCheck: Bool = false, registerForNotifications: ((@escaping (Bool) -> Void) -> Void)? = nil, requestSiriAuthorization: ((@escaping (Bool) -> Void) -> Void)? = nil, locationManager: LocationManager? = nil, presentationData: PresentationData? = nil, present: @escaping (ViewController, Any?) -> Void = { _, _ in }, openSettings: @escaping () -> Void = { }, displayNotificationFromBackground: @escaping (String) -> Void = { _ in }, _ completion: @escaping (Bool) -> Void = { _ in }) {
+    public static func authorizeAccess(
+        to subject: DeviceAccessSubject,
+        onlyCheck: Bool = false,
+        registerForNotifications: ((@escaping (Bool) -> Void) -> Void)? = nil,
+        requestSiriAuthorization: ((@escaping (Bool) -> Void) -> Void)? = nil,
+        locationManager: LocationManager? = nil,
+        presentationData: PresentationData? = nil,
+        present: @escaping (ViewController, Any?) -> Void = { _, _ in },
+        openSettings: @escaping () -> Void = { },
+        displayNotificationFromBackground: @escaping (String) -> Void = { _ in },
+        _ completion: @escaping (Bool) -> Void = { _ in }) {
             switch subject {
                 case let .camera(cameraSubject):
-                    let status = PGCamera.cameraAuthorizationStatus()
-                    if status == PGCameraAuthorizationStatusNotDetermined {
+                    let status = AVCaptureDevice.authorizationStatus(for: .video)
+                    if case .notDetermined = status {
                         if !onlyCheck {
                             AVCaptureDevice.requestAccess(for: AVMediaType.video) { response in
                                 Queue.mainQueue().async {
                                     completion(response)
+                                    self.cameraPromise.set(.single(response))
                                     if !response, let presentationData = presentationData {
                                         let text: String
                                         switch cameraSubject {
@@ -282,25 +353,27 @@ public final class DeviceAccess {
                         } else {
                             completion(true)
                         }
-                    } else if status == PGCameraAuthorizationStatusRestricted || status == PGCameraAuthorizationStatusDenied, let presentationData = presentationData {
-                        let text: String
-                        if status == PGCameraAuthorizationStatusRestricted {
-                            text = presentationData.strings.AccessDenied_CameraRestricted
-                        } else {
-                            switch cameraSubject {
-                                case .video:
-                                    text = presentationData.strings.AccessDenied_Camera
-                                case .videoCall:
-                                    text = presentationData.strings.AccessDenied_VideoCallCamera
-                                case .qrCode:
-                                    text = presentationData.strings.AccessDenied_QrCamera
-                            }
-                        }
+                    } else if [.restricted, .denied].contains(status) {
                         completion(false)
-                        present(standardTextAlertController(theme: AlertControllerTheme(presentationData: presentationData), title: presentationData.strings.AccessDenied_Title, text: text, actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_NotNow, action: {}), TextAlertAction(type: .genericAction, title: presentationData.strings.AccessDenied_Settings, action: {
-                            openSettings()
-                        })]), nil)
-                    } else if status == PGCameraAuthorizationStatusAuthorized {
+                        if let presentationData = presentationData {
+                            let text: String
+                            if case .restricted = status {
+                                text = presentationData.strings.AccessDenied_CameraRestricted
+                            } else {
+                                switch cameraSubject {
+                                    case .video:
+                                        text = presentationData.strings.AccessDenied_Camera
+                                    case .videoCall:
+                                        text = presentationData.strings.AccessDenied_VideoCallCamera
+                                    case .qrCode:
+                                        text = presentationData.strings.AccessDenied_QrCamera
+                                }
+                            }
+                            present(standardTextAlertController(theme: AlertControllerTheme(presentationData: presentationData), title: presentationData.strings.AccessDenied_Title, text: text, actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_NotNow, action: {}), TextAlertAction(type: .genericAction, title: presentationData.strings.AccessDenied_Settings, action: {
+                                openSettings()
+                            })]), nil)
+                        }
+                    } else if case .authorized = status {
                         completion(true)
                     } else {
                         assertionFailure()
@@ -332,6 +405,7 @@ public final class DeviceAccess {
                                         displayNotificationFromBackground(text)
                                     }
                                 }
+                                self.microphonePromise.set(.single(granted))
                             }
                         })
                     }
@@ -403,7 +477,7 @@ public final class DeviceAccess {
                             }
                         case .authorizedWhenInUse:
                             switch locationSubject {
-                                case .send, .tracking:
+                                case .send, .tracking, .weather:
                                     completion(true)
                                 case .live:
                                     completion(false)
@@ -424,6 +498,8 @@ public final class DeviceAccess {
                                             text = presentationData.strings.AccessDenied_LocationDenied
                                         case .tracking:
                                             text = presentationData.strings.AccessDenied_LocationTracking
+                                        case .weather:
+                                            text = presentationData.strings.AccessDenied_LocationWeather
                                     }
                                 } else {
                                     text = presentationData.strings.AccessDenied_LocationDisabled
@@ -434,7 +510,7 @@ public final class DeviceAccess {
                             }
                         case .notDetermined:
                             switch locationSubject {
-                                case .send, .tracking:
+                                case .send, .tracking, .weather:
                                     locationManager?.requestWhenInUseAuthorization(completion: { status in
                                         completion(status == .authorizedWhenInUse || status == .authorizedAlways)
                                     })

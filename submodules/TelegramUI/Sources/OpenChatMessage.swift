@@ -22,9 +22,113 @@ import ShareController
 import UndoUI
 import WebsiteType
 import GalleryData
+import StoryContainerScreen
+import WallpaperGalleryScreen
+import BrowserUI
 
 func openChatMessageImpl(_ params: OpenChatMessageParams) -> Bool {
-    if let mediaData = chatMessageGalleryControllerData(context: params.context, chatLocation: params.chatLocation, chatLocationContextHolder: params.chatLocationContextHolder, message: params.message, navigationController: params.navigationController, standalone: params.standalone, reverseMessageGalleryOrder: params.reverseMessageGalleryOrder, mode: params.mode, source: params.gallerySource, synchronousLoad: false, actionInteraction: params.actionInteraction) {
+    var story: TelegramMediaStory?
+    for media in params.message.media {
+        if let media = media as? TelegramMediaStory {
+            story = media
+        } else if let webpage = media as? TelegramMediaWebpage, case let .Loaded(content) = webpage.content, content.story != nil {
+            story = content.story
+        }
+    }
+    
+    if let story {
+        let navigationController = params.navigationController
+        let context = params.context
+        let storyContent = SingleStoryContentContextImpl(context: params.context, storyId: story.storyId, readGlobally: true)
+        let _ = (storyContent.state
+        |> take(1)
+        |> deliverOnMainQueue).startStandalone(next: { [weak navigationController] _ in
+            var transitionIn: StoryContainerScreen.TransitionIn? = nil
+            
+            var selectedTransitionNode: (ASDisplayNode, CGRect, () -> (UIView?, UIView?))?
+            selectedTransitionNode = params.transitionNode(params.message.id, story, true)
+            
+            if let selectedTransitionNode {
+                var cornerRadius: CGFloat = 0.0
+                if let imageNode = selectedTransitionNode.0 as? TransformImageNode, let currentArguments = imageNode.currentArguments {
+                    cornerRadius = currentArguments.corners.topLeft.radius
+                }
+                transitionIn = StoryContainerScreen.TransitionIn(
+                    sourceView: selectedTransitionNode.0.view,
+                    sourceRect: selectedTransitionNode.1,
+                    sourceCornerRadius: cornerRadius,
+                    sourceIsAvatar: false
+                )
+            }
+            
+            let hiddenMediaSource = params.context.sharedContext.mediaManager.galleryHiddenMediaManager.addSource(.single(GalleryHiddenMediaId.chat(params.context.account.id, params.message.id, story)))
+            
+            let storyContainerScreen = StoryContainerScreen(
+                context: context,
+                content: storyContent,
+                transitionIn: transitionIn,
+                transitionOut: { _, _ in
+                    var transitionOut: StoryContainerScreen.TransitionOut? = nil
+                    
+                    var selectedTransitionNode: (ASDisplayNode, CGRect, () -> (UIView?, UIView?))?
+                    selectedTransitionNode = params.transitionNode(params.message.id, story, true)
+                    if let selectedTransitionNode {
+                        var cornerRadius: CGFloat = 0.0
+                        if let imageNode = selectedTransitionNode.0 as? TransformImageNode, let currentArguments = imageNode.currentArguments {
+                            cornerRadius = currentArguments.corners.topLeft.radius
+                        }
+                        
+                        transitionOut = StoryContainerScreen.TransitionOut(
+                            destinationView: selectedTransitionNode.0.view,
+                            transitionView: StoryContainerScreen.TransitionView(
+                                makeView: {
+                                    let view = UIView()
+                                    if let transitionView = selectedTransitionNode.2().0 {
+                                        transitionView.layer.anchorPoint = CGPoint()
+                                        view.addSubview(transitionView)
+                                    }
+                                    return view
+                                },
+                                updateView: { view, state, transition in
+                                    guard let view = view.subviews.first else {
+                                        return
+                                    }
+                                    if state.progress == 0.0 {
+                                        view.frame = CGRect(origin: CGPoint(), size: state.destinationSize)
+                                    }
+                                    
+                                    let toScaleX = state.sourceSize.width / state.destinationSize.width
+                                    let toScaleY = state.sourceSize.height / state.destinationSize.height
+                                    let fromScaleX: CGFloat = 1.0
+                                    let fromScaleY: CGFloat = 1.0
+                                    let scaleX = toScaleX.interpolate(to: fromScaleX, amount: state.progress)
+                                    let scaleY = toScaleY.interpolate(to: fromScaleY, amount: state.progress)
+                                    transition.setTransform(view: view, transform: CATransform3DMakeScale(scaleX, scaleY, 1.0))
+                                },
+                                insertCloneTransitionView: { view in
+                                    params.addToTransitionSurface(view)
+                                }
+                            ),
+                            destinationRect: selectedTransitionNode.1,
+                            destinationCornerRadius: cornerRadius,
+                            destinationIsAvatar: false,
+                            completed: {
+                                params.context.sharedContext.mediaManager.galleryHiddenMediaManager.removeSource(hiddenMediaSource)
+                            }
+                        )
+                    } else {
+                        params.context.sharedContext.mediaManager.galleryHiddenMediaManager.removeSource(hiddenMediaSource)
+                    }
+                    
+                    return transitionOut
+                }
+            )
+            navigationController?.pushViewController(storyContainerScreen)
+        })
+        return true
+    }
+    
+    if let mediaData = chatMessageGalleryControllerData(context: params.context, chatLocation: params.chatLocation, chatFilterTag: params.chatFilterTag, chatLocationContextHolder: params.chatLocationContextHolder, message: params.message, mediaIndex: params.mediaIndex, navigationController: params.navigationController, standalone: params.standalone, reverseMessageGalleryOrder: params.reverseMessageGalleryOrder, mode: params.mode, source: params.gallerySource, synchronousLoad: false, actionInteraction: params.actionInteraction) {
         switch mediaData {
             case let .url(url):
                 params.openUrl(url)
@@ -32,7 +136,7 @@ func openChatMessageImpl(_ params: OpenChatMessageParams) -> Bool {
             case let .pass(file):
                 let _ = (params.context.account.postbox.mediaBox.resourceData(file.resource, option: .complete(waitUntilFetchStatus: true))
                 |> take(1)
-                |> deliverOnMainQueue).start(next: { data in
+                |> deliverOnMainQueue).startStandalone(next: { data in
                     guard let navigationController = params.navigationController else {
                         return
                     }
@@ -54,36 +158,36 @@ func openChatMessageImpl(_ params: OpenChatMessageParams) -> Bool {
                 params.present(gallery, InstantPageGalleryControllerPresentationArguments(transitionArguments: { entry in
                     var selectedTransitionNode: (ASDisplayNode, CGRect, () -> (UIView?, UIView?))?
                     if entry.index == centralIndex {
-                        selectedTransitionNode = params.transitionNode(params.message.id, galleryMedia)
+                        selectedTransitionNode = params.transitionNode(params.message.id, galleryMedia, false)
                     }
                     if let selectedTransitionNode = selectedTransitionNode {
                         return GalleryTransitionArguments(transitionNode: selectedTransitionNode, addToTransitionSurface: params.addToTransitionSurface)
                     }
                     return nil
-                }))
+                }), .window(.root))
                 return true
             case .map:
                 params.dismissInput()
                 
                 let controllerParams = LocationViewParams(sendLiveLocation: { location in
-                    let outMessage: EnqueueMessage = .message(text: "", attributes: [], inlineStickers: [:], mediaReference: .standalone(media: location), replyToMessageId: nil, localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: [])
+                    let outMessage: EnqueueMessage = .message(text: "", attributes: [], inlineStickers: [:], mediaReference: .standalone(media: location), threadId: nil, replyToMessageId: nil, replyToStoryId: nil, localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: [])
                     params.enqueueMessage(outMessage)
                 }, stopLiveLocation: { messageId in
                     params.context.liveLocationManager?.cancelLiveLocation(peerId: messageId?.peerId ?? params.message.id.peerId)
                 }, openUrl: params.openUrl, openPeer: { peer in
-                    params.openPeer(peer, .info)
+                    params.openPeer(peer._asPeer(), .info(nil))
                 }, showAll: params.modal)
-                let controller = LocationViewController(context: params.context, updatedPresentationData: params.updatedPresentationData, subject: params.message, params: controllerParams)
+                let controller = LocationViewController(context: params.context, updatedPresentationData: params.updatedPresentationData, subject: EngineMessage(params.message), params: controllerParams)
                 controller.navigationPresentation = .modal
                 params.navigationController?.pushViewController(controller)
                 return true
-            case let .stickerPack(reference):
-                let controller = StickerPackScreen(context: params.context, updatedPresentationData: params.updatedPresentationData, mainStickerPack: reference, stickerPacks: [reference], parentNavigationController: params.navigationController, sendSticker: params.sendSticker, sendEmoji: params.sendEmoji, actionPerformed: { actions in
+            case let .stickerPack(reference, previewIconFile):
+                let controller = StickerPackScreen(context: params.context, updatedPresentationData: params.updatedPresentationData, mainStickerPack: reference, stickerPacks: [reference], previewIconFile: previewIconFile, parentNavigationController: params.navigationController, sendSticker: params.sendSticker, sendEmoji: params.sendEmoji, actionPerformed: { actions in
                     let presentationData = params.context.sharedContext.currentPresentationData.with { $0 }
                     
                     if actions.count > 1, let first = actions.first {
                         if case .add = first.2 {
-                            params.navigationController?.presentOverlay(controller: UndoOverlayController(presentationData: presentationData, content: .stickersModified(title: presentationData.strings.EmojiPackActionInfo_AddedTitle, text: presentationData.strings.EmojiPackActionInfo_MultipleAddedText(Int32(actions.count)), undo: false, info: first.0, topItem: first.1.first, context: params.context), elevatedLayout: true, animateInAsReplacement: false, action: { _ in
+                            params.navigationController?.presentOverlay(controller: UndoOverlayController(presentationData: presentationData, content: .stickersModified(title: presentationData.strings.EmojiPackActionInfo_AddedTitle, text: presentationData.strings.EmojiPackActionInfo_MultipleAddedText(Int32(actions.count)), undo: false, info: first.0, topItem: first.1.first, context: params.context), elevatedLayout: false, animateInAsReplacement: false, action: { _ in
                                 return true
                             }))
                         }
@@ -101,35 +205,69 @@ func openChatMessageImpl(_ params: OpenChatMessageParams) -> Bool {
                         }
                         switch action {
                         case .add:
-                            params.navigationController?.presentOverlay(controller: UndoOverlayController(presentationData: presentationData, content: .stickersModified(title: isEmoji ? presentationData.strings.EmojiPackActionInfo_AddedTitle : presentationData.strings.StickerPackActionInfo_AddedTitle, text: isEmoji ? presentationData.strings.EmojiPackActionInfo_AddedText(info.title).string : presentationData.strings.StickerPackActionInfo_AddedText(info.title).string, undo: false, info: info, topItem: items.first, context: params.context), elevatedLayout: true, animateInAsReplacement: animateInAsReplacement, action: { _ in
+                            let controller = UndoOverlayController(presentationData: presentationData, content: .stickersModified(title: isEmoji ? presentationData.strings.EmojiPackActionInfo_AddedTitle : presentationData.strings.StickerPackActionInfo_AddedTitle, text: isEmoji ? presentationData.strings.EmojiPackActionInfo_AddedText(info.title).string : presentationData.strings.StickerPackActionInfo_AddedText(info.title).string, undo: false, info: info, topItem: items.first, context: params.context), elevatedLayout: false, animateInAsReplacement: animateInAsReplacement, action: { _ in
                                 return true
-                            }))
+                            })
+                            (params.navigationController?.topViewController as? ViewController)?.present(controller, in: .current)
                         case let .remove(positionInList):
-                            params.navigationController?.presentOverlay(controller: UndoOverlayController(presentationData: presentationData, content: .stickersModified(title: isEmoji ? presentationData.strings.EmojiPackActionInfo_RemovedTitle : presentationData.strings.StickerPackActionInfo_RemovedTitle, text: isEmoji ? presentationData.strings.EmojiPackActionInfo_RemovedText(info.title).string : presentationData.strings.StickerPackActionInfo_RemovedText(info.title).string, undo: true, info: info, topItem: items.first, context: params.context), elevatedLayout: true, animateInAsReplacement: animateInAsReplacement, action: { action in
+                            let controller = UndoOverlayController(presentationData: presentationData, content: .stickersModified(title: isEmoji ? presentationData.strings.EmojiPackActionInfo_RemovedTitle : presentationData.strings.StickerPackActionInfo_RemovedTitle, text: isEmoji ? presentationData.strings.EmojiPackActionInfo_RemovedText(info.title).string : presentationData.strings.StickerPackActionInfo_RemovedText(info.title).string, undo: true, info: info, topItem: items.first, context: params.context), elevatedLayout: false, animateInAsReplacement: animateInAsReplacement, action: { action in
                                 if case .undo = action {
-                                    let _ = params.context.engine.stickers.addStickerPackInteractively(info: info, items: items, positionInList: positionInList).start()
+                                    let _ = params.context.engine.stickers.addStickerPackInteractively(info: info, items: items, positionInList: positionInList).startStandalone()
                                 }
                                 return true
-                            }))
+                            })
+                            (params.navigationController?.topViewController as? ViewController)?.present(controller, in: .current)
                         }
                     }
-                })
+                }, getSourceRect: params.getSourceRect)
                 params.dismissInput()
-                params.present(controller, nil)
+                params.present(controller, nil, .window(.root))
                 return true
             case let .document(file, immediateShare):
                 params.dismissInput()
                 let presentationData = params.context.sharedContext.currentPresentationData.with { $0 }
                 if immediateShare {
                     let controller = ShareController(context: params.context, subject: .media(.standalone(media: file)), immediateExternalShare: true)
-                    params.present(controller, nil)
+                    params.present(controller, nil, .window(.root))
                 } else if let rootController = params.navigationController?.view.window?.rootViewController {
                     let proceed = {
-                        presentDocumentPreviewController(rootController: rootController, theme: presentationData.theme, strings: presentationData.strings, postbox: params.context.account.postbox, file: file, canShare: !params.message.isCopyProtected())
+                        let canShare = !params.message.isCopyProtected()
+                        var useBrowserScreen = false
+                        if BrowserScreen.supportedDocumentMimeTypes.contains(file.mimeType) {
+                            useBrowserScreen = true
+                        } else if let fileName = file.fileName as? NSString, BrowserScreen.supportedDocumentExtensions.contains(fileName.pathExtension.lowercased())  {
+                            useBrowserScreen = true
+                        }
+                        if useBrowserScreen {
+                            if let navigationController = params.navigationController, let minimizedContainer = navigationController.minimizedContainer {
+                                for controller in minimizedContainer.controllers {
+                                    if let controller = controller as? BrowserScreen, controller.subject.fileId == file.fileId {
+                                        navigationController.maximizeViewController(controller, animated: true)
+                                        return
+                                    }
+                                }
+                            }
+                            
+                            let subject: BrowserScreen.Subject
+                            if file.mimeType == "application/pdf" {
+                                subject = .pdfDocument(file: .message(message: MessageReference(params.message), media: file), canShare: canShare)
+                            } else {
+                                subject = .document(file: .message(message: MessageReference(params.message), media: file), canShare: canShare)
+                            }
+                            let controller = BrowserScreen(context: params.context, subject: subject)
+                            controller.openDocument = { file, canShare in
+                                controller.dismiss()
+                                
+                                presentDocumentPreviewController(rootController: rootController, theme: presentationData.theme, strings: presentationData.strings, postbox: params.context.account.postbox, file: file, canShare: canShare)
+                            }
+                            params.navigationController?.pushViewController(controller)
+                        } else {
+                            presentDocumentPreviewController(rootController: rootController, theme: presentationData.theme, strings: presentationData.strings, postbox: params.context.account.postbox, file: file, canShare: canShare)
+                        }
                     }
                     if file.mimeType.contains("image/svg") {
                         let presentationData = params.context.sharedContext.currentPresentationData.with { $0 }
-                        params.present(textAlertController(context: params.context, title: nil, text: presentationData.strings.OpenFile_PotentiallyDangerousContentAlert, actions: [TextAlertAction(type: .genericAction, title: presentationData.strings.Common_Cancel, action: {}), TextAlertAction(type: .defaultAction, title: presentationData.strings.OpenFile_Proceed, action: { proceed() })] ), nil)
+                        params.present(textAlertController(context: params.context, title: nil, text: presentationData.strings.OpenFile_PotentiallyDangerousContentAlert, actions: [TextAlertAction(type: .genericAction, title: presentationData.strings.Common_Cancel, action: {}), TextAlertAction(type: .defaultAction, title: presentationData.strings.OpenFile_Proceed, action: { proceed() })] ), nil, .window(.root))
                     } else {
                         proceed()
                     }
@@ -170,33 +308,39 @@ func openChatMessageImpl(_ params: OpenChatMessageParams) -> Bool {
                     }
                     playerType = (file.isVoice || file.isInstantVideo) ? .voice : .file
                 }
-                params.context.sharedContext.mediaManager.setPlaylist((params.context.account, PeerMessagesMediaPlaylist(context: params.context, location: location, chatLocationContextHolder: params.chatLocationContextHolder)), type: playerType, control: control)
+                params.context.sharedContext.mediaManager.setPlaylist((params.context, PeerMessagesMediaPlaylist(context: params.context, location: location, chatLocationContextHolder: params.chatLocationContextHolder)), type: playerType, control: control)
                 return true
+            case let .story(storyController):
+                params.dismissInput()
+                let _ = (storyController
+                |> deliverOnMainQueue).startStandalone(next: { storyController in
+                    params.navigationController?.pushViewController(storyController)
+                })
             case let .gallery(gallery):
                 params.dismissInput()
                 let _ = (gallery
-                |> deliverOnMainQueue).start(next: { gallery in
+                |> deliverOnMainQueue).startStandalone(next: { gallery in
                     gallery.centralItemUpdated = { messageId in
                         params.centralItemUpdated?(messageId)
                     }
                     params.present(gallery, GalleryControllerPresentationArguments(transitionArguments: { messageId, media in
-                        let selectedTransitionNode = params.transitionNode(messageId, media)
+                        let selectedTransitionNode = params.transitionNode(messageId, media, false)
                         if let selectedTransitionNode = selectedTransitionNode {
                             return GalleryTransitionArguments(transitionNode: selectedTransitionNode, addToTransitionSurface: params.addToTransitionSurface)
                         }
                         return nil
-                    }))
+                    }), params.message.adAttribute != nil ? .current : .window(.root))
                 })
                 return true
             case let .secretGallery(gallery):
                 params.dismissInput()
                 params.present(gallery, GalleryControllerPresentationArguments(transitionArguments: { messageId, media in
-                    let selectedTransitionNode = params.transitionNode(messageId, media)
+                    let selectedTransitionNode = params.transitionNode(messageId, media, false)
                     if let selectedTransitionNode = selectedTransitionNode {
                         return GalleryTransitionArguments(transitionNode: selectedTransitionNode, addToTransitionSurface: params.addToTransitionSurface)
                     }
                     return nil
-                }))
+                }), .window(.root))
                 return true
             case let .other(otherMedia):
                 params.dismissInput()
@@ -212,14 +356,14 @@ func openChatMessageImpl(_ params: OpenChatMessageParams) -> Bool {
                     }
                     
                     let _ = (paramsSignal
-                    |> deliverOnMainQueue).start(next: { peer, isContact in
+                    |> deliverOnMainQueue).startStandalone(next: { peer, isContact in
                         let contactData: DeviceContactExtendedData
                         if let vCard = contact.vCardData, let vCardData = vCard.data(using: .utf8), let parsed = DeviceContactExtendedData(vcard: vCardData) {
                             contactData = parsed
                         } else {
                             contactData = DeviceContactExtendedData(basicData: DeviceContactBasicData(firstName: contact.firstName, lastName: contact.lastName, phoneNumbers: [DeviceContactPhoneNumberData(label: "_$!<Mobile>!$_", value: contact.phoneNumber)]), middleName: "", prefix: "", suffix: "", organization: "", jobTitle: "", department: "", emailAddresses: [], urls: [], addresses: [], birthdayDate: nil, socialProfiles: [], instantMessagingProfiles: [], note: "")
                         }
-                        let controller = deviceContactInfoController(context: params.context, updatedPresentationData: params.updatedPresentationData, subject: .vcard(peer?._asPeer(), nil, contactData), completed: nil, cancelled: nil)
+                        let controller = deviceContactInfoController(context: ShareControllerAppAccountContext(context: params.context), environment: ShareControllerAppEnvironment(sharedContext: params.context.sharedContext), updatedPresentationData: params.updatedPresentationData, subject: .vcard(peer?._asPeer(), nil, contactData), completed: nil, cancelled: nil)
                         params.navigationController?.pushViewController(controller)
                     })
                     return true
@@ -235,11 +379,11 @@ func openChatMessageImpl(_ params: OpenChatMessageParams) -> Bool {
                 }, media)
                 
                 params.present(controller, AvatarGalleryControllerPresentationArguments(transitionArguments: { entry in
-                    if let selectedTransitionNode = params.transitionNode(params.message.id, media) {
+                    if let selectedTransitionNode = params.transitionNode(params.message.id, media, false) {
                         return GalleryTransitionArguments(transitionNode: selectedTransitionNode, addToTransitionSurface: params.addToTransitionSurface)
                     }
                     return nil
-                }))
+                }), .window(.root))
             case let .theme(media):
                 params.dismissInput()
                 let path = params.context.account.postbox.mediaBox.completedResourcePath(media.resource)
@@ -258,18 +402,23 @@ func openChatMessageImpl(_ params: OpenChatMessageParams) -> Bool {
     return false
 }
 
-func openChatInstantPage(context: AccountContext, message: Message, sourcePeerType: MediaAutoDownloadPeerType?, navigationController: NavigationController) {
-    if let (webpage, anchor) = instantPageAndAnchor(message: message) {
-        let pageController = InstantPageController(context: context, webPage: webpage, sourcePeerType: sourcePeerType ?? .channel, anchor: anchor)
-        navigationController.pushViewController(pageController)
+func makeInstantPageControllerImpl(context: AccountContext, message: Message, sourcePeerType: MediaAutoDownloadPeerType?) -> ViewController? {
+    guard let (webpage, anchor) = instantPageAndAnchor(message: message) else {
+        return nil
     }
+    let sourceLocation = InstantPageSourceLocation(userLocation: .peer(message.id.peerId), peerType: sourcePeerType ?? .channel)
+    return makeInstantPageControllerImpl(context: context, webPage: webpage, anchor: anchor, sourceLocation: sourceLocation)
 }
 
-func openChatWallpaper(context: AccountContext, message: Message, present: @escaping (ViewController, Any?) -> Void) {
+func makeInstantPageControllerImpl(context: AccountContext, webPage: TelegramMediaWebpage, anchor: String?, sourceLocation: InstantPageSourceLocation) -> ViewController {
+    return BrowserScreen(context: context, subject: .instantPage(webPage: webPage, anchor: anchor, sourceLocation: sourceLocation, preloadedResources: nil))
+}
+
+func openChatWallpaperImpl(context: AccountContext, message: Message, present: @escaping (ViewController, Any?) -> Void) {
     for media in message.media {
         if let webpage = media as? TelegramMediaWebpage, case let .Loaded(content) = webpage.content {
             let _ = (context.sharedContext.resolveUrl(context: context, peerId: nil, url: content.url, skipUrlAuth: true)
-            |> deliverOnMainQueue).start(next: { resolvedUrl in
+            |> deliverOnMainQueue).startStandalone(next: { resolvedUrl in
                 if case let .wallpaper(parameter) = resolvedUrl {
                     let source: WallpaperListSource
                     switch parameter {
@@ -293,7 +442,7 @@ func openChatTheme(context: AccountContext, message: Message, pushController: @e
     for media in message.media {
         if let webpage = media as? TelegramMediaWebpage, case let .Loaded(content) = webpage.content {
             let _ = (context.sharedContext.resolveUrl(context: context, peerId: nil, url: content.url, skipUrlAuth: true)
-            |> deliverOnMainQueue).start(next: { resolvedUrl in
+            |> deliverOnMainQueue).startStandalone(next: { resolvedUrl in
                 var file: TelegramMediaFile?
                 var settings: TelegramThemeSettings?
                 let themeMimeType = "application/x-tgtheme-ios"

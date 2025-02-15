@@ -40,6 +40,9 @@ swift_library(
         "//submodules/TelegramUI/Components/MultiAnimationRenderer:MultiAnimationRenderer",
         "//submodules/StickerPeekUI:StickerPeekUI",
         "//submodules/Pasteboard:Pasteboard",
+        "//submodules/TelegramUI/Components/Stickers/StickerPackEditTitleController",
+        "//submodules/TelegramUI/Components/CameraScreen",
+        "//submodules/TelegramUI/Components/EmojiStatusComponent",
     ],
     visibility = [
         "//visibility:public",

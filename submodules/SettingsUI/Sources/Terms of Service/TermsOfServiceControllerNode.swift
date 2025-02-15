@@ -1,7 +1,6 @@
 import Foundation
 import UIKit
 import TelegramCore
-import Postbox
 import SwiftSignalKit
 import Display
 import AsyncDisplayKit
@@ -120,7 +119,7 @@ final class TermsOfServiceControllerNode: ViewControllerTracingNode {
         self.leftActionNode.addTarget(self, action: #selector(self.leftActionPressed), forControlEvents: .touchUpInside)
         self.rightActionNode.addTarget(self, action: #selector(self.rightActionPressed), forControlEvents: .touchUpInside)
         
-        self.contentTextNode.linkHighlightColor = self.presentationData.theme.list.itemAccentColor.withAlphaComponent(0.5)
+        self.contentTextNode.linkHighlightColor = self.presentationData.theme.list.itemAccentColor.withAlphaComponent(0.2)
         self.contentTextNode.highlightAttributeAction = { attributes in
             if let _ = attributes[NSAttributedString.Key(rawValue: TelegramTextAttributes.URL)] {
                 return NSAttributedString.Key(rawValue: TelegramTextAttributes.URL)
@@ -180,7 +179,7 @@ final class TermsOfServiceControllerNode: ViewControllerTracingNode {
                         UIPasteboard.general.string = url
                         
                         if let strongSelf = self {
-                            strongSelf.present(UndoOverlayController(presentationData: strongSelf.presentationData, content: .linkCopied(text: strongSelf.presentationData.strings.Conversation_LinkCopied), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), nil)
+                            strongSelf.present(UndoOverlayController(presentationData: strongSelf.presentationData, content: .linkCopied(title: nil, text: strongSelf.presentationData.strings.Conversation_LinkCopied), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), nil)
                         }
                     })
                 ]), ActionSheetItemGroup(items: [

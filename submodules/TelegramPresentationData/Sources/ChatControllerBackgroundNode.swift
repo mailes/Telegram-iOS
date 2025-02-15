@@ -8,6 +8,7 @@ import Postbox
 import MediaResources
 import AppBundle
 import TinyThumbnail
+import FastBlur
 
 private var backgroundImageForWallpaper: (TelegramWallpaper, Bool, UIImage)?
 
@@ -33,7 +34,7 @@ public func chatControllerBackgroundImage(theme: PresentationTheme?, wallpaper i
     } else {
         var succeed = true
         switch wallpaper {
-            case .builtin:
+            case .builtin, .emoticon:
                 if let filePath = getAppBundle().path(forResource: "ChatWallpaperBuiltin0", ofType: "jpg") {
                     backgroundImage = UIImage(contentsOfFile: filePath)?.precomposed()
                 }
@@ -113,7 +114,7 @@ public func chatControllerBackgroundImageSignal(wallpaper: TelegramWallpaper, me
         }
         
         switch wallpaper {
-            case .builtin:
+            case .builtin, .emoticon:
                 if let filePath = getAppBundle().path(forResource: "ChatWallpaperBuiltin0", ofType: "jpg") {
                     return .single((UIImage(contentsOfFile: filePath)?.precomposed(), true))
                     |> afterNext { image in
@@ -189,7 +190,7 @@ public func chatControllerBackgroundImageSignal(wallpaper: TelegramWallpaper, me
                             }
                         } else {
                             return Signal { subscriber in
-                                let fetch = fetchedMediaResource(mediaBox: accountMediaBox, reference: MediaResourceReference.wallpaper(wallpaper: WallpaperReference.slug(file.slug), resource: file.file.resource)).start()
+                                let fetch = fetchedMediaResource(mediaBox: accountMediaBox, userLocation: .other, userContentType: .other, reference: MediaResourceReference.wallpaper(wallpaper: WallpaperReference.slug(file.slug), resource: file.file.resource)).start()
                                 var didOutputBlurred = false
                                 let data = accountMediaBox.cachedResourceRepresentation(file.file.resource, representation: representation, complete: true, fetch: true, attemptSynchronously: true).start(next: { data in
                                     if data.complete {
@@ -200,8 +201,25 @@ public func chatControllerBackgroundImageSignal(wallpaper: TelegramWallpaper, me
                                     } else if !didOutputBlurred {
                                         didOutputBlurred = true
                                         if let immediateThumbnailData = file.file.immediateThumbnailData, let decodedData = decodeTinyThumbnail(data: immediateThumbnailData) {
-                                            if let image = UIImage(data: decodedData)?.precomposed() {
-                                                subscriber.putNext((image, false))
+                                            if let thumbnailImage = UIImage(data: decodedData)?.precomposed() {
+                                                let thumbnailContextSize = CGSize(width: thumbnailImage.size.width * 6.0, height: thumbnailImage.size.height * 6.0)
+                                                guard let thumbnailContext = DrawingContext(size: thumbnailContextSize, scale: 1.0) else {
+                                                    subscriber.putNext((thumbnailImage, false))
+                                                    return
+                                                }
+                                                thumbnailContext.withFlippedContext { c in
+                                                    if let image = thumbnailImage.cgImage {
+                                                        c.draw(image, in: CGRect(origin: CGPoint(), size: thumbnailContextSize))
+                                                    }
+                                                }
+                                                telegramFastBlurMore(Int32(thumbnailContextSize.width), Int32(thumbnailContextSize.height), Int32(thumbnailContext.bytesPerRow), thumbnailContext.bytes)
+                                                telegramFastBlurMore(Int32(thumbnailContextSize.width), Int32(thumbnailContextSize.height), Int32(thumbnailContext.bytesPerRow), thumbnailContext.bytes)
+                                                
+                                                if let blurredThumbnailImage = thumbnailContext.generateImage() {
+                                                    subscriber.putNext((blurredThumbnailImage, false))
+                                                } else {
+                                                    subscriber.putNext((thumbnailImage, false))
+                                                }
                                             }
                                         }
                                     }
@@ -227,7 +245,7 @@ public func chatControllerBackgroundImageSignal(wallpaper: TelegramWallpaper, me
                             }
                         } else {
                             return Signal { subscriber in
-                                let fetch = fetchedMediaResource(mediaBox: accountMediaBox, reference: MediaResourceReference.wallpaper(wallpaper: WallpaperReference.slug(file.slug), resource: file.file.resource)).start()
+                                let fetch = fetchedMediaResource(mediaBox: accountMediaBox, userLocation: .other, userContentType: .other, reference: MediaResourceReference.wallpaper(wallpaper: WallpaperReference.slug(file.slug), resource: file.file.resource)).start()
                                 var didOutputBlurred = false
                                 let data = accountMediaBox.resourceData(file.file.resource).start(next: { data in
                                     if data.complete {
@@ -238,8 +256,25 @@ public func chatControllerBackgroundImageSignal(wallpaper: TelegramWallpaper, me
                                     } else if !didOutputBlurred {
                                         didOutputBlurred = true
                                         if let immediateThumbnailData = file.file.immediateThumbnailData, let decodedData = decodeTinyThumbnail(data: immediateThumbnailData) {
-                                            if let image = UIImage(data: decodedData)?.precomposed() {
-                                                subscriber.putNext((image, false))
+                                            if let thumbnailImage = UIImage(data: decodedData)?.precomposed() {
+                                                let thumbnailContextSize = CGSize(width: thumbnailImage.size.width * 6.0, height: thumbnailImage.size.height * 6.0)
+                                                guard let thumbnailContext = DrawingContext(size: thumbnailContextSize, scale: 1.0) else {
+                                                    subscriber.putNext((thumbnailImage, false))
+                                                    return
+                                                }
+                                                thumbnailContext.withFlippedContext { c in
+                                                    if let image = thumbnailImage.cgImage {
+                                                        c.draw(image, in: CGRect(origin: CGPoint(), size: thumbnailContextSize))
+                                                    }
+                                                }
+                                                telegramFastBlurMore(Int32(thumbnailContextSize.width), Int32(thumbnailContextSize.height), Int32(thumbnailContext.bytesPerRow), thumbnailContext.bytes)
+                                                telegramFastBlurMore(Int32(thumbnailContextSize.width), Int32(thumbnailContextSize.height), Int32(thumbnailContext.bytesPerRow), thumbnailContext.bytes)
+                                                
+                                                if let blurredThumbnailImage = thumbnailContext.generateImage() {
+                                                    subscriber.putNext((blurredThumbnailImage, false))
+                                                } else {
+                                                    subscriber.putNext((thumbnailImage, false))
+                                                }
                                             }
                                         }
                                     }

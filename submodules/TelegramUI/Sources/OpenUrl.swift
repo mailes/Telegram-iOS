@@ -25,8 +25,8 @@ public struct ParsedSecureIdUrl {
     public let opaqueNonce: Data
 }
 
-public func parseProxyUrl(_ url: URL) -> ProxyServerSettings? {
-    guard let proxy = parseProxyUrl(url.absoluteString) else {
+public func parseProxyUrl(sharedContext: SharedAccountContext, url: URL) -> ProxyServerSettings? {
+    guard let proxy = parseProxyUrl(sharedContext: sharedContext, url: url.absoluteString) else {
         return nil
     }
     if let secret = proxy.secret, let _ = MTProxySecret.parseData(secret) {
@@ -107,14 +107,14 @@ public func parseSecureIdUrl(_ url: URL) -> ParsedSecureIdUrl? {
     return nil
 }
 
-public func parseConfirmationCodeUrl(_ url: URL) -> Int? {
+public func parseConfirmationCodeUrl(sharedContext: SharedAccountContext, url: URL) -> Int? {
     if url.pathComponents.count == 3 && url.pathComponents[1].lowercased() == "login" {
         if let code = Int(url.pathComponents[2]) {
             return code
         }
     }
     if url.scheme == "tg" {
-        if let host = url.host, let query = url.query, let parsedUrl = parseInternalUrl(query: host + "?" + query) {
+        if let host = url.host, let query = url.query, let parsedUrl = parseInternalUrl(sharedContext: sharedContext, context: nil, query: host + "?" + query) {
             switch parsedUrl {
                 case let .confirmationCode(code):
                     return code
@@ -141,6 +141,13 @@ func formattedConfirmationCode(_ code: Int) -> String {
 
 func openExternalUrlImpl(context: AccountContext, urlContext: OpenURLContext, url: String, forceExternal: Bool, presentationData: PresentationData, navigationController: NavigationController?, dismissInput: @escaping () -> Void) {
     if forceExternal || url.lowercased().hasPrefix("tel:") || url.lowercased().hasPrefix("calshow:") {
+        if url.lowercased().hasPrefix("tel:+888") {
+            context.sharedContext.presentGlobalController(textAlertController(context: context, title: nil, text: presentationData.strings.Conversation_CantPhoneCallAnonymousNumberError, actions: [
+                TextAlertAction(type: .genericAction, title: presentationData.strings.Common_OK, action: {
+                }),
+            ], parseMarkdown: true), nil)
+            return
+        }
         context.sharedContext.applicationBindings.openUrl(url)
         return
     }
@@ -161,7 +168,7 @@ func openExternalUrlImpl(context: AccountContext, urlContext: OpenURLContext, ur
         return
     }
     
-    guard let parsedUrl = parsedUrlValue else {
+    guard var parsedUrl = parsedUrlValue else {
         return
     }
     
@@ -190,17 +197,17 @@ func openExternalUrlImpl(context: AccountContext, urlContext: OpenURLContext, ur
             if case let .externalUrl(value) = resolved {
                 context.sharedContext.applicationBindings.openUrl(value)
             } else {
-                context.sharedContext.openResolvedUrl(resolved, context: context, urlContext: .generic, navigationController: navigationController, forceExternal: false, openPeer: { peer, navigation in
+                context.sharedContext.openResolvedUrl(resolved, context: context, urlContext: .generic, navigationController: navigationController, forceExternal: false, forceUpdate: false, openPeer: { peer, navigation in
                     switch navigation {
                         case .info:
                             if let infoController = context.sharedContext.makePeerInfoController(context: context, updatedPresentationData: nil, peer: peer._asPeer(), mode: .generic, avatarInitiallyExpanded: false, fromChat: false, requestsContext: nil) {
                                 context.sharedContext.applicationBindings.dismissNativeController()
                                 navigationController?.pushViewController(infoController)
                             }
-                        case let .chat(_, subject, peekData):
+                        case let .chat(textInputState, subject, peekData):
                             context.sharedContext.applicationBindings.dismissNativeController()
                             if let navigationController = navigationController {
-                                context.sharedContext.navigateToChatController(NavigateToChatControllerParams(navigationController: navigationController, context: context, chatLocation: .peer(peer), subject: subject, peekData: peekData))
+                                context.sharedContext.navigateToChatController(NavigateToChatControllerParams(navigationController: navigationController, context: context, chatLocation: .peer(peer), subject: subject, updateTextInputState: !peer.id.isGroupOrChannel ? textInputState : nil, peekData: peekData))
                             }
                         case let .withBotStartPayload(payload):
                             context.sharedContext.applicationBindings.dismissNativeController()
@@ -212,11 +219,18 @@ func openExternalUrlImpl(context: AccountContext, urlContext: OpenURLContext, ur
                             if let navigationController = navigationController {
                                 context.sharedContext.navigateToChatController(NavigateToChatControllerParams(navigationController: navigationController, context: context, chatLocation: .peer(peer), attachBotStart: attachBotStart))
                             }
+                        case let .withBotApp(botAppStart):
+                            context.sharedContext.applicationBindings.dismissNativeController()
+                            if let navigationController = navigationController {
+                                context.sharedContext.navigateToChatController(NavigateToChatControllerParams(navigationController: navigationController, context: context, chatLocation: .peer(peer), botAppStart: botAppStart))
+                            }
                         default:
                             break
                     }
-                }, sendFile: nil,
+                }, 
+                sendFile: nil,
                 sendSticker: nil,
+                sendEmoji: nil,
                 requestMessageActionUrlAuth: nil,
                 joinVoiceChat: { peerId, invite, call in
                     
@@ -228,13 +242,21 @@ func openExternalUrlImpl(context: AccountContext, urlContext: OpenURLContext, ur
                     context.sharedContext.applicationBindings.getWindowHost()?.present(c, on: .root, blockInteraction: false, completion: {})
                 }, dismissInput: {
                     dismissInput()
-                }, contentContext: nil)
+                }, contentContext: nil, progress: nil, completion: nil)
             }
         }
         
         let handleInternalUrl: (String) -> Void = { url in
             let _ = (context.sharedContext.resolveUrl(context: context, peerId: nil, url: url, skipUrlAuth: true)
-            |> deliverOnMainQueue).start(next: handleResolvedUrl)
+            |> deliverOnMainQueue).startStandalone(next: handleResolvedUrl)
+        }
+        
+        if let scheme = parsedUrl.scheme, (scheme == "tg" || scheme == context.sharedContext.applicationBindings.appSpecificScheme) {
+            if parsedUrl.host == "tonsite" {
+                if let value = URL(string: "tonsite:/" + parsedUrl.path) {
+                    parsedUrl = value
+                }
+            }
         }
         
         if let scheme = parsedUrl.scheme, (scheme == "tg" || scheme == context.sharedContext.applicationBindings.appSpecificScheme) {
@@ -514,7 +536,7 @@ func openExternalUrlImpl(context: AccountContext, urlContext: OpenURLContext, ur
                         
                         if let id = id, !id.isEmpty, let idValue = Int64(id), idValue > 0 {
                             let _ = (context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: PeerId(namespace: Namespaces.Peer.CloudUser, id: PeerId.Id._internalFromInt64Value(idValue))))
-                            |> deliverOnMainQueue).start(next: { peer in
+                            |> deliverOnMainQueue).startStandalone(next: { peer in
                                 if let peer = peer, let controller = context.sharedContext.makePeerInfoController(context: context, updatedPresentationData: nil, peer: peer._asPeer(), mode: .generic, avatarInitiallyExpanded: false, fromChat: false, requestsContext: nil) {
                                     navigationController?.pushViewController(controller)
                                 }
@@ -547,6 +569,22 @@ func openExternalUrlImpl(context: AccountContext, urlContext: OpenURLContext, ur
                         }
                         if let code = code {
                             convertedUrl = "https://t.me/login/\(code)"
+                        }
+                    }
+                } else if parsedUrl.host == "contact" {
+                    if let components = URLComponents(string: "/?" + query) {
+                        var token: String?
+                        if let queryItems = components.queryItems {
+                            for queryItem in queryItems {
+                                if let value = queryItem.value {
+                                    if queryItem.name == "token" {
+                                        token = value
+                                    }
+                                }
+                            }
+                        }
+                        if let token = token {
+                            convertedUrl = "https://t.me/contact/\(token)"
                         }
                     }
                 } else if parsedUrl.host == "confirmphone" {
@@ -621,6 +659,7 @@ func openExternalUrlImpl(context: AccountContext, urlContext: OpenURLContext, ur
                     if let components = URLComponents(string: "/?" + query) {
                         var channelId: Int64?
                         var postId: Int32?
+                        var threadId: Int64?
                         if let queryItems = components.queryItems {
                             for queryItem in queryItems {
                                 if let value = queryItem.value {
@@ -628,12 +667,54 @@ func openExternalUrlImpl(context: AccountContext, urlContext: OpenURLContext, ur
                                         channelId = Int64(value)
                                     } else if queryItem.name == "post" {
                                         postId = Int32(value)
+                                    } else if queryItem.name == "thread" {
+                                        threadId = Int64(value)
                                     }
                                 }
                             }
                         }
-                        if let channelId = channelId, let postId = postId {
-                            convertedUrl = "https://t.me/c/\(channelId)/\(postId)"
+                        if let channelId = channelId {
+                            if let postId = postId {
+                                if let threadId = threadId {
+                                    convertedUrl = "https://t.me/c/\(channelId)/\(threadId)/\(postId)"
+                                } else {
+                                    convertedUrl = "https://t.me/c/\(channelId)/\(postId)"
+                                }
+                            } else if let threadId = threadId {
+                                convertedUrl = "https://t.me/c/\(channelId)/\(threadId)"
+                            }
+                        }
+                    }
+                } else if parsedUrl.host == "giftcode" {
+                    if let components = URLComponents(string: "/?" + query) {
+                        var slug: String?
+                        if let queryItems = components.queryItems {
+                            for queryItem in queryItems {
+                                if let value = queryItem.value {
+                                    if queryItem.name == "slug" {
+                                        slug = value
+                                    }
+                                }
+                            }
+                        }
+                        if let slug {
+                            convertedUrl = "https://t.me/giftcode/\(slug)"
+                        }
+                    }
+                } else if parsedUrl.host == "message" {
+                    if let components = URLComponents(string: "/?" + query) {
+                        var parameter: String?
+                        if let queryItems = components.queryItems {
+                            for queryItem in queryItems {
+                                if let value = queryItem.value {
+                                    if queryItem.name == "slug" {
+                                        parameter = value
+                                    }
+                                }
+                            }
+                        }
+                        if let parameter {
+                            convertedUrl = "https://t.me/m/\(parameter)"
                         }
                     }
                 }
@@ -652,6 +733,12 @@ func openExternalUrlImpl(context: AccountContext, urlContext: OpenURLContext, ur
                         var attach: String?
                         var startAttach: String?
                         var choose: String?
+                        var threadId: Int64?
+                        var appName: String?
+                        var startApp: String?
+                        var text: String?
+                        var profile: Bool = false
+                        var referrer: String?
                         if let queryItems = components.queryItems {
                             for queryItem in queryItems {
                                 if let value = queryItem.value {
@@ -677,6 +764,16 @@ func openExternalUrlImpl(context: AccountContext, urlContext: OpenURLContext, ur
                                         startAttach = value
                                     } else if queryItem.name == "choose" {
                                         choose = value
+                                    } else if queryItem.name == "thread" {
+                                        threadId = Int64(value)
+                                    } else if queryItem.name == "appname" {
+                                        appName = value
+                                    } else if queryItem.name == "startapp" {
+                                        startApp = value
+                                    } else if queryItem.name == "text" {
+                                        text = value
+                                    } else if queryItem.name == "ref" {
+                                        referrer = value
                                     }
                                 } else if ["voicechat", "videochat", "livestream"].contains(queryItem.name) {
                                     voiceChat = ""
@@ -686,16 +783,37 @@ func openExternalUrlImpl(context: AccountContext, urlContext: OpenURLContext, ur
                                     startGroup = ""
                                 } else if queryItem.name == "startchannel" {
                                     startChannel = ""
+                                } else if queryItem.name == "profile" {
+                                    profile = true
+                                } else if queryItem.name == "startapp" {
+                                    startApp = ""
                                 }
                             }
                         }
                         
                         if let phone = phone {
-                            convertedUrl = "https://t.me/+\(phone)"
+                            var result = "https://t.me/+\(phone)"
+                            if let text = text {
+                                result += "?text=\(text)"
+                            }
+                            convertedUrl = result
                         } else if let domain = domain {
                             var result = "https://t.me/\(domain)"
-                            if let post = post, let postValue = Int(post) {
-                                result += "/\(postValue)"
+                            if let appName {
+                                result += "/\(appName)"
+                            }
+                            if let startApp {
+                                result += "?startapp=\(startApp)"
+                            }
+                            if let threadId {
+                                result += "/\(threadId)"
+                                if let post, let postValue = Int(post) {
+                                    result += "/\(postValue)"
+                                }
+                            } else {
+                                if let post, let postValue = Int(post) {
+                                    result += "/\(postValue)"
+                                }
                             }
                             if let start = start {
                                 result += "?start=\(start)"
@@ -743,7 +861,20 @@ func openExternalUrlImpl(context: AccountContext, urlContext: OpenURLContext, ur
                                     result += "&choose=\(choose)"
                                 }
                             }
+                            if let text = text {
+                                result += "?text=\(text)"
+                            }
+                            if let referrer {
+                                result += "?ref=\(referrer)"
+                            }
                             convertedUrl = result
+                        }
+                        if profile, let current = convertedUrl {
+                            if current.contains("?") {
+                                convertedUrl = current + "&profile"
+                            } else {
+                                convertedUrl = current + "?profile"
+                            }
                         }
                     }
                 } else if parsedUrl.host == "hostOverride" {
@@ -763,7 +894,7 @@ func openExternalUrlImpl(context: AccountContext, urlContext: OpenURLContext, ur
                                 var settings = settings
                                 settings.backupHostOverride = host
                                 return settings
-                            }).start()
+                            }).startStandalone()
                             return
                         }
                     }
@@ -781,6 +912,76 @@ func openExternalUrlImpl(context: AccountContext, urlContext: OpenURLContext, ur
                         }
                     }
                     handleResolvedUrl(.premiumOffer(reference: reference))
+                } else if parsedUrl.host == "premium_multigift" {
+                    var reference: String?
+                    if let components = URLComponents(string: "/?" + query) {
+                        if let queryItems = components.queryItems {
+                            for queryItem in queryItems {
+                                if let value = queryItem.value {
+                                    if queryItem.name == "ref" {
+                                        reference = value
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    handleResolvedUrl(.premiumMultiGift(reference: reference))
+                } else if parsedUrl.host == "stars_topup" {
+                    var amount: Int64?
+                    var purpose: String?
+                    if let components = URLComponents(string: "/?" + query) {
+                        if let queryItems = components.queryItems {
+                            for queryItem in queryItems {
+                                if let value = queryItem.value {
+                                    if queryItem.name == "balance", let amountValue = Int64(value), amountValue > 0 && amountValue < Int32.max {
+                                        amount = amountValue
+                                    } else if queryItem.name == "purpose" {
+                                        purpose = value
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if let amount {
+                        handleResolvedUrl(.starsTopup(amount: amount, purpose: purpose))
+                    }
+                } else if parsedUrl.host == "addlist" {
+                    if let components = URLComponents(string: "/?" + query) {
+                        var slug: String?
+                        if let queryItems = components.queryItems {
+                            for queryItem in queryItems {
+                                if let value = queryItem.value {
+                                    if queryItem.name == "slug" {
+                                        slug = value
+                                    }
+                                }
+                            }
+                        }
+                        if let slug = slug {
+                            convertedUrl = "https://t.me/addlist/\(slug)"
+                        }
+                    }
+                } else if parsedUrl.host == "boost" {
+                    if let components = URLComponents(string: "/?" + query) {
+                        var domain: String?
+                        var channel: Int64?
+                        if let queryItems = components.queryItems {
+                            for queryItem in queryItems {
+                                if let value = queryItem.value {
+                                    if queryItem.name == "domain" {
+                                        domain = value
+                                    } else if queryItem.name == "channel" {
+                                        channel = Int64(value)
+                                    }
+                                }
+                            }
+                        }
+                        if let domain {
+                            convertedUrl = "https://t.me/\(domain)?boost"
+                        } else if let channel {
+                            convertedUrl = "https://t.me/c/\(channel)?boost"
+                        }
+                    }
                 }
             } else {
                 if parsedUrl.host == "importStickers" {
@@ -789,12 +990,16 @@ func openExternalUrlImpl(context: AccountContext, urlContext: OpenURLContext, ur
                     if let path = parsedUrl.pathComponents.last {
                         var section: ResolvedUrlSettingsSection?
                         switch path {
-                            case "themes":
-                                section = .theme
-                            case "devices":
-                                section = .devices
-                            default:
-                                break
+                        case "themes":
+                            section = .theme
+                        case "devices":
+                            section = .devices
+                        case "password":
+                            section = .twoStepAuth
+                        case "enable_log":
+                            section = .enableLog
+                        default:
+                            break
                         }
                         if let section = section {
                             handleResolvedUrl(.settings(section))
@@ -830,7 +1035,16 @@ func openExternalUrlImpl(context: AccountContext, urlContext: OpenURLContext, ur
             return
         }
         
-        if parsedUrl.scheme == "http" || parsedUrl.scheme == "https" {
+        let urlScheme = (parsedUrl.scheme ?? "").lowercased()
+        var isInternetUrl = false
+        if  ["http", "https"].contains(urlScheme) {
+            isInternetUrl = true
+        }
+        if urlScheme == "tonsite" {
+            isInternetUrl = true
+        }
+        
+        if isInternetUrl {
             if parsedUrl.host == "t.me" || parsedUrl.host == "telegram.me" {
                 handleInternalUrl(parsedUrl.absoluteString)
             } else {
@@ -838,48 +1052,68 @@ func openExternalUrlImpl(context: AccountContext, urlContext: OpenURLContext, ur
                 |> take(1)
                 |> map { sharedData, accessChallengeData -> WebBrowserSettings in
                     let passcodeSettings = sharedData.entries[ApplicationSpecificSharedDataKeys.presentationPasscodeSettings]?.get(PresentationPasscodeSettings.self) ?? PresentationPasscodeSettings.defaultSettings
+                    
+                    var settings: WebBrowserSettings
+                    if let current = sharedData.entries[ApplicationSpecificSharedDataKeys.webBrowserSettings]?.get(WebBrowserSettings.self) {
+                        settings = current
+                    } else {
+                        settings = .defaultSettings
+                    }
                     if accessChallengeData.data.isLockable {
-                        if passcodeSettings.autolockTimeout != nil {
-                            return WebBrowserSettings(defaultWebBrowser: "Safari")
+                        if passcodeSettings.autolockTimeout != nil && settings.defaultWebBrowser == "inApp" {
+                            settings = WebBrowserSettings(defaultWebBrowser: "safari", exceptions: [])
                         }
                     }
-                    
-                    if let current = sharedData.entries[ApplicationSpecificSharedDataKeys.webBrowserSettings]?.get(WebBrowserSettings.self) {
-                        return current   
-                    } else {
-                        return WebBrowserSettings.defaultSettings
-                    }
+                    return settings
                 }
 
+//                var isCompact = false
+//                if let metrics = navigationController?.validLayout?.metrics, case .compact = metrics.widthClass {
+//                    isCompact = true
+//                }
+                
                 let _ = (settings
-                |> deliverOnMainQueue).start(next: { settings in
-                    if settings.defaultWebBrowser == nil {
-//                        let controller = BrowserScreen(context: context, subject: .webPage(parsedUrl.absoluteString))
-//                        navigationController?.pushViewController(controller)
-                        if #available(iOSApplicationExtension 9.0, iOS 9.0, *) {
-                            if let window = navigationController?.view.window {
+                |> deliverOnMainQueue).startStandalone(next: { settings in
+                    var isTonSite = false
+                    if let host = parsedUrl.host, host.lowercased().hasSuffix(".ton") {
+                        isTonSite = true
+                    } else if let scheme = parsedUrl.scheme, scheme.lowercased().hasPrefix("tonsite") {
+                        isTonSite = true
+                    }
+                    
+                    if let defaultWebBrowser = settings.defaultWebBrowser, defaultWebBrowser != "inApp" && !isTonSite {
+                        let openInOptions = availableOpenInOptions(context: context, item: .url(url: url))
+                        if let option = openInOptions.first(where: { $0.identifier == settings.defaultWebBrowser }) {
+                            if case let .openUrl(openInUrl) = option.action() {
+                                context.sharedContext.applicationBindings.openUrl(openInUrl)
+                            } else {
+                                context.sharedContext.applicationBindings.openUrl(url)
+                            }
+                        } else {
+                            context.sharedContext.applicationBindings.openUrl(url)
+                        }
+                    } else {
+                        var isExceptedDomain = false
+                        let host = ".\((parsedUrl.host ?? "").lowercased())"
+                        for exception in settings.exceptions {
+                            if host.hasSuffix(".\(exception.domain)") {
+                                isExceptedDomain = true
+                                break
+                            }
+                        }
+
+                        if (settings.defaultWebBrowser == nil && !isExceptedDomain) || isTonSite {
+                            let controller = BrowserScreen(context: context, subject: .webPage(url: parsedUrl.absoluteString))
+                            navigationController?.pushViewController(controller)
+                        } else {
+                            if let window = navigationController?.view.window, !isExceptedDomain {
                                 let controller = SFSafariViewController(url: parsedUrl)
-                                if #available(iOSApplicationExtension 10.0, iOS 10.0, *) {
-                                    controller.preferredBarTintColor = presentationData.theme.rootController.navigationBar.opaqueBackgroundColor
-                                    controller.preferredControlTintColor = presentationData.theme.rootController.navigationBar.accentTextColor
-                                }
+                                controller.preferredBarTintColor = presentationData.theme.rootController.navigationBar.opaqueBackgroundColor
+                                controller.preferredControlTintColor = presentationData.theme.rootController.navigationBar.accentTextColor
                                 window.rootViewController?.present(controller, animated: true)
                             } else {
                                 context.sharedContext.applicationBindings.openUrl(parsedUrl.absoluteString)
                             }
-                        } else {
-                            context.sharedContext.applicationBindings.openUrl(url)
-                        }
-                    } else {
-                        let openInOptions = availableOpenInOptions(context: context, item: .url(url: url))
-                        if let option = openInOptions.first(where: { $0.identifier == settings.defaultWebBrowser }) {
-                            if case let .openUrl(url) = option.action() {
-                                context.sharedContext.applicationBindings.openUrl(url)
-                            } else {
-                                context.sharedContext.applicationBindings.openUrl(url)
-                            }
-                        } else {
-                            context.sharedContext.applicationBindings.openUrl(url)
                         }
                     }
                 })

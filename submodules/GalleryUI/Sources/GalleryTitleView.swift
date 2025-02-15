@@ -34,14 +34,14 @@ final class GalleryTitleView: UIView, NavigationBarTitleView {
     }
     
     func setMessage(_ message: Message, presentationData: PresentationData, accountPeerId: PeerId) {
-        let authorNameText = stringForFullAuthorName(message: EngineMessage(message), strings: presentationData.strings, nameDisplayOrder: presentationData.nameDisplayOrder, accountPeerId: accountPeerId)
+        let authorNameText = stringForFullAuthorName(message: EngineMessage(message), strings: presentationData.strings, nameDisplayOrder: presentationData.nameDisplayOrder, accountPeerId: accountPeerId).joined(separator: " → ")
         let dateText = humanReadableStringForTimestamp(strings: presentationData.strings, dateTimeFormat: presentationData.dateTimeFormat, timestamp: message.timestamp).string
         
         self.authorNameNode.attributedText = NSAttributedString(string: authorNameText, font: titleFont, textColor: .white)
         self.dateNode.attributedText = NSAttributedString(string: dateText, font: dateFont, textColor: .white)
     }
     
-    func updateLayout(size: CGSize, clearBounds: CGRect, transition: ContainedViewLayoutTransition) {
+    func updateLayout(size: CGSize, clearBounds: CGRect, transition: ContainedViewLayoutTransition) -> CGRect {
         let leftInset: CGFloat = 0.0
         let rightInset: CGFloat = 0.0
         
@@ -55,6 +55,8 @@ final class GalleryTitleView: UIView, NavigationBarTitleView {
             self.authorNameNode.frame = CGRect(origin: CGPoint(x: floor((size.width - authorNameSize.width) / 2.0), y: floor((size.height - dateSize.height - authorNameSize.height - labelsSpacing) / 2.0)), size: authorNameSize)
             self.dateNode.frame = CGRect(origin: CGPoint(x: floor((size.width - dateSize.width) / 2.0), y: floor((size.height - dateSize.height - authorNameSize.height - labelsSpacing) / 2.0) + authorNameSize.height + labelsSpacing), size: dateSize)
         }
+        
+        return CGRect()
     }
     
     func animateLayoutTransition() {

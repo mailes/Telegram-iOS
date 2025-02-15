@@ -40,7 +40,9 @@ final class ReactionContextBackgroundNode: ASDisplayNode {
     private let smallCircleSize: CGFloat
     
     private let backgroundView: BlurredBackgroundView
-    private(set) var vibrancyEffectView: UIVisualEffectView?
+    private let backgroundTintView: UIView
+    let backgroundTintMaskContainer: UIView
+    let vibrantExpandedContentContainer: UIView
     
     private let maskLayer: SimpleLayer
     private let backgroundClippingLayer: SimpleLayer
@@ -57,7 +59,10 @@ final class ReactionContextBackgroundNode: ASDisplayNode {
         self.largeCircleSize = largeCircleSize
         self.smallCircleSize = smallCircleSize
         
-        self.backgroundView = BlurredBackgroundView(color: .clear, enableBlur: true)
+        self.backgroundView = BlurredBackgroundView(color: nil, enableBlur: true)
+        
+        self.backgroundTintView = UIView()
+        self.backgroundTintMaskContainer = UIView()
         
         self.maskLayer = SimpleLayer()
         self.backgroundClippingLayer = SimpleLayer()
@@ -84,6 +89,9 @@ final class ReactionContextBackgroundNode: ASDisplayNode {
             self.smallCircleLayer.cornerCurve = .circular
         }
         
+        self.vibrantExpandedContentContainer = UIView()
+        self.backgroundTintMaskContainer.addSubview(self.vibrantExpandedContentContainer)
+        
         super.init()
         
         self.layer.addSublayer(self.backgroundShadowLayer)
@@ -93,6 +101,10 @@ final class ReactionContextBackgroundNode: ASDisplayNode {
         self.backgroundShadowLayer.opacity = 0.0
         self.largeCircleShadowLayer.opacity = 0.0
         self.smallCircleShadowLayer.opacity = 0.0
+        
+        self.backgroundView.addSubview(self.backgroundTintView)
+        
+        self.backgroundTintMaskContainer.backgroundColor = .white
         
         self.view.addSubview(self.backgroundView)
         
@@ -114,11 +126,14 @@ final class ReactionContextBackgroundNode: ASDisplayNode {
 
     func update(
         theme: PresentationTheme,
+        forceDark: Bool,
         size: CGSize,
         cloudSourcePoint: CGFloat,
         isLeftAligned: Bool,
         isMinimized: Bool,
         isCoveredByInput: Bool,
+        displayTail: Bool,
+        forceTailToRight: Bool,
         transition: ContainedViewLayoutTransition
     ) {
         let shadowInset: CGFloat = 15.0
@@ -127,23 +142,22 @@ final class ReactionContextBackgroundNode: ASDisplayNode {
             self.theme = theme
             
             if theme.overallDarkAppearance {
-                if let vibrancyEffectView = self.vibrancyEffectView {
-                    self.vibrancyEffectView = nil
-                    vibrancyEffectView.removeFromSuperview()
+                if let invertFilter = CALayer.colorInvert(), let filter = CALayer.luminanceToAlpha() {
+                    self.backgroundTintMaskContainer.layer.filters = [invertFilter, filter]
                 }
+                self.backgroundTintView.mask = self.backgroundTintMaskContainer
+                
+                self.backgroundView.updateColor(color: theme.contextMenu.backgroundColor, forceKeepBlur: true, transition: .immediate)
+                self.backgroundTintView.backgroundColor = UIColor(white: 1.0, alpha: 0.5)
             } else {
-                if self.vibrancyEffectView == nil {
-                    let style: UIBlurEffect.Style
-                    style = .extraLight
-                    let blurEffect = UIBlurEffect(style: style)
-                    let vibrancyEffect = UIVibrancyEffect(blurEffect: blurEffect)
-                    let vibrancyEffectView = UIVisualEffectView(effect: vibrancyEffect)
-                    self.vibrancyEffectView = vibrancyEffectView
-                    self.backgroundView.addSubview(vibrancyEffectView)
+                if let filter = CALayer.luminanceToAlpha() {
+                    self.backgroundTintMaskContainer.layer.filters = [filter]
                 }
+                self.backgroundTintView.mask = self.backgroundTintMaskContainer
+                
+                self.backgroundView.updateColor(color: .clear, forceKeepBlur: true, transition: .immediate)
+                self.backgroundTintView.backgroundColor = theme.contextMenu.backgroundColor
             }
-            
-            self.backgroundView.updateColor(color: theme.contextMenu.backgroundColor, transition: .immediate)
             
             let shadowColor = UIColor(white: 0.0, alpha: 0.4)
             
@@ -166,11 +180,14 @@ final class ReactionContextBackgroundNode: ASDisplayNode {
             backgroundMaskNodeFrame = backgroundMaskNodeFrame.offsetBy(dx: 0.0, dy: (updatedHeight - backgroundMaskNodeFrame.height) * 0.5)
         }
         
-        transition.updateCornerRadius(layer: self.backgroundClippingLayer, cornerRadius: 46.0 / 2.0)
+        transition.updateCornerRadius(layer: self.backgroundClippingLayer, cornerRadius: min(46.0 / 2.0, backgroundFrame.height / 2.0))
         
         let largeCircleFrame: CGRect
         let smallCircleFrame: CGRect
-        if isLeftAligned {
+        if forceTailToRight {
+            largeCircleFrame = CGRect(origin: CGPoint(x: cloudSourcePoint - floor(largeCircleSize / 2.0), y: size.height - largeCircleSize / 2.0), size: CGSize(width: largeCircleSize, height: largeCircleSize))
+            smallCircleFrame = CGRect(origin: CGPoint(x: largeCircleFrame.maxX - 3.0, y: largeCircleFrame.maxY + 2.0), size: CGSize(width: smallCircleSize, height: smallCircleSize))
+        } else if isLeftAligned {
             largeCircleFrame = CGRect(origin: CGPoint(x: cloudSourcePoint - floor(largeCircleSize / 2.0), y: size.height - largeCircleSize / 2.0), size: CGSize(width: largeCircleSize, height: largeCircleSize))
             smallCircleFrame = CGRect(origin: CGPoint(x: largeCircleFrame.maxX - 3.0, y: largeCircleFrame.maxY + 2.0), size: CGSize(width: smallCircleSize, height: smallCircleSize))
         } else {
@@ -188,19 +205,18 @@ final class ReactionContextBackgroundNode: ASDisplayNode {
         transition.updateFrame(layer: self.backgroundShadowLayer, frame: backgroundFrame.insetBy(dx: -shadowInset, dy: -shadowInset), beginWithCurrentState: true)
         transition.updateFrame(layer: self.largeCircleShadowLayer, frame: largeCircleFrame.insetBy(dx: -shadowInset, dy: -shadowInset), beginWithCurrentState: true)
         
-        transition.updateAlpha(layer: self.largeCircleLayer, alpha: isCoveredByInput ? 0.0 : 1.0)
-        transition.updateAlpha(layer: self.largeCircleShadowLayer, alpha: isCoveredByInput ? 0.0 : 1.0)
-        transition.updateAlpha(layer: self.smallCircleLayer, alpha: isCoveredByInput ? 0.0 : 1.0)
-        transition.updateAlpha(layer: self.smallCircleShadowLayer, alpha: isCoveredByInput ? 0.0 : 1.0)
+        transition.updateAlpha(layer: self.largeCircleLayer, alpha: (isCoveredByInput || !displayTail) ? 0.0 : 1.0)
+        transition.updateAlpha(layer: self.largeCircleShadowLayer, alpha: (isCoveredByInput || !displayTail) ? 0.0 : 1.0)
+        transition.updateAlpha(layer: self.smallCircleLayer, alpha: (isCoveredByInput || !displayTail) ? 0.0 : 1.0)
+        transition.updateAlpha(layer: self.smallCircleShadowLayer, alpha: (isCoveredByInput || !displayTail) ? 0.0 : 1.0)
         
         transition.updateFrame(layer: self.smallCircleShadowLayer, frame: smallCircleFrame.insetBy(dx: -shadowInset, dy: -shadowInset), beginWithCurrentState: true)
         
         transition.updateFrame(view: self.backgroundView, frame: contentBounds, beginWithCurrentState: true)
         self.backgroundView.update(size: contentBounds.size, transition: transition)
         
-        if let vibrancyEffectView = self.vibrancyEffectView {
-            transition.updateFrame(view: vibrancyEffectView, frame: CGRect(origin: CGPoint(x: 10.0, y: 10.0), size: contentBounds.size))
-        }
+        transition.updateFrame(view: self.backgroundTintView, frame: CGRect(origin: CGPoint(x: -contentBounds.minX, y: -contentBounds.minY), size: contentBounds.size))
+        transition.updateFrame(view: self.backgroundTintMaskContainer, frame: CGRect(origin: CGPoint(), size: contentBounds.size))
     }
     
     func animateIn() {

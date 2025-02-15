@@ -21,8 +21,6 @@
 
 #import <LegacyComponents/TGSecretTimerMenu.h>
 
-#import "TGPhotoEntitiesContainerView.h"
-
 @interface TGMediaPickerGalleryModel ()
 {
     TGMediaPickerGalleryInterfaceView *_interfaceView;
@@ -41,6 +39,7 @@
     bool _inhibitDocumentCaptions;
     NSString *_recipientName;
     bool _hasCamera;
+    bool _isScheduledMessages;
 }
 
 @property (nonatomic, weak) TGPhotoEditorController *editorController;
@@ -49,7 +48,7 @@
 
 @implementation TGMediaPickerGalleryModel
 
-- (instancetype)initWithContext:(id<LegacyComponentsContext>)context items:(NSArray *)items focusItem:(id<TGModernGalleryItem>)focusItem selectionContext:(TGMediaSelectionContext *)selectionContext editingContext:(TGMediaEditingContext *)editingContext hasCaptions:(bool)hasCaptions allowCaptionEntities:(bool)allowCaptionEntities hasTimer:(bool)hasTimer onlyCrop:(bool)onlyCrop inhibitDocumentCaptions:(bool)inhibitDocumentCaptions hasSelectionPanel:(bool)hasSelectionPanel hasCamera:(bool)hasCamera recipientName:(NSString *)recipientName
+- (instancetype)initWithContext:(id<LegacyComponentsContext>)context items:(NSArray *)items focusItem:(id<TGModernGalleryItem>)focusItem selectionContext:(TGMediaSelectionContext *)selectionContext editingContext:(TGMediaEditingContext *)editingContext hasCaptions:(bool)hasCaptions allowCaptionEntities:(bool)allowCaptionEntities hasTimer:(bool)hasTimer onlyCrop:(bool)onlyCrop inhibitDocumentCaptions:(bool)inhibitDocumentCaptions hasSelectionPanel:(bool)hasSelectionPanel hasCamera:(bool)hasCamera recipientName:(NSString *)recipientName isScheduledMessages:(bool)isScheduledMessages
 {
     self = [super init];
     if (self != nil)
@@ -70,6 +69,7 @@
         _inhibitDocumentCaptions = inhibitDocumentCaptions;
         _recipientName = recipientName;
         _hasCamera = hasCamera;
+        _isScheduledMessages = isScheduledMessages;
         
         __weak TGMediaPickerGalleryModel *weakSelf = self;
         if (selectionContext != nil)
@@ -179,7 +179,7 @@
     if (_interfaceView == nil)
     {
         __weak TGMediaPickerGalleryModel *weakSelf = self;
-        _interfaceView = [[TGMediaPickerGalleryInterfaceView alloc] initWithContext:_context focusItem:_initialFocusItem selectionContext:_selectionContext editingContext:_editingContext stickersContext:_stickersContext hasSelectionPanel:_hasSelectionPanel hasCameraButton:_hasCamera recipientName:_recipientName];
+        _interfaceView = [[TGMediaPickerGalleryInterfaceView alloc] initWithContext:_context focusItem:_initialFocusItem selectionContext:_selectionContext editingContext:_editingContext stickersContext:_stickersContext hasSelectionPanel:_hasSelectionPanel hasCameraButton:_hasCamera recipientName:_recipientName isScheduledMessages:_isScheduledMessages];
         _interfaceView.hasCaptions = _hasCaptions;
         _interfaceView.allowCaptionEntities = _allowCaptionEntities;
         _interfaceView.hasTimer = _hasTimer;
@@ -340,10 +340,10 @@
 
 - (void)presentPhotoEditorForItem:(id<TGModernGalleryEditableItem>)item tab:(TGPhotoEditorTab)tab
 {
-    [self presentPhotoEditorForItem:item tab:tab snapshots:@[]];
+    [self presentPhotoEditorForItem:item tab:tab snapshots:@[] fromRect:CGRectZero];
 }
 
-- (void)presentPhotoEditorForItem:(id<TGModernGalleryEditableItem>)item tab:(TGPhotoEditorTab)tab snapshots:(NSArray *)snapshots
+- (void)presentPhotoEditorForItem:(id<TGModernGalleryEditableItem>)item tab:(TGPhotoEditorTab)tab snapshots:(NSArray *)snapshots fromRect:(CGRect)fromRect
 {
     __weak TGMediaPickerGalleryModel *weakSelf = self;
     
@@ -358,12 +358,15 @@
 
     CGRect refFrame = CGRectZero;
     UIView *editorReferenceView = [self referenceViewForItem:item frame:&refFrame];
+    if (!CGRectEqualToRect(fromRect, CGRectZero)) {
+        refFrame = fromRect;
+    }
     UIView *referenceView = nil;
     UIImage *screenImage = nil;
     UIView *referenceParentView = nil;
     UIImage *image = nil;
     
-    TGPhotoEntitiesContainerView *entitiesView = nil;
+     UIView<TGPhotoDrawingEntitiesView> *entitiesView = nil;
     
     id<TGMediaEditableItem> editableMediaItem = item.editableMediaItem;
     
@@ -373,7 +376,7 @@
         screenImage = [(UIImageView *)editorReferenceView image];
         referenceView = editorReferenceView;
         
-        if ([editorReferenceView.subviews.firstObject.subviews.firstObject.subviews.firstObject isKindOfClass:[TGPhotoEntitiesContainerView class]]) {
+        if ([editorReferenceView.subviews.firstObject.subviews.firstObject.subviews.firstObject conformsToProtocol:@protocol(TGPhotoDrawingEntitiesView)]) {
             entitiesView = editorReferenceView.subviews.firstObject.subviews.firstObject.subviews.firstObject;
         }
     }
@@ -400,6 +403,7 @@
     
     TGPhotoEditorControllerIntent intent = isVideo ? TGPhotoEditorControllerVideoIntent : TGPhotoEditorControllerGenericIntent;
     TGPhotoEditorController *controller = [[TGPhotoEditorController alloc] initWithContext:_context item:editableMediaItem intent:intent adjustments:adjustments caption:caption screenImage:screenImage availableTabs:_interfaceView.currentTabs selectedTab:tab];
+    controller.modalPresentationStyle = UIModalPresentationFullScreen;
     controller.entitiesView = entitiesView;
     controller.editingContext = _editingContext;
     controller.stickersContext = _stickersContext;
@@ -417,7 +421,7 @@
     };
     
     void (^didFinishEditingItem)(id<TGMediaEditableItem>item, id<TGMediaEditAdjustments> adjustments, UIImage *resultImage, UIImage *thumbnailImage) = self.didFinishEditingItem;
-    controller.didFinishEditing = ^(id<TGMediaEditAdjustments> adjustments, UIImage *resultImage, UIImage *thumbnailImage, bool hasChanges)
+    controller.didFinishEditing = ^(id<TGMediaEditAdjustments> adjustments, UIImage *resultImage, UIImage *thumbnailImage, bool hasChanges, void(^commit)(void))
     {
         __strong TGMediaPickerGalleryModel *strongSelf = weakSelf;
         if (strongSelf == nil) {
@@ -442,6 +446,8 @@
             [videoItemView setScrubbingPanelApperanceLocked:false];
             [videoItemView presentScrubbingPanelAfterReload:hasChanges];
         }
+        
+        commit();
     };
     
     controller.didFinishRenderingFullSizeImage = ^(UIImage *image)
@@ -513,7 +519,7 @@
         [zoomableItemView reset];
     };
     
-    controller.beginTransitionOut = ^UIView *(CGRect *referenceFrame, __unused UIView **parentView)
+    controller.beginTransitionOut = ^UIView *(CGRect *referenceFrame, __unused UIView **parentView, __unused bool saving)
     {
         __strong TGMediaPickerGalleryModel *strongSelf = weakSelf;
         if (strongSelf == nil)

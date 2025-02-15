@@ -7,6 +7,8 @@
 #import <Accelerate/Accelerate.h>
 
 const CGSize TGPhotoEditorResultImageMaxSize = { 1280, 1280 };
+const CGSize TGPhotoEditorResultImageWallpaperMaxSize = { 2048, 2048 };
+const CGSize TGPhotoEditorResultImageAvatarMaxSize = { 2048, 2048 };
 const CGSize TGPhotoEditorScreenImageHardLimitSize = { 1280, 1280 };
 const CGSize TGPhotoEditorScreenImageHardLimitLegacySize = { 750, 750 };
 
@@ -24,7 +26,11 @@ CGSize TGPhotoThumbnailSizeForCurrentScreen()
     
     if ([UIScreen mainScreen].scale >= 2.0f - FLT_EPSILON)
     {
-        if (widescreenWidth >= 932.0f - FLT_EPSILON)
+        if (widescreenWidth >= 956.0f - FLT_EPSILON)
+        {
+            return CGSizeMake(145.0f + TGScreenPixel, 145.0 + TGScreenPixel);
+        }
+        else if (widescreenWidth >= 932.0f - FLT_EPSILON)
         {
             return CGSizeMake(141.0f + TGScreenPixel, 141.0 + TGScreenPixel);
         }
@@ -35,6 +41,10 @@ CGSize TGPhotoThumbnailSizeForCurrentScreen()
         else if (widescreenWidth >= 896.0f - FLT_EPSILON)
         {
             return CGSizeMake(137.0f - TGScreenPixel, 137.0f - TGScreenPixel);
+        }
+        else if (widescreenWidth >= 874.0f - FLT_EPSILON)
+        {
+            return CGSizeMake(133.0f - TGScreenPixel, 133.0f - TGScreenPixel);
         }
         else if (widescreenWidth >= 852.0f - FLT_EPSILON)
         {

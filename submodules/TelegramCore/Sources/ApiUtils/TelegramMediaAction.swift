@@ -40,7 +40,8 @@ func telegramMediaActionFromApiAction(_ action: Api.MessageAction) -> TelegramMe
         return TelegramMediaAction(action: .phoneCall(callId: callId, discardReason: discardReason, duration: duration, isVideo: isVideo))
     case .messageActionEmpty:
         return nil
-    case let .messageActionPaymentSent(flags, currency, totalAmount, invoiceSlug):
+    case let .messageActionPaymentSent(flags, currency, totalAmount, invoiceSlug, subscriptionUntilDate):
+        let _ = subscriptionUntilDate
         let isRecurringInit = (flags & (1 << 2)) != 0
         let isRecurringUsed = (flags & (1 << 3)) != 0
         return TelegramMediaAction(action: .paymentSent(currency: currency, totalAmount: totalAmount, invoiceSlug: invoiceSlug, isRecurringInit: isRecurringInit, isRecurringUsed: isRecurringUsed))
@@ -49,9 +50,24 @@ func telegramMediaActionFromApiAction(_ action: Api.MessageAction) -> TelegramMe
     case .messageActionScreenshotTaken:
         return TelegramMediaAction(action: .historyScreenshot)
     case let .messageActionCustomAction(message):
-        return TelegramMediaAction(action: .customText(text: message, entities: []))
-    case let .messageActionBotAllowed(domain):
-        return TelegramMediaAction(action: .botDomainAccessGranted(domain: domain))
+        return TelegramMediaAction(action: .customText(text: message, entities: [], additionalAttributes: nil))
+    case let .messageActionBotAllowed(flags, domain, app):
+        if let domain = domain {
+            return TelegramMediaAction(action: .botDomainAccessGranted(domain: domain))
+        } else {
+            var appName: String?
+            if case let .botApp(_, _, _, _, appNameValue, _, _, _, _) = app {
+                appName = appNameValue
+            }
+            var type: BotSendMessageAccessGrantedType?
+            if (flags & (1 << 1)) != 0 {
+                type = .attachMenu
+            }
+            if (flags & (1 << 3)) != 0 {
+                type = .request
+            }
+            return TelegramMediaAction(action: .botAppAccessGranted(appName: appName, type: type))
+        }
     case .messageActionSecureValuesSentMe:
         return nil
     case let .messageActionSecureValuesSent(types):
@@ -72,8 +88,8 @@ func telegramMediaActionFromApiAction(_ action: Api.MessageAction) -> TelegramMe
                 PeerId(namespace: Namespaces.Peer.CloudUser, id: PeerId.Id._internalFromInt64Value(userId))
             }))
         }
-    case let .messageActionSetMessagesTTL(period):
-        return TelegramMediaAction(action: .messageAutoremoveTimeoutUpdated(period))
+    case let .messageActionSetMessagesTTL(_, period, autoSettingFrom):
+        return TelegramMediaAction(action: .messageAutoremoveTimeoutUpdated(period: period, autoSettingSource: autoSettingFrom.flatMap { PeerId(namespace: Namespaces.Peer.CloudUser, id: PeerId.Id._internalFromInt64Value($0)) }))
     case let .messageActionGroupCallScheduled(call, scheduleDate):
         switch call {
         case let .inputGroupCall(id, accessHash):
@@ -85,11 +101,23 @@ func telegramMediaActionFromApiAction(_ action: Api.MessageAction) -> TelegramMe
         return TelegramMediaAction(action: .joinedByRequest)
     case let .messageActionWebViewDataSentMe(text, _), let .messageActionWebViewDataSent(text):
         return TelegramMediaAction(action: .webViewData(text))
-    case let .messageActionGiftPremium(currency, amount, months):
-        return TelegramMediaAction(action: .giftPremium(currency: currency, amount: amount, months: months))
+    case let .messageActionGiftPremium(_, currency, amount, months, cryptoCurrency, cryptoAmount, message):
+        let text: String?
+        let entities: [MessageTextEntity]?
+        switch message {
+        case let .textWithEntities(textValue, entitiesValue):
+            text = textValue
+            entities = messageTextEntitiesFromApiEntities(entitiesValue)
+        default:
+            text = nil
+            entities = nil
+        }
+        return TelegramMediaAction(action: .giftPremium(currency: currency, amount: amount, months: months, cryptoCurrency: cryptoCurrency, cryptoAmount: cryptoAmount, text: text, entities: entities))
+    case let .messageActionGiftStars(_, currency, amount, stars, cryptoCurrency, cryptoAmount, transactionId):
+        return TelegramMediaAction(action: .giftStars(currency: currency, amount: amount, count: stars, cryptoCurrency: cryptoCurrency, cryptoAmount: cryptoAmount, transactionId: transactionId))
     case let .messageActionTopicCreate(_, title, iconColor, iconEmojiId):
         return TelegramMediaAction(action: .topicCreated(title: title, iconColor: iconColor, iconFileId: iconEmojiId))
-    case let .messageActionTopicEdit(flags, title, iconEmojiId, closed):
+    case let .messageActionTopicEdit(flags, title, iconEmojiId, closed, hidden):
         var components: [TelegramMediaActionType.ForumTopicEditComponent] = []
         if let title = title {
             components.append(.title(title))
@@ -100,7 +128,69 @@ func telegramMediaActionFromApiAction(_ action: Api.MessageAction) -> TelegramMe
         if let closed = closed {
             components.append(.isClosed(closed == .boolTrue))
         }
+        if let hidden = hidden {
+            components.append(.isHidden(hidden == .boolTrue))
+        }
         return TelegramMediaAction(action: .topicEdited(components: components))
+    case let .messageActionSuggestProfilePhoto(photo):
+        return TelegramMediaAction(action: .suggestedProfilePhoto(image: telegramMediaImageFromApiPhoto(photo)))
+    case let .messageActionRequestedPeer(buttonId, peers):
+        return TelegramMediaAction(action: .requestedPeer(buttonId: buttonId, peerIds: peers.map { $0.peerId }))
+    case let .messageActionRequestedPeerSentMe(buttonId, _):
+        return TelegramMediaAction(action: .requestedPeer(buttonId: buttonId, peerIds: []))
+    case let .messageActionSetChatWallPaper(flags, wallpaper):
+        if (flags & (1 << 0)) != 0 {
+            return TelegramMediaAction(action: .setSameChatWallpaper(wallpaper: TelegramWallpaper(apiWallpaper: wallpaper)))
+        } else {
+            return TelegramMediaAction(action: .setChatWallpaper(wallpaper: TelegramWallpaper(apiWallpaper: wallpaper), forBoth: (flags & (1 << 1)) != 0))
+        }
+    case let .messageActionGiftCode(flags, boostPeer, months, slug, currency, amount, cryptoCurrency, cryptoAmount, message):
+        let text: String?
+        let entities: [MessageTextEntity]?
+        switch message {
+        case let .textWithEntities(textValue, entitiesValue):
+            text = textValue
+            entities = messageTextEntitiesFromApiEntities(entitiesValue)
+        default:
+            text = nil
+            entities = nil
+        }
+        return TelegramMediaAction(action: .giftCode(slug: slug, fromGiveaway: (flags & (1 << 0)) != 0, isUnclaimed: (flags & (1 << 2)) != 0, boostPeerId: boostPeer?.peerId, months: months, currency: currency, amount: amount, cryptoCurrency: cryptoCurrency, cryptoAmount: cryptoAmount, text: text, entities: entities))
+    case let .messageActionGiveawayLaunch(_, stars):
+        return TelegramMediaAction(action: .giveawayLaunched(stars: stars))
+    case let .messageActionGiveawayResults(flags, winners, unclaimed):
+        return TelegramMediaAction(action: .giveawayResults(winners: winners, unclaimed: unclaimed, stars: (flags & (1 << 0)) != 0))
+    case let .messageActionBoostApply(boosts):
+        return TelegramMediaAction(action: .boostsApplied(boosts: boosts))
+    case let .messageActionPaymentRefunded(_, peer, currency, totalAmount, payload, charge):
+        let transactionId: String
+        switch charge {
+        case let .paymentCharge(id, _):
+            transactionId = id
+        }
+        return TelegramMediaAction(action: .paymentRefunded(peerId: peer.peerId, currency: currency, totalAmount: totalAmount, payload: payload?.makeData(), transactionId: transactionId))
+    case let .messageActionPrizeStars(flags, stars, transactionId, boostPeer, giveawayMsgId):
+        return TelegramMediaAction(action: .prizeStars(amount: stars, isUnclaimed: (flags & (1 << 2)) != 0, boostPeerId: boostPeer.peerId, transactionId: transactionId, giveawayMessageId: MessageId(peerId: boostPeer.peerId, namespace: Namespaces.Message.Cloud, id: giveawayMsgId)))
+    case let .messageActionStarGift(flags, apiGift, message, convertStars, upgradeMessageId, upgradeStars):
+        let text: String?
+        let entities: [MessageTextEntity]?
+        switch message {
+        case let .textWithEntities(textValue, entitiesValue):
+            text = textValue
+            entities = messageTextEntitiesFromApiEntities(entitiesValue)
+        default:
+            text = nil
+            entities = nil
+        }
+        guard let gift = StarGift(apiStarGift: apiGift) else {
+            return nil
+        }
+        return TelegramMediaAction(action: .starGift(gift: gift, convertStars: convertStars, text: text, entities: entities, nameHidden: (flags & (1 << 0)) != 0, savedToProfile: (flags & (1 << 2)) != 0, converted: (flags & (1 << 3)) != 0, upgraded: (flags & (1 << 5)) != 0, canUpgrade: (flags & (1 << 10)) != 0, upgradeStars: upgradeStars, isRefunded: (flags & (1 << 9)) != 0, upgradeMessageId: upgradeMessageId))
+    case let .messageActionStarGiftUnique(flags, apiGift, canExportAt, transferStars):
+        guard let gift = StarGift(apiStarGift: apiGift) else {
+            return nil
+        }
+        return TelegramMediaAction(action: .starGiftUnique(gift: gift, isUpgrade: (flags & (1 << 0)) != 0, isTransferred: (flags & (1 << 1)) != 0, savedToProfile: (flags & (1 << 2)) != 0, canExportDate: canExportAt, transferStars: transferStars, isRefunded: (flags & (1 << 5)) != 0))
     }
 }
 
@@ -115,6 +205,8 @@ extension PhoneCallDiscardReason {
                 self = .hangup
             case .phoneCallDiscardReasonMissed:
                 self = .missed
+            case .phoneCallDiscardReasonAllowGroupCall:
+                self = .hangup
         }
     }
 }

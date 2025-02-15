@@ -207,7 +207,7 @@ private struct WrappedGridItemNode: Hashable {
     }
 }
 
-open class GridNode: GridNodeScroller, UIScrollViewDelegate {
+open class GridNode: GridNodeScroller, ASScrollViewDelegate {
     public private(set) var gridLayout = GridNodeLayout(size: CGSize(), insets: UIEdgeInsets(), preloadSize: 0.0, type: .fixed(itemSize: CGSize(), fillWidth: nil, lineSpacing: 0.0, itemSpacing: nil))
     private var firstIndexInSectionOffset: Int = 0
     public private(set) var items: [GridItem] = []
@@ -257,7 +257,7 @@ open class GridNode: GridNodeScroller, UIScrollViewDelegate {
         self.scrollView.showsVerticalScrollIndicator = false
         self.scrollView.showsHorizontalScrollIndicator = false
         self.scrollView.scrollsToTop = false
-        self.scrollView.delegate = self
+        self.scrollView.delegate = self.wrappedScrollViewDelegate
     }
     
     required public init?(coder aDecoder: NSCoder) {
@@ -492,7 +492,7 @@ open class GridNode: GridNodeScroller, UIScrollViewDelegate {
                     
                     let effectiveWidth = gridLayout.size.width - itemInsets.left - itemInsets.right
                     
-                    let itemsInRow = Int(effectiveWidth / defaultItemSize.width)
+                    let itemsInRow = max(1, Int(effectiveWidth / defaultItemSize.width))
                     let itemsInRowWidth = CGFloat(itemsInRow) * defaultItemSize.width
                     let remainingWidth = max(0.0, effectiveWidth - itemsInRowWidth)
                     

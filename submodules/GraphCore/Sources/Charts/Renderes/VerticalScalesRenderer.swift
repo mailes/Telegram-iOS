@@ -9,6 +9,7 @@
 import Foundation
 #if os(macOS)
 import Cocoa
+public typealias UIColor = NSColor
 #else
 import UIKit
 #endif
@@ -25,6 +26,7 @@ class VerticalScalesRenderer: BaseChartRenderer {
     var axisXWidth: CGFloat = GView.oneDevicePixel
     
     var isRightAligned: Bool = false
+    var drawCurrency:((CGContext, UIColor, CGPoint)->Void)?
     
     var horizontalLinesColor: GColor = .black {
         didSet {
@@ -133,7 +135,14 @@ class VerticalScalesRenderer: BaseChartRenderer {
                     let y = transform(toChartCoordinateVertical: label.value, chartFrame: chartFrame) - labelsFont.pointSize - labelsAxisOffset
                     let attributedString = NSAttributedString(string: label.text, attributes: attributes)
                     let textNode = LabelNode.layoutText(attributedString, bounds.size)
-                    textNode.1.draw(CGRect(origin: CGPoint(x:chartFrame.minX, y: y), size: textNode.0.size), in: context, backingScaleFactor: deviceScale)
+                    
+                    var xOffset = 0.0
+                    if let drawCurrency {
+                        xOffset += 11.0
+                        drawCurrency(context, attributes[.foregroundColor] as? UIColor ?? .black, CGPoint(x: chartFrame.minX, y: y + 4.0))
+                    }
+                    
+                    textNode.1.draw(CGRect(origin: CGPoint(x: chartFrame.minX + xOffset, y: y), size: textNode.0.size), in: context, backingScaleFactor: deviceScale)
                 }
             }
         }

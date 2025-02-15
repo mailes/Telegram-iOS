@@ -105,14 +105,15 @@ public final class SparseMessageList {
                 self.sparseItemsDisposable = (self.account.postbox.transaction { transaction -> Api.InputPeer? in
                     return transaction.getPeer(peerId).flatMap(apiInputPeer)
                 }
-                                              |> mapToSignal { inputPeer -> Signal<SparseItems, NoError> in
+                |> mapToSignal { inputPeer -> Signal<SparseItems, NoError> in
                     guard let inputPeer = inputPeer else {
                         return .single(SparseItems(items: []))
                     }
                     guard let messageFilter = messageFilterForTagMask(messageTag) else {
                         return .single(SparseItems(items: []))
                     }
-                    return account.network.request(Api.functions.messages.getSearchResultsPositions(peer: inputPeer, filter: messageFilter, offsetId: 0, limit: 1000))
+                    //TODO:api
+                    return account.network.request(Api.functions.messages.getSearchResultsPositions(flags: 0, peer: inputPeer, savedPeerId: nil, filter: messageFilter, offsetId: 0, limit: 1000))
                     |> map { result -> SparseItems in
                         switch result {
                         case let .searchResultsPositions(totalCount, positions):
@@ -191,7 +192,7 @@ public final class SparseMessageList {
             
             let location: ChatLocationInput = .peer(peerId: self.peerId, threadId: self.threadId)
             
-            self.topItemsDisposable.set((self.account.postbox.aroundMessageHistoryViewForLocation(location, anchor: .upperBound, ignoreMessagesInTimestampRange: nil, count: count, fixedCombinedReadStates: nil, topTaggedMessageIdNamespaces: Set(), tagMask: self.messageTag, appendMessagesFromTheSameGroup: false, namespaces: .not(Set(Namespaces.Message.allScheduled)), orderStatistics: [])
+            self.topItemsDisposable.set((self.account.postbox.aroundMessageHistoryViewForLocation(location, anchor: .upperBound, ignoreMessagesInTimestampRange: nil, ignoreMessageIds: Set(), count: count, fixedCombinedReadStates: nil, topTaggedMessageIdNamespaces: Set(), tag: .tag(self.messageTag), appendMessagesFromTheSameGroup: false, namespaces: .not(Namespaces.Message.allNonRegular), orderStatistics: [])
             |> deliverOn(self.queue)).start(next: { [weak self] view, updateType, _ in
                 guard let strongSelf = self else {
                     return
@@ -712,111 +713,6 @@ public final class SparseMessageList {
     }
 }
 
-public final class SparseMessageScrollingContext {
-    public struct State: Equatable {
-        public var totalCount: Int
-        public var minTimestamp: Int32
-    }
-
-    private final class Impl {
-        private let queue: Queue
-        private let account: Account
-        private let peerId: PeerId
-
-        let statePromise = Promise<State>()
-
-        private let disposable = MetaDisposable()
-
-        init(queue: Queue, account: Account, peerId: PeerId) {
-            self.queue = queue
-            self.account = account
-            self.peerId = peerId
-
-            self.reload()
-        }
-
-        deinit {
-            self.disposable.dispose()
-        }
-
-        private func reload() {
-            let account = self.account
-            let peerId = self.peerId
-
-            let signal: Signal<State?, NoError> = self.account.postbox.transaction { transaction -> Api.InputPeer? in
-                return transaction.getPeer(peerId).flatMap(apiInputPeer)
-            }
-            |> mapToSignal { inputPeer -> Signal<State?, NoError> in
-                guard let inputPeer = inputPeer else {
-                    return .single(nil)
-                }
-                return account.network.request(Api.functions.messages.getHistory(peer: inputPeer, offsetId: 1, offsetDate: 0, addOffset: -1, limit: 1, maxId: 0, minId: 0, hash: 0))
-                |> map { result -> State? in
-                    let messages: [Api.Message]
-                    let totalCount: Int
-
-                    switch result {
-                    case let .messages(apiMessages, _, _):
-                        messages = apiMessages
-                        totalCount = messages.count
-                    case let .messagesSlice(_, count, _, _, apiMessages, _, _):
-                        messages = apiMessages
-                        totalCount = Int(count)
-                    case let .channelMessages(_, _, count, _, apiMessages, _, _):
-                        messages = apiMessages
-                        totalCount = Int(count)
-                    case .messagesNotModified:
-                        messages = []
-                        totalCount = 0
-                    }
-
-                    if let apiMessage = messages.first, let message = StoreMessage(apiMessage: apiMessage) {
-                        return State(totalCount: totalCount, minTimestamp: message.timestamp)
-                    } else {
-                        return State(totalCount: 0, minTimestamp: 0)
-                    }
-                }
-                |> `catch` { _ -> Signal<State?, NoError> in
-                    return .single(nil)
-                }
-            }
-
-            self.disposable.set((signal |> deliverOn(self.queue)).start(next: { [weak self] state in
-                guard let strongSelf = self else {
-                    return
-                }
-                if let state = state {
-                    strongSelf.statePromise.set(.single(state))
-                }
-            }))
-        }
-    }
-
-    private let queue: Queue
-    private let impl: QueueLocalObject<Impl>
-
-    public var state: Signal<State, NoError> {
-        return Signal { subscriber in
-            let disposable = MetaDisposable()
-
-            self.impl.with { impl in
-                disposable.set(impl.statePromise.get().start(next: subscriber.putNext))
-            }
-
-            return disposable
-        }
-    }
-
-    init(account: Account, peerId: PeerId) {
-        let queue = Queue()
-        self.queue = queue
-
-        self.impl = QueueLocalObject(queue: queue, generate: {
-            return Impl(queue: queue, account: account, peerId: peerId)
-        })
-    }
-}
-
 public final class SparseMessageCalendar {
     private final class Impl {
         struct InternalState {
@@ -830,6 +726,7 @@ public final class SparseMessageCalendar {
         private let peerId: PeerId
         private let threadId: Int64?
         private let messageTag: MessageTags
+        private let displayMedia: Bool
 
         private var state: InternalState
         let statePromise = Promise<InternalState>()
@@ -846,12 +743,13 @@ public final class SparseMessageCalendar {
             return self.isLoadingMorePromise.get()
         }
 
-        init(queue: Queue, account: Account, peerId: PeerId, threadId: Int64?, messageTag: MessageTags) {
+        init(queue: Queue, account: Account, peerId: PeerId, threadId: Int64?, messageTag: MessageTags, displayMedia: Bool) {
             self.queue = queue
             self.account = account
             self.peerId = peerId
             self.threadId = threadId
             self.messageTag = messageTag
+            self.displayMedia = displayMedia
 
             self.state = InternalState(nextRequestOffset: 0, minTimestamp: nil, messagesByDay: [:])
             self.statePromise.set(.single(self.state))
@@ -895,6 +793,9 @@ public final class SparseMessageCalendar {
             if self.threadId != nil {
                 return
             }
+            if !self.displayMedia {
+                return
+            }
 
             self.isLoadingMore = true
 
@@ -906,19 +807,24 @@ public final class SparseMessageCalendar {
             }
 
             let account = self.account
+            let accountPeerId = account.peerId
             let peerId = self.peerId
             let messageTag = self.messageTag
-            self.disposable.set((self.account.postbox.transaction { transaction -> Api.InputPeer? in
-                return transaction.getPeer(peerId).flatMap(apiInputPeer)
+            self.disposable.set((self.account.postbox.transaction { transaction -> Peer? in
+                return transaction.getPeer(peerId)
             }
-            |> mapToSignal { inputPeer -> Signal<LoadResult, NoError> in
-                guard let inputPeer = inputPeer else {
+            |> mapToSignal { peer -> Signal<LoadResult, NoError> in
+                guard let peer = peer else {
+                    return .single(LoadResult(messagesByDay: [:], nextOffset: nil, minMessageId: nil, minTimestamp: nil))
+                }
+                guard let inputPeer = apiInputPeer(peer) else {
                     return .single(LoadResult(messagesByDay: [:], nextOffset: nil, minMessageId: nil, minTimestamp: nil))
                 }
                 guard let messageFilter = messageFilterForTagMask(messageTag) else {
                     return .single(LoadResult(messagesByDay: [:], nextOffset: nil, minMessageId: nil, minTimestamp: nil))
                 }
-                return self.account.network.request(Api.functions.messages.getSearchResultsCalendar(peer: inputPeer, filter: messageFilter, offsetId: nextRequestOffset, offsetDate: 0))
+                //TODO:api
+                return self.account.network.request(Api.functions.messages.getSearchResultsCalendar(flags: 0, peer: inputPeer, savedPeerId: nil, filter: messageFilter, offsetId: nextRequestOffset, offsetDate: 0))
                 |> map(Optional.init)
                 |> `catch` { _ -> Signal<Api.messages.SearchResultsCalendar?, NoError> in
                     return .single(nil)
@@ -932,28 +838,16 @@ public final class SparseMessageCalendar {
                         switch result {
                         case let .searchResultsCalendar(_, _, minDate, minMsgId, _, periods, messages, chats, users):
                             var parsedMessages: [StoreMessage] = []
-                            var peers: [Peer] = []
-                            var peerPresences: [PeerId: Api.User] = [:]
-
-                            for chat in chats {
-                                if let groupOrChannel = parseTelegramGroupOrChannel(chat: chat) {
-                                    peers.append(groupOrChannel)
-                                }
-                            }
-                            for user in users {
-                                let telegramUser = TelegramUser(user: user)
-                                peers.append(telegramUser)
-                                peerPresences[telegramUser.id] = user
-                            }
+                            
+                            let parsedPeers = AccumulatedPeers(transaction: transaction, chats: chats, users: users)
 
                             for message in messages {
-                                if let parsedMessage = StoreMessage(apiMessage: message) {
+                                if let parsedMessage = StoreMessage(apiMessage: message, accountPeerId: accountPeerId, peerIsForum: peer.isForum) {
                                     parsedMessages.append(parsedMessage)
                                 }
                             }
 
-                            updatePeers(transaction: transaction, peers: peers, update: { _, updated in updated })
-                            updatePeerPresences(transaction: transaction, accountPeerId: account.peerId, peerPresences: peerPresences)
+                            updatePeers(transaction: transaction, accountPeerId: accountPeerId, peers: parsedPeers)
                             let _ = transaction.addMessages(parsedMessages, location: .Random)
 
                             var minMessageId: Int32?
@@ -1016,11 +910,11 @@ public final class SparseMessageCalendar {
     public var minTimestamp: Int32?
     private var disposable: Disposable?
 
-    init(account: Account, peerId: PeerId, threadId: Int64?, messageTag: MessageTags) {
+    init(account: Account, peerId: PeerId, threadId: Int64?, messageTag: MessageTags, displayMedia: Bool) {
         let queue = Queue()
         self.queue = queue
         self.impl = QueueLocalObject(queue: queue, generate: {
-            return Impl(queue: queue, account: account, peerId: peerId, threadId: threadId, messageTag: messageTag)
+            return Impl(queue: queue, account: account, peerId: peerId, threadId: threadId, messageTag: messageTag, displayMedia: displayMedia)
         })
 
         self.disposable = self.state.start(next: { [weak self] state in

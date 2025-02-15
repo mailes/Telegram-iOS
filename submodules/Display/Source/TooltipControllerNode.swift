@@ -4,6 +4,8 @@ import AsyncDisplayKit
 
 final class TooltipControllerNode: ASDisplayNode {
     private let baseFontSize: CGFloat
+    private let balancedTextLayout: Bool
+    private let alignment: TooltipController.Alignment
     
     private let dismiss: (Bool) -> Void
     
@@ -20,18 +22,23 @@ final class TooltipControllerNode: ASDisplayNode {
     var arrowOnBottom: Bool = true
     
     var padding: CGFloat = 8.0
+    var innerPadding: UIEdgeInsets = UIEdgeInsets()
     
     private var dismissedByTouchOutside = false
     private var dismissByTapOutsideSource = false
     
-    init(content: TooltipControllerContent, baseFontSize: CGFloat, dismiss: @escaping (Bool) -> Void, dismissByTapOutside: Bool, dismissByTapOutsideSource: Bool) {
+    init(content: TooltipControllerContent, baseFontSize: CGFloat, balancedTextLayout: Bool, alignment: TooltipController.Alignment, isBlurred: Bool, dismiss: @escaping (Bool) -> Void, dismissByTapOutside: Bool, dismissByTapOutsideSource: Bool) {
         self.baseFontSize = baseFontSize
+        self.balancedTextLayout = balancedTextLayout
+        self.alignment = alignment
         
         self.dismissByTapOutside = dismissByTapOutside
         self.dismissByTapOutsideSource = dismissByTapOutsideSource
         
-        self.containerNode = ContextMenuContainerNode()
-        self.containerNode.backgroundColor = UIColor(white: 0.0, alpha: 0.8)
+        self.containerNode = ContextMenuContainerNode(isBlurred: isBlurred, isDark: true)
+        if !isBlurred {
+            self.containerNode.containerNode.backgroundColor = UIColor(white: 0.0, alpha: 0.8)
+        }
         
         self.imageNode = ASImageNode()
         self.imageNode.image = content.image
@@ -40,7 +47,7 @@ final class TooltipControllerNode: ASDisplayNode {
         if case let .attributedText(text) = content {
             self.textNode.attributedText = text
         } else {
-            self.textNode.attributedText = NSAttributedString(string: content.text, font: Font.regular(floor(baseFontSize * 14.0 / 17.0)), textColor: .white, paragraphAlignment: .center)
+            self.textNode.attributedText = NSAttributedString(string: content.text, font: Font.regular(floor(baseFontSize * 14.0 / 17.0)), textColor: .white, paragraphAlignment: alignment == .center ? .center : .natural)
         }
         self.textNode.isUserInteractionEnabled = false
         self.textNode.displaysAsynchronously = false
@@ -54,9 +61,9 @@ final class TooltipControllerNode: ASDisplayNode {
         
         super.init()
         
-        self.containerNode.addSubnode(self.imageNode)
-        self.containerNode.addSubnode(self.textNode)
-        self.contentNode.flatMap { self.containerNode.addSubnode($0) }
+        self.containerNode.containerNode.addSubnode(self.imageNode)
+        self.containerNode.containerNode.addSubnode(self.textNode)
+        self.contentNode.flatMap { self.containerNode.containerNode.addSubnode($0) }
         
         self.addSubnode(self.containerNode)
     }
@@ -70,7 +77,7 @@ final class TooltipControllerNode: ASDisplayNode {
             })
             self.textNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.12)
         }
-        self.textNode.attributedText = NSAttributedString(string: text, font: Font.regular(floor(self.baseFontSize * 14.0 / 17.0)), textColor: .white, paragraphAlignment: .center)
+        self.textNode.attributedText = NSAttributedString(string: text, font: Font.regular(floor(self.baseFontSize * 14.0 / 17.0)), textColor: .white, paragraphAlignment: self.alignment == .center ? .center : .natural)
         if let layout = self.validLayout {
             self.containerLayoutUpdated(layout, transition: transition)
         }
@@ -79,7 +86,7 @@ final class TooltipControllerNode: ASDisplayNode {
     func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
         self.validLayout = layout
         
-        let maxWidth = layout.size.width - 20.0
+        let maxWidth = layout.size.width - 20.0 - self.padding * 2.0
         
         let contentSize: CGSize
         
@@ -98,14 +105,14 @@ final class TooltipControllerNode: ASDisplayNode {
             textSize.width = ceil(textSize.width / 2.0) * 2.0
             textSize.height = ceil(textSize.height / 2.0) * 2.0
            
-            contentSize = CGSize(width: imageSizeWithInset.width + textSize.width + 12.0, height: textSize.height + 34.0)
+            contentSize = CGSize(width: imageSizeWithInset.width + textSize.width + 12.0 + self.innerPadding.left + self.innerPadding.right, height: textSize.height + 34.0 + self.innerPadding.top + self.innerPadding.bottom)
             
-            let textFrame = CGRect(origin: CGPoint(x: 6.0 + imageSizeWithInset.width, y: 17.0), size: textSize)
+            let textFrame = CGRect(origin: CGPoint(x: 6.0 + self.innerPadding.left + imageSizeWithInset.width, y: 17.0 + self.innerPadding.top), size: textSize)
             if transition.isAnimated, textFrame.size != self.textNode.frame.size {
                 transition.animatePositionAdditive(node: self.textNode, offset: CGPoint(x: textFrame.minX - self.textNode.frame.minX, y: 0.0))
             }
             
-            let imageFrame = CGRect(origin: CGPoint(x: 10.0, y: floor((contentSize.height - imageSize.height) / 2.0)), size: imageSize)
+            let imageFrame = CGRect(origin: CGPoint(x: self.innerPadding.left + 10.0, y: floor((contentSize.height - imageSize.height) / 2.0)), size: imageSize)
             self.imageNode.frame = imageFrame
             self.textNode.frame = textFrame
         }

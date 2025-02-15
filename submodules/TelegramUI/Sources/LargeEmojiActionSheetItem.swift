@@ -92,8 +92,8 @@ private final class LargeEmojiActionSheetItemNode: ActionSheetItemNode {
         self.accessibilityArea.accessibilityTraits = .staticText
         
         let dimensions = file.dimensions ?? PixelDimensions(width: 512, height: 512)
-        self.imageNode.setSignal(chatMessageAnimatedSticker(postbox: context.account.postbox, file: file, small: false, size: dimensions.cgSize.aspectFilled(CGSize(width: 384.0, height: 384.0)), fitzModifier: fitzModifier, thumbnail: false, synchronousLoad: true), attemptSynchronously: true)
-        self.disposable.set(freeMediaFileInteractiveFetched(account: context.account, fileReference: .standalone(media: file)).start())
+        self.imageNode.setSignal(chatMessageAnimatedSticker(postbox: context.account.postbox, userLocation: .other, file: file, small: false, size: dimensions.cgSize.aspectFilled(CGSize(width: 384.0, height: 384.0)), fitzModifier: fitzModifier, thumbnail: false, synchronousLoad: true), attemptSynchronously: true)
+        self.disposable.set(freeMediaFileInteractiveFetched(account: context.account, userLocation: .other, fileReference: .standalone(media: file)).startStrict())
         
         self.setupTimestamp = CACurrentMediaTime()
         
@@ -131,7 +131,7 @@ private final class LargeEmojiActionSheetItemNode: ActionSheetItemNode {
         }
         
         if let immediateThumbnailData = file.immediateThumbnailData {
-            self.placeholderNode.update(backgroundColor: nil, foregroundColor: theme.secondaryTextColor.blitOver(theme.itemBackgroundColor, alpha: 0.55), shimmeringColor: theme.itemBackgroundColor.withAlphaComponent(0.4), data: immediateThumbnailData, size: CGSize(width: 96.0, height: 96.0), imageSize: dimensions.cgSize)
+            self.placeholderNode.update(backgroundColor: nil, foregroundColor: theme.secondaryTextColor.blitOver(theme.itemBackgroundColor, alpha: 0.55), shimmeringColor: theme.itemBackgroundColor.withAlphaComponent(0.4), data: immediateThumbnailData, size: CGSize(width: 96.0, height: 96.0), enableEffect: context.sharedContext.energyUsageSettings.fullTranslucency, imageSize: dimensions.cgSize)
         }
     }
     

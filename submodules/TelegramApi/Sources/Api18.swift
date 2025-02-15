@@ -1,43 +1,79 @@
 public extension Api {
-    enum SavedContact: TypeConstructorDescription {
-        case savedPhoneContact(phone: String, firstName: String, lastName: String, date: Int32)
+    enum NotificationSound: TypeConstructorDescription {
+        case notificationSoundDefault
+        case notificationSoundLocal(title: String, data: String)
+        case notificationSoundNone
+        case notificationSoundRingtone(id: Int64)
     
     public func serialize(_ buffer: Buffer, _ boxed: Swift.Bool) {
     switch self {
-                case .savedPhoneContact(let phone, let firstName, let lastName, let date):
+                case .notificationSoundDefault:
                     if boxed {
-                        buffer.appendInt32(289586518)
+                        buffer.appendInt32(-1746354498)
                     }
-                    serializeString(phone, buffer: buffer, boxed: false)
-                    serializeString(firstName, buffer: buffer, boxed: false)
-                    serializeString(lastName, buffer: buffer, boxed: false)
-                    serializeInt32(date, buffer: buffer, boxed: false)
+                    
+                    break
+                case .notificationSoundLocal(let title, let data):
+                    if boxed {
+                        buffer.appendInt32(-2096391452)
+                    }
+                    serializeString(title, buffer: buffer, boxed: false)
+                    serializeString(data, buffer: buffer, boxed: false)
+                    break
+                case .notificationSoundNone:
+                    if boxed {
+                        buffer.appendInt32(1863070943)
+                    }
+                    
+                    break
+                case .notificationSoundRingtone(let id):
+                    if boxed {
+                        buffer.appendInt32(-9666487)
+                    }
+                    serializeInt64(id, buffer: buffer, boxed: false)
                     break
     }
     }
     
     public func descriptionFields() -> (String, [(String, Any)]) {
         switch self {
-                case .savedPhoneContact(let phone, let firstName, let lastName, let date):
-                return ("savedPhoneContact", [("phone", String(describing: phone)), ("firstName", String(describing: firstName)), ("lastName", String(describing: lastName)), ("date", String(describing: date))])
+                case .notificationSoundDefault:
+                return ("notificationSoundDefault", [])
+                case .notificationSoundLocal(let title, let data):
+                return ("notificationSoundLocal", [("title", title as Any), ("data", data as Any)])
+                case .notificationSoundNone:
+                return ("notificationSoundNone", [])
+                case .notificationSoundRingtone(let id):
+                return ("notificationSoundRingtone", [("id", id as Any)])
     }
     }
     
-        public static func parse_savedPhoneContact(_ reader: BufferReader) -> SavedContact? {
+        public static func parse_notificationSoundDefault(_ reader: BufferReader) -> NotificationSound? {
+            return Api.NotificationSound.notificationSoundDefault
+        }
+        public static func parse_notificationSoundLocal(_ reader: BufferReader) -> NotificationSound? {
             var _1: String?
             _1 = parseString(reader)
             var _2: String?
             _2 = parseString(reader)
-            var _3: String?
-            _3 = parseString(reader)
-            var _4: Int32?
-            _4 = reader.readInt32()
             let _c1 = _1 != nil
             let _c2 = _2 != nil
-            let _c3 = _3 != nil
-            let _c4 = _4 != nil
-            if _c1 && _c2 && _c3 && _c4 {
-                return Api.SavedContact.savedPhoneContact(phone: _1!, firstName: _2!, lastName: _3!, date: _4!)
+            if _c1 && _c2 {
+                return Api.NotificationSound.notificationSoundLocal(title: _1!, data: _2!)
+            }
+            else {
+                return nil
+            }
+        }
+        public static func parse_notificationSoundNone(_ reader: BufferReader) -> NotificationSound? {
+            return Api.NotificationSound.notificationSoundNone
+        }
+        public static func parse_notificationSoundRingtone(_ reader: BufferReader) -> NotificationSound? {
+            var _1: Int64?
+            _1 = reader.readInt64()
+            let _c1 = _1 != nil
+            if _c1 {
+                return Api.NotificationSound.notificationSoundRingtone(id: _1!)
             }
             else {
                 return nil
@@ -47,207 +83,43 @@ public extension Api {
     }
 }
 public extension Api {
-    enum SearchResultsCalendarPeriod: TypeConstructorDescription {
-        case searchResultsCalendarPeriod(date: Int32, minMsgId: Int32, maxMsgId: Int32, count: Int32)
+    enum NotifyPeer: TypeConstructorDescription {
+        case notifyBroadcasts
+        case notifyChats
+        case notifyForumTopic(peer: Api.Peer, topMsgId: Int32)
+        case notifyPeer(peer: Api.Peer)
+        case notifyUsers
     
     public func serialize(_ buffer: Buffer, _ boxed: Swift.Bool) {
     switch self {
-                case .searchResultsCalendarPeriod(let date, let minMsgId, let maxMsgId, let count):
+                case .notifyBroadcasts:
                     if boxed {
-                        buffer.appendInt32(-911191137)
+                        buffer.appendInt32(-703403793)
                     }
-                    serializeInt32(date, buffer: buffer, boxed: false)
-                    serializeInt32(minMsgId, buffer: buffer, boxed: false)
-                    serializeInt32(maxMsgId, buffer: buffer, boxed: false)
-                    serializeInt32(count, buffer: buffer, boxed: false)
+                    
                     break
-    }
-    }
-    
-    public func descriptionFields() -> (String, [(String, Any)]) {
-        switch self {
-                case .searchResultsCalendarPeriod(let date, let minMsgId, let maxMsgId, let count):
-                return ("searchResultsCalendarPeriod", [("date", String(describing: date)), ("minMsgId", String(describing: minMsgId)), ("maxMsgId", String(describing: maxMsgId)), ("count", String(describing: count))])
-    }
-    }
-    
-        public static func parse_searchResultsCalendarPeriod(_ reader: BufferReader) -> SearchResultsCalendarPeriod? {
-            var _1: Int32?
-            _1 = reader.readInt32()
-            var _2: Int32?
-            _2 = reader.readInt32()
-            var _3: Int32?
-            _3 = reader.readInt32()
-            var _4: Int32?
-            _4 = reader.readInt32()
-            let _c1 = _1 != nil
-            let _c2 = _2 != nil
-            let _c3 = _3 != nil
-            let _c4 = _4 != nil
-            if _c1 && _c2 && _c3 && _c4 {
-                return Api.SearchResultsCalendarPeriod.searchResultsCalendarPeriod(date: _1!, minMsgId: _2!, maxMsgId: _3!, count: _4!)
-            }
-            else {
-                return nil
-            }
-        }
-    
-    }
-}
-public extension Api {
-    enum SearchResultsPosition: TypeConstructorDescription {
-        case searchResultPosition(msgId: Int32, date: Int32, offset: Int32)
-    
-    public func serialize(_ buffer: Buffer, _ boxed: Swift.Bool) {
-    switch self {
-                case .searchResultPosition(let msgId, let date, let offset):
+                case .notifyChats:
                     if boxed {
-                        buffer.appendInt32(2137295719)
+                        buffer.appendInt32(-1073230141)
                     }
-                    serializeInt32(msgId, buffer: buffer, boxed: false)
-                    serializeInt32(date, buffer: buffer, boxed: false)
-                    serializeInt32(offset, buffer: buffer, boxed: false)
+                    
                     break
-    }
-    }
-    
-    public func descriptionFields() -> (String, [(String, Any)]) {
-        switch self {
-                case .searchResultPosition(let msgId, let date, let offset):
-                return ("searchResultPosition", [("msgId", String(describing: msgId)), ("date", String(describing: date)), ("offset", String(describing: offset))])
-    }
-    }
-    
-        public static func parse_searchResultPosition(_ reader: BufferReader) -> SearchResultsPosition? {
-            var _1: Int32?
-            _1 = reader.readInt32()
-            var _2: Int32?
-            _2 = reader.readInt32()
-            var _3: Int32?
-            _3 = reader.readInt32()
-            let _c1 = _1 != nil
-            let _c2 = _2 != nil
-            let _c3 = _3 != nil
-            if _c1 && _c2 && _c3 {
-                return Api.SearchResultsPosition.searchResultPosition(msgId: _1!, date: _2!, offset: _3!)
-            }
-            else {
-                return nil
-            }
-        }
-    
-    }
-}
-public extension Api {
-    enum SecureCredentialsEncrypted: TypeConstructorDescription {
-        case secureCredentialsEncrypted(data: Buffer, hash: Buffer, secret: Buffer)
-    
-    public func serialize(_ buffer: Buffer, _ boxed: Swift.Bool) {
-    switch self {
-                case .secureCredentialsEncrypted(let data, let hash, let secret):
+                case .notifyForumTopic(let peer, let topMsgId):
                     if boxed {
-                        buffer.appendInt32(871426631)
+                        buffer.appendInt32(577659656)
                     }
-                    serializeBytes(data, buffer: buffer, boxed: false)
-                    serializeBytes(hash, buffer: buffer, boxed: false)
-                    serializeBytes(secret, buffer: buffer, boxed: false)
+                    peer.serialize(buffer, true)
+                    serializeInt32(topMsgId, buffer: buffer, boxed: false)
                     break
-    }
-    }
-    
-    public func descriptionFields() -> (String, [(String, Any)]) {
-        switch self {
-                case .secureCredentialsEncrypted(let data, let hash, let secret):
-                return ("secureCredentialsEncrypted", [("data", String(describing: data)), ("hash", String(describing: hash)), ("secret", String(describing: secret))])
-    }
-    }
-    
-        public static func parse_secureCredentialsEncrypted(_ reader: BufferReader) -> SecureCredentialsEncrypted? {
-            var _1: Buffer?
-            _1 = parseBytes(reader)
-            var _2: Buffer?
-            _2 = parseBytes(reader)
-            var _3: Buffer?
-            _3 = parseBytes(reader)
-            let _c1 = _1 != nil
-            let _c2 = _2 != nil
-            let _c3 = _3 != nil
-            if _c1 && _c2 && _c3 {
-                return Api.SecureCredentialsEncrypted.secureCredentialsEncrypted(data: _1!, hash: _2!, secret: _3!)
-            }
-            else {
-                return nil
-            }
-        }
-    
-    }
-}
-public extension Api {
-    enum SecureData: TypeConstructorDescription {
-        case secureData(data: Buffer, dataHash: Buffer, secret: Buffer)
-    
-    public func serialize(_ buffer: Buffer, _ boxed: Swift.Bool) {
-    switch self {
-                case .secureData(let data, let dataHash, let secret):
+                case .notifyPeer(let peer):
                     if boxed {
-                        buffer.appendInt32(-1964327229)
+                        buffer.appendInt32(-1613493288)
                     }
-                    serializeBytes(data, buffer: buffer, boxed: false)
-                    serializeBytes(dataHash, buffer: buffer, boxed: false)
-                    serializeBytes(secret, buffer: buffer, boxed: false)
+                    peer.serialize(buffer, true)
                     break
-    }
-    }
-    
-    public func descriptionFields() -> (String, [(String, Any)]) {
-        switch self {
-                case .secureData(let data, let dataHash, let secret):
-                return ("secureData", [("data", String(describing: data)), ("dataHash", String(describing: dataHash)), ("secret", String(describing: secret))])
-    }
-    }
-    
-        public static func parse_secureData(_ reader: BufferReader) -> SecureData? {
-            var _1: Buffer?
-            _1 = parseBytes(reader)
-            var _2: Buffer?
-            _2 = parseBytes(reader)
-            var _3: Buffer?
-            _3 = parseBytes(reader)
-            let _c1 = _1 != nil
-            let _c2 = _2 != nil
-            let _c3 = _3 != nil
-            if _c1 && _c2 && _c3 {
-                return Api.SecureData.secureData(data: _1!, dataHash: _2!, secret: _3!)
-            }
-            else {
-                return nil
-            }
-        }
-    
-    }
-}
-public extension Api {
-    enum SecureFile: TypeConstructorDescription {
-        case secureFile(id: Int64, accessHash: Int64, size: Int64, dcId: Int32, date: Int32, fileHash: Buffer, secret: Buffer)
-        case secureFileEmpty
-    
-    public func serialize(_ buffer: Buffer, _ boxed: Swift.Bool) {
-    switch self {
-                case .secureFile(let id, let accessHash, let size, let dcId, let date, let fileHash, let secret):
+                case .notifyUsers:
                     if boxed {
-                        buffer.appendInt32(2097791614)
-                    }
-                    serializeInt64(id, buffer: buffer, boxed: false)
-                    serializeInt64(accessHash, buffer: buffer, boxed: false)
-                    serializeInt64(size, buffer: buffer, boxed: false)
-                    serializeInt32(dcId, buffer: buffer, boxed: false)
-                    serializeInt32(date, buffer: buffer, boxed: false)
-                    serializeBytes(fileHash, buffer: buffer, boxed: false)
-                    serializeBytes(secret, buffer: buffer, boxed: false)
-                    break
-                case .secureFileEmpty:
-                    if boxed {
-                        buffer.appendInt32(1679398724)
+                        buffer.appendInt32(-1261946036)
                     }
                     
                     break
@@ -256,28 +128,689 @@ public extension Api {
     
     public func descriptionFields() -> (String, [(String, Any)]) {
         switch self {
-                case .secureFile(let id, let accessHash, let size, let dcId, let date, let fileHash, let secret):
-                return ("secureFile", [("id", String(describing: id)), ("accessHash", String(describing: accessHash)), ("size", String(describing: size)), ("dcId", String(describing: dcId)), ("date", String(describing: date)), ("fileHash", String(describing: fileHash)), ("secret", String(describing: secret))])
-                case .secureFileEmpty:
-                return ("secureFileEmpty", [])
+                case .notifyBroadcasts:
+                return ("notifyBroadcasts", [])
+                case .notifyChats:
+                return ("notifyChats", [])
+                case .notifyForumTopic(let peer, let topMsgId):
+                return ("notifyForumTopic", [("peer", peer as Any), ("topMsgId", topMsgId as Any)])
+                case .notifyPeer(let peer):
+                return ("notifyPeer", [("peer", peer as Any)])
+                case .notifyUsers:
+                return ("notifyUsers", [])
     }
     }
     
-        public static func parse_secureFile(_ reader: BufferReader) -> SecureFile? {
+        public static func parse_notifyBroadcasts(_ reader: BufferReader) -> NotifyPeer? {
+            return Api.NotifyPeer.notifyBroadcasts
+        }
+        public static func parse_notifyChats(_ reader: BufferReader) -> NotifyPeer? {
+            return Api.NotifyPeer.notifyChats
+        }
+        public static func parse_notifyForumTopic(_ reader: BufferReader) -> NotifyPeer? {
+            var _1: Api.Peer?
+            if let signature = reader.readInt32() {
+                _1 = Api.parse(reader, signature: signature) as? Api.Peer
+            }
+            var _2: Int32?
+            _2 = reader.readInt32()
+            let _c1 = _1 != nil
+            let _c2 = _2 != nil
+            if _c1 && _c2 {
+                return Api.NotifyPeer.notifyForumTopic(peer: _1!, topMsgId: _2!)
+            }
+            else {
+                return nil
+            }
+        }
+        public static func parse_notifyPeer(_ reader: BufferReader) -> NotifyPeer? {
+            var _1: Api.Peer?
+            if let signature = reader.readInt32() {
+                _1 = Api.parse(reader, signature: signature) as? Api.Peer
+            }
+            let _c1 = _1 != nil
+            if _c1 {
+                return Api.NotifyPeer.notifyPeer(peer: _1!)
+            }
+            else {
+                return nil
+            }
+        }
+        public static func parse_notifyUsers(_ reader: BufferReader) -> NotifyPeer? {
+            return Api.NotifyPeer.notifyUsers
+        }
+    
+    }
+}
+public extension Api {
+    enum OutboxReadDate: TypeConstructorDescription {
+        case outboxReadDate(date: Int32)
+    
+    public func serialize(_ buffer: Buffer, _ boxed: Swift.Bool) {
+    switch self {
+                case .outboxReadDate(let date):
+                    if boxed {
+                        buffer.appendInt32(1001931436)
+                    }
+                    serializeInt32(date, buffer: buffer, boxed: false)
+                    break
+    }
+    }
+    
+    public func descriptionFields() -> (String, [(String, Any)]) {
+        switch self {
+                case .outboxReadDate(let date):
+                return ("outboxReadDate", [("date", date as Any)])
+    }
+    }
+    
+        public static func parse_outboxReadDate(_ reader: BufferReader) -> OutboxReadDate? {
+            var _1: Int32?
+            _1 = reader.readInt32()
+            let _c1 = _1 != nil
+            if _c1 {
+                return Api.OutboxReadDate.outboxReadDate(date: _1!)
+            }
+            else {
+                return nil
+            }
+        }
+    
+    }
+}
+public extension Api {
+    enum Page: TypeConstructorDescription {
+        case page(flags: Int32, url: String, blocks: [Api.PageBlock], photos: [Api.Photo], documents: [Api.Document], views: Int32?)
+    
+    public func serialize(_ buffer: Buffer, _ boxed: Swift.Bool) {
+    switch self {
+                case .page(let flags, let url, let blocks, let photos, let documents, let views):
+                    if boxed {
+                        buffer.appendInt32(-1738178803)
+                    }
+                    serializeInt32(flags, buffer: buffer, boxed: false)
+                    serializeString(url, buffer: buffer, boxed: false)
+                    buffer.appendInt32(481674261)
+                    buffer.appendInt32(Int32(blocks.count))
+                    for item in blocks {
+                        item.serialize(buffer, true)
+                    }
+                    buffer.appendInt32(481674261)
+                    buffer.appendInt32(Int32(photos.count))
+                    for item in photos {
+                        item.serialize(buffer, true)
+                    }
+                    buffer.appendInt32(481674261)
+                    buffer.appendInt32(Int32(documents.count))
+                    for item in documents {
+                        item.serialize(buffer, true)
+                    }
+                    if Int(flags) & Int(1 << 3) != 0 {serializeInt32(views!, buffer: buffer, boxed: false)}
+                    break
+    }
+    }
+    
+    public func descriptionFields() -> (String, [(String, Any)]) {
+        switch self {
+                case .page(let flags, let url, let blocks, let photos, let documents, let views):
+                return ("page", [("flags", flags as Any), ("url", url as Any), ("blocks", blocks as Any), ("photos", photos as Any), ("documents", documents as Any), ("views", views as Any)])
+    }
+    }
+    
+        public static func parse_page(_ reader: BufferReader) -> Page? {
+            var _1: Int32?
+            _1 = reader.readInt32()
+            var _2: String?
+            _2 = parseString(reader)
+            var _3: [Api.PageBlock]?
+            if let _ = reader.readInt32() {
+                _3 = Api.parseVector(reader, elementSignature: 0, elementType: Api.PageBlock.self)
+            }
+            var _4: [Api.Photo]?
+            if let _ = reader.readInt32() {
+                _4 = Api.parseVector(reader, elementSignature: 0, elementType: Api.Photo.self)
+            }
+            var _5: [Api.Document]?
+            if let _ = reader.readInt32() {
+                _5 = Api.parseVector(reader, elementSignature: 0, elementType: Api.Document.self)
+            }
+            var _6: Int32?
+            if Int(_1!) & Int(1 << 3) != 0 {_6 = reader.readInt32() }
+            let _c1 = _1 != nil
+            let _c2 = _2 != nil
+            let _c3 = _3 != nil
+            let _c4 = _4 != nil
+            let _c5 = _5 != nil
+            let _c6 = (Int(_1!) & Int(1 << 3) == 0) || _6 != nil
+            if _c1 && _c2 && _c3 && _c4 && _c5 && _c6 {
+                return Api.Page.page(flags: _1!, url: _2!, blocks: _3!, photos: _4!, documents: _5!, views: _6)
+            }
+            else {
+                return nil
+            }
+        }
+    
+    }
+}
+public extension Api {
+    indirect enum PageBlock: TypeConstructorDescription {
+        case pageBlockAnchor(name: String)
+        case pageBlockAudio(audioId: Int64, caption: Api.PageCaption)
+        case pageBlockAuthorDate(author: Api.RichText, publishedDate: Int32)
+        case pageBlockBlockquote(text: Api.RichText, caption: Api.RichText)
+        case pageBlockChannel(channel: Api.Chat)
+        case pageBlockCollage(items: [Api.PageBlock], caption: Api.PageCaption)
+        case pageBlockCover(cover: Api.PageBlock)
+        case pageBlockDetails(flags: Int32, blocks: [Api.PageBlock], title: Api.RichText)
+        case pageBlockDivider
+        case pageBlockEmbed(flags: Int32, url: String?, html: String?, posterPhotoId: Int64?, w: Int32?, h: Int32?, caption: Api.PageCaption)
+        case pageBlockEmbedPost(url: String, webpageId: Int64, authorPhotoId: Int64, author: String, date: Int32, blocks: [Api.PageBlock], caption: Api.PageCaption)
+        case pageBlockFooter(text: Api.RichText)
+        case pageBlockHeader(text: Api.RichText)
+        case pageBlockKicker(text: Api.RichText)
+        case pageBlockList(items: [Api.PageListItem])
+        case pageBlockMap(geo: Api.GeoPoint, zoom: Int32, w: Int32, h: Int32, caption: Api.PageCaption)
+        case pageBlockOrderedList(items: [Api.PageListOrderedItem])
+        case pageBlockParagraph(text: Api.RichText)
+        case pageBlockPhoto(flags: Int32, photoId: Int64, caption: Api.PageCaption, url: String?, webpageId: Int64?)
+        case pageBlockPreformatted(text: Api.RichText, language: String)
+        case pageBlockPullquote(text: Api.RichText, caption: Api.RichText)
+        case pageBlockRelatedArticles(title: Api.RichText, articles: [Api.PageRelatedArticle])
+        case pageBlockSlideshow(items: [Api.PageBlock], caption: Api.PageCaption)
+        case pageBlockSubheader(text: Api.RichText)
+        case pageBlockSubtitle(text: Api.RichText)
+        case pageBlockTable(flags: Int32, title: Api.RichText, rows: [Api.PageTableRow])
+        case pageBlockTitle(text: Api.RichText)
+        case pageBlockUnsupported
+        case pageBlockVideo(flags: Int32, videoId: Int64, caption: Api.PageCaption)
+    
+    public func serialize(_ buffer: Buffer, _ boxed: Swift.Bool) {
+    switch self {
+                case .pageBlockAnchor(let name):
+                    if boxed {
+                        buffer.appendInt32(-837994576)
+                    }
+                    serializeString(name, buffer: buffer, boxed: false)
+                    break
+                case .pageBlockAudio(let audioId, let caption):
+                    if boxed {
+                        buffer.appendInt32(-2143067670)
+                    }
+                    serializeInt64(audioId, buffer: buffer, boxed: false)
+                    caption.serialize(buffer, true)
+                    break
+                case .pageBlockAuthorDate(let author, let publishedDate):
+                    if boxed {
+                        buffer.appendInt32(-1162877472)
+                    }
+                    author.serialize(buffer, true)
+                    serializeInt32(publishedDate, buffer: buffer, boxed: false)
+                    break
+                case .pageBlockBlockquote(let text, let caption):
+                    if boxed {
+                        buffer.appendInt32(641563686)
+                    }
+                    text.serialize(buffer, true)
+                    caption.serialize(buffer, true)
+                    break
+                case .pageBlockChannel(let channel):
+                    if boxed {
+                        buffer.appendInt32(-283684427)
+                    }
+                    channel.serialize(buffer, true)
+                    break
+                case .pageBlockCollage(let items, let caption):
+                    if boxed {
+                        buffer.appendInt32(1705048653)
+                    }
+                    buffer.appendInt32(481674261)
+                    buffer.appendInt32(Int32(items.count))
+                    for item in items {
+                        item.serialize(buffer, true)
+                    }
+                    caption.serialize(buffer, true)
+                    break
+                case .pageBlockCover(let cover):
+                    if boxed {
+                        buffer.appendInt32(972174080)
+                    }
+                    cover.serialize(buffer, true)
+                    break
+                case .pageBlockDetails(let flags, let blocks, let title):
+                    if boxed {
+                        buffer.appendInt32(1987480557)
+                    }
+                    serializeInt32(flags, buffer: buffer, boxed: false)
+                    buffer.appendInt32(481674261)
+                    buffer.appendInt32(Int32(blocks.count))
+                    for item in blocks {
+                        item.serialize(buffer, true)
+                    }
+                    title.serialize(buffer, true)
+                    break
+                case .pageBlockDivider:
+                    if boxed {
+                        buffer.appendInt32(-618614392)
+                    }
+                    
+                    break
+                case .pageBlockEmbed(let flags, let url, let html, let posterPhotoId, let w, let h, let caption):
+                    if boxed {
+                        buffer.appendInt32(-1468953147)
+                    }
+                    serializeInt32(flags, buffer: buffer, boxed: false)
+                    if Int(flags) & Int(1 << 1) != 0 {serializeString(url!, buffer: buffer, boxed: false)}
+                    if Int(flags) & Int(1 << 2) != 0 {serializeString(html!, buffer: buffer, boxed: false)}
+                    if Int(flags) & Int(1 << 4) != 0 {serializeInt64(posterPhotoId!, buffer: buffer, boxed: false)}
+                    if Int(flags) & Int(1 << 5) != 0 {serializeInt32(w!, buffer: buffer, boxed: false)}
+                    if Int(flags) & Int(1 << 5) != 0 {serializeInt32(h!, buffer: buffer, boxed: false)}
+                    caption.serialize(buffer, true)
+                    break
+                case .pageBlockEmbedPost(let url, let webpageId, let authorPhotoId, let author, let date, let blocks, let caption):
+                    if boxed {
+                        buffer.appendInt32(-229005301)
+                    }
+                    serializeString(url, buffer: buffer, boxed: false)
+                    serializeInt64(webpageId, buffer: buffer, boxed: false)
+                    serializeInt64(authorPhotoId, buffer: buffer, boxed: false)
+                    serializeString(author, buffer: buffer, boxed: false)
+                    serializeInt32(date, buffer: buffer, boxed: false)
+                    buffer.appendInt32(481674261)
+                    buffer.appendInt32(Int32(blocks.count))
+                    for item in blocks {
+                        item.serialize(buffer, true)
+                    }
+                    caption.serialize(buffer, true)
+                    break
+                case .pageBlockFooter(let text):
+                    if boxed {
+                        buffer.appendInt32(1216809369)
+                    }
+                    text.serialize(buffer, true)
+                    break
+                case .pageBlockHeader(let text):
+                    if boxed {
+                        buffer.appendInt32(-1076861716)
+                    }
+                    text.serialize(buffer, true)
+                    break
+                case .pageBlockKicker(let text):
+                    if boxed {
+                        buffer.appendInt32(504660880)
+                    }
+                    text.serialize(buffer, true)
+                    break
+                case .pageBlockList(let items):
+                    if boxed {
+                        buffer.appendInt32(-454524911)
+                    }
+                    buffer.appendInt32(481674261)
+                    buffer.appendInt32(Int32(items.count))
+                    for item in items {
+                        item.serialize(buffer, true)
+                    }
+                    break
+                case .pageBlockMap(let geo, let zoom, let w, let h, let caption):
+                    if boxed {
+                        buffer.appendInt32(-1538310410)
+                    }
+                    geo.serialize(buffer, true)
+                    serializeInt32(zoom, buffer: buffer, boxed: false)
+                    serializeInt32(w, buffer: buffer, boxed: false)
+                    serializeInt32(h, buffer: buffer, boxed: false)
+                    caption.serialize(buffer, true)
+                    break
+                case .pageBlockOrderedList(let items):
+                    if boxed {
+                        buffer.appendInt32(-1702174239)
+                    }
+                    buffer.appendInt32(481674261)
+                    buffer.appendInt32(Int32(items.count))
+                    for item in items {
+                        item.serialize(buffer, true)
+                    }
+                    break
+                case .pageBlockParagraph(let text):
+                    if boxed {
+                        buffer.appendInt32(1182402406)
+                    }
+                    text.serialize(buffer, true)
+                    break
+                case .pageBlockPhoto(let flags, let photoId, let caption, let url, let webpageId):
+                    if boxed {
+                        buffer.appendInt32(391759200)
+                    }
+                    serializeInt32(flags, buffer: buffer, boxed: false)
+                    serializeInt64(photoId, buffer: buffer, boxed: false)
+                    caption.serialize(buffer, true)
+                    if Int(flags) & Int(1 << 0) != 0 {serializeString(url!, buffer: buffer, boxed: false)}
+                    if Int(flags) & Int(1 << 0) != 0 {serializeInt64(webpageId!, buffer: buffer, boxed: false)}
+                    break
+                case .pageBlockPreformatted(let text, let language):
+                    if boxed {
+                        buffer.appendInt32(-1066346178)
+                    }
+                    text.serialize(buffer, true)
+                    serializeString(language, buffer: buffer, boxed: false)
+                    break
+                case .pageBlockPullquote(let text, let caption):
+                    if boxed {
+                        buffer.appendInt32(1329878739)
+                    }
+                    text.serialize(buffer, true)
+                    caption.serialize(buffer, true)
+                    break
+                case .pageBlockRelatedArticles(let title, let articles):
+                    if boxed {
+                        buffer.appendInt32(370236054)
+                    }
+                    title.serialize(buffer, true)
+                    buffer.appendInt32(481674261)
+                    buffer.appendInt32(Int32(articles.count))
+                    for item in articles {
+                        item.serialize(buffer, true)
+                    }
+                    break
+                case .pageBlockSlideshow(let items, let caption):
+                    if boxed {
+                        buffer.appendInt32(52401552)
+                    }
+                    buffer.appendInt32(481674261)
+                    buffer.appendInt32(Int32(items.count))
+                    for item in items {
+                        item.serialize(buffer, true)
+                    }
+                    caption.serialize(buffer, true)
+                    break
+                case .pageBlockSubheader(let text):
+                    if boxed {
+                        buffer.appendInt32(-248793375)
+                    }
+                    text.serialize(buffer, true)
+                    break
+                case .pageBlockSubtitle(let text):
+                    if boxed {
+                        buffer.appendInt32(-1879401953)
+                    }
+                    text.serialize(buffer, true)
+                    break
+                case .pageBlockTable(let flags, let title, let rows):
+                    if boxed {
+                        buffer.appendInt32(-1085412734)
+                    }
+                    serializeInt32(flags, buffer: buffer, boxed: false)
+                    title.serialize(buffer, true)
+                    buffer.appendInt32(481674261)
+                    buffer.appendInt32(Int32(rows.count))
+                    for item in rows {
+                        item.serialize(buffer, true)
+                    }
+                    break
+                case .pageBlockTitle(let text):
+                    if boxed {
+                        buffer.appendInt32(1890305021)
+                    }
+                    text.serialize(buffer, true)
+                    break
+                case .pageBlockUnsupported:
+                    if boxed {
+                        buffer.appendInt32(324435594)
+                    }
+                    
+                    break
+                case .pageBlockVideo(let flags, let videoId, let caption):
+                    if boxed {
+                        buffer.appendInt32(2089805750)
+                    }
+                    serializeInt32(flags, buffer: buffer, boxed: false)
+                    serializeInt64(videoId, buffer: buffer, boxed: false)
+                    caption.serialize(buffer, true)
+                    break
+    }
+    }
+    
+    public func descriptionFields() -> (String, [(String, Any)]) {
+        switch self {
+                case .pageBlockAnchor(let name):
+                return ("pageBlockAnchor", [("name", name as Any)])
+                case .pageBlockAudio(let audioId, let caption):
+                return ("pageBlockAudio", [("audioId", audioId as Any), ("caption", caption as Any)])
+                case .pageBlockAuthorDate(let author, let publishedDate):
+                return ("pageBlockAuthorDate", [("author", author as Any), ("publishedDate", publishedDate as Any)])
+                case .pageBlockBlockquote(let text, let caption):
+                return ("pageBlockBlockquote", [("text", text as Any), ("caption", caption as Any)])
+                case .pageBlockChannel(let channel):
+                return ("pageBlockChannel", [("channel", channel as Any)])
+                case .pageBlockCollage(let items, let caption):
+                return ("pageBlockCollage", [("items", items as Any), ("caption", caption as Any)])
+                case .pageBlockCover(let cover):
+                return ("pageBlockCover", [("cover", cover as Any)])
+                case .pageBlockDetails(let flags, let blocks, let title):
+                return ("pageBlockDetails", [("flags", flags as Any), ("blocks", blocks as Any), ("title", title as Any)])
+                case .pageBlockDivider:
+                return ("pageBlockDivider", [])
+                case .pageBlockEmbed(let flags, let url, let html, let posterPhotoId, let w, let h, let caption):
+                return ("pageBlockEmbed", [("flags", flags as Any), ("url", url as Any), ("html", html as Any), ("posterPhotoId", posterPhotoId as Any), ("w", w as Any), ("h", h as Any), ("caption", caption as Any)])
+                case .pageBlockEmbedPost(let url, let webpageId, let authorPhotoId, let author, let date, let blocks, let caption):
+                return ("pageBlockEmbedPost", [("url", url as Any), ("webpageId", webpageId as Any), ("authorPhotoId", authorPhotoId as Any), ("author", author as Any), ("date", date as Any), ("blocks", blocks as Any), ("caption", caption as Any)])
+                case .pageBlockFooter(let text):
+                return ("pageBlockFooter", [("text", text as Any)])
+                case .pageBlockHeader(let text):
+                return ("pageBlockHeader", [("text", text as Any)])
+                case .pageBlockKicker(let text):
+                return ("pageBlockKicker", [("text", text as Any)])
+                case .pageBlockList(let items):
+                return ("pageBlockList", [("items", items as Any)])
+                case .pageBlockMap(let geo, let zoom, let w, let h, let caption):
+                return ("pageBlockMap", [("geo", geo as Any), ("zoom", zoom as Any), ("w", w as Any), ("h", h as Any), ("caption", caption as Any)])
+                case .pageBlockOrderedList(let items):
+                return ("pageBlockOrderedList", [("items", items as Any)])
+                case .pageBlockParagraph(let text):
+                return ("pageBlockParagraph", [("text", text as Any)])
+                case .pageBlockPhoto(let flags, let photoId, let caption, let url, let webpageId):
+                return ("pageBlockPhoto", [("flags", flags as Any), ("photoId", photoId as Any), ("caption", caption as Any), ("url", url as Any), ("webpageId", webpageId as Any)])
+                case .pageBlockPreformatted(let text, let language):
+                return ("pageBlockPreformatted", [("text", text as Any), ("language", language as Any)])
+                case .pageBlockPullquote(let text, let caption):
+                return ("pageBlockPullquote", [("text", text as Any), ("caption", caption as Any)])
+                case .pageBlockRelatedArticles(let title, let articles):
+                return ("pageBlockRelatedArticles", [("title", title as Any), ("articles", articles as Any)])
+                case .pageBlockSlideshow(let items, let caption):
+                return ("pageBlockSlideshow", [("items", items as Any), ("caption", caption as Any)])
+                case .pageBlockSubheader(let text):
+                return ("pageBlockSubheader", [("text", text as Any)])
+                case .pageBlockSubtitle(let text):
+                return ("pageBlockSubtitle", [("text", text as Any)])
+                case .pageBlockTable(let flags, let title, let rows):
+                return ("pageBlockTable", [("flags", flags as Any), ("title", title as Any), ("rows", rows as Any)])
+                case .pageBlockTitle(let text):
+                return ("pageBlockTitle", [("text", text as Any)])
+                case .pageBlockUnsupported:
+                return ("pageBlockUnsupported", [])
+                case .pageBlockVideo(let flags, let videoId, let caption):
+                return ("pageBlockVideo", [("flags", flags as Any), ("videoId", videoId as Any), ("caption", caption as Any)])
+    }
+    }
+    
+        public static func parse_pageBlockAnchor(_ reader: BufferReader) -> PageBlock? {
+            var _1: String?
+            _1 = parseString(reader)
+            let _c1 = _1 != nil
+            if _c1 {
+                return Api.PageBlock.pageBlockAnchor(name: _1!)
+            }
+            else {
+                return nil
+            }
+        }
+        public static func parse_pageBlockAudio(_ reader: BufferReader) -> PageBlock? {
             var _1: Int64?
             _1 = reader.readInt64()
+            var _2: Api.PageCaption?
+            if let signature = reader.readInt32() {
+                _2 = Api.parse(reader, signature: signature) as? Api.PageCaption
+            }
+            let _c1 = _1 != nil
+            let _c2 = _2 != nil
+            if _c1 && _c2 {
+                return Api.PageBlock.pageBlockAudio(audioId: _1!, caption: _2!)
+            }
+            else {
+                return nil
+            }
+        }
+        public static func parse_pageBlockAuthorDate(_ reader: BufferReader) -> PageBlock? {
+            var _1: Api.RichText?
+            if let signature = reader.readInt32() {
+                _1 = Api.parse(reader, signature: signature) as? Api.RichText
+            }
+            var _2: Int32?
+            _2 = reader.readInt32()
+            let _c1 = _1 != nil
+            let _c2 = _2 != nil
+            if _c1 && _c2 {
+                return Api.PageBlock.pageBlockAuthorDate(author: _1!, publishedDate: _2!)
+            }
+            else {
+                return nil
+            }
+        }
+        public static func parse_pageBlockBlockquote(_ reader: BufferReader) -> PageBlock? {
+            var _1: Api.RichText?
+            if let signature = reader.readInt32() {
+                _1 = Api.parse(reader, signature: signature) as? Api.RichText
+            }
+            var _2: Api.RichText?
+            if let signature = reader.readInt32() {
+                _2 = Api.parse(reader, signature: signature) as? Api.RichText
+            }
+            let _c1 = _1 != nil
+            let _c2 = _2 != nil
+            if _c1 && _c2 {
+                return Api.PageBlock.pageBlockBlockquote(text: _1!, caption: _2!)
+            }
+            else {
+                return nil
+            }
+        }
+        public static func parse_pageBlockChannel(_ reader: BufferReader) -> PageBlock? {
+            var _1: Api.Chat?
+            if let signature = reader.readInt32() {
+                _1 = Api.parse(reader, signature: signature) as? Api.Chat
+            }
+            let _c1 = _1 != nil
+            if _c1 {
+                return Api.PageBlock.pageBlockChannel(channel: _1!)
+            }
+            else {
+                return nil
+            }
+        }
+        public static func parse_pageBlockCollage(_ reader: BufferReader) -> PageBlock? {
+            var _1: [Api.PageBlock]?
+            if let _ = reader.readInt32() {
+                _1 = Api.parseVector(reader, elementSignature: 0, elementType: Api.PageBlock.self)
+            }
+            var _2: Api.PageCaption?
+            if let signature = reader.readInt32() {
+                _2 = Api.parse(reader, signature: signature) as? Api.PageCaption
+            }
+            let _c1 = _1 != nil
+            let _c2 = _2 != nil
+            if _c1 && _c2 {
+                return Api.PageBlock.pageBlockCollage(items: _1!, caption: _2!)
+            }
+            else {
+                return nil
+            }
+        }
+        public static func parse_pageBlockCover(_ reader: BufferReader) -> PageBlock? {
+            var _1: Api.PageBlock?
+            if let signature = reader.readInt32() {
+                _1 = Api.parse(reader, signature: signature) as? Api.PageBlock
+            }
+            let _c1 = _1 != nil
+            if _c1 {
+                return Api.PageBlock.pageBlockCover(cover: _1!)
+            }
+            else {
+                return nil
+            }
+        }
+        public static func parse_pageBlockDetails(_ reader: BufferReader) -> PageBlock? {
+            var _1: Int32?
+            _1 = reader.readInt32()
+            var _2: [Api.PageBlock]?
+            if let _ = reader.readInt32() {
+                _2 = Api.parseVector(reader, elementSignature: 0, elementType: Api.PageBlock.self)
+            }
+            var _3: Api.RichText?
+            if let signature = reader.readInt32() {
+                _3 = Api.parse(reader, signature: signature) as? Api.RichText
+            }
+            let _c1 = _1 != nil
+            let _c2 = _2 != nil
+            let _c3 = _3 != nil
+            if _c1 && _c2 && _c3 {
+                return Api.PageBlock.pageBlockDetails(flags: _1!, blocks: _2!, title: _3!)
+            }
+            else {
+                return nil
+            }
+        }
+        public static func parse_pageBlockDivider(_ reader: BufferReader) -> PageBlock? {
+            return Api.PageBlock.pageBlockDivider
+        }
+        public static func parse_pageBlockEmbed(_ reader: BufferReader) -> PageBlock? {
+            var _1: Int32?
+            _1 = reader.readInt32()
+            var _2: String?
+            if Int(_1!) & Int(1 << 1) != 0 {_2 = parseString(reader) }
+            var _3: String?
+            if Int(_1!) & Int(1 << 2) != 0 {_3 = parseString(reader) }
+            var _4: Int64?
+            if Int(_1!) & Int(1 << 4) != 0 {_4 = reader.readInt64() }
+            var _5: Int32?
+            if Int(_1!) & Int(1 << 5) != 0 {_5 = reader.readInt32() }
+            var _6: Int32?
+            if Int(_1!) & Int(1 << 5) != 0 {_6 = reader.readInt32() }
+            var _7: Api.PageCaption?
+            if let signature = reader.readInt32() {
+                _7 = Api.parse(reader, signature: signature) as? Api.PageCaption
+            }
+            let _c1 = _1 != nil
+            let _c2 = (Int(_1!) & Int(1 << 1) == 0) || _2 != nil
+            let _c3 = (Int(_1!) & Int(1 << 2) == 0) || _3 != nil
+            let _c4 = (Int(_1!) & Int(1 << 4) == 0) || _4 != nil
+            let _c5 = (Int(_1!) & Int(1 << 5) == 0) || _5 != nil
+            let _c6 = (Int(_1!) & Int(1 << 5) == 0) || _6 != nil
+            let _c7 = _7 != nil
+            if _c1 && _c2 && _c3 && _c4 && _c5 && _c6 && _c7 {
+                return Api.PageBlock.pageBlockEmbed(flags: _1!, url: _2, html: _3, posterPhotoId: _4, w: _5, h: _6, caption: _7!)
+            }
+            else {
+                return nil
+            }
+        }
+        public static func parse_pageBlockEmbedPost(_ reader: BufferReader) -> PageBlock? {
+            var _1: String?
+            _1 = parseString(reader)
             var _2: Int64?
             _2 = reader.readInt64()
             var _3: Int64?
             _3 = reader.readInt64()
-            var _4: Int32?
-            _4 = reader.readInt32()
+            var _4: String?
+            _4 = parseString(reader)
             var _5: Int32?
             _5 = reader.readInt32()
-            var _6: Buffer?
-            _6 = parseBytes(reader)
-            var _7: Buffer?
-            _7 = parseBytes(reader)
+            var _6: [Api.PageBlock]?
+            if let _ = reader.readInt32() {
+                _6 = Api.parseVector(reader, elementSignature: 0, elementType: Api.PageBlock.self)
+            }
+            var _7: Api.PageCaption?
+            if let signature = reader.readInt32() {
+                _7 = Api.parse(reader, signature: signature) as? Api.PageCaption
+            }
             let _c1 = _1 != nil
             let _c2 = _2 != nil
             let _c3 = _3 != nil
@@ -286,864 +819,293 @@ public extension Api {
             let _c6 = _6 != nil
             let _c7 = _7 != nil
             if _c1 && _c2 && _c3 && _c4 && _c5 && _c6 && _c7 {
-                return Api.SecureFile.secureFile(id: _1!, accessHash: _2!, size: _3!, dcId: _4!, date: _5!, fileHash: _6!, secret: _7!)
+                return Api.PageBlock.pageBlockEmbedPost(url: _1!, webpageId: _2!, authorPhotoId: _3!, author: _4!, date: _5!, blocks: _6!, caption: _7!)
             }
             else {
                 return nil
             }
         }
-        public static func parse_secureFileEmpty(_ reader: BufferReader) -> SecureFile? {
-            return Api.SecureFile.secureFileEmpty
-        }
-    
-    }
-}
-public extension Api {
-    enum SecurePasswordKdfAlgo: TypeConstructorDescription {
-        case securePasswordKdfAlgoPBKDF2HMACSHA512iter100000(salt: Buffer)
-        case securePasswordKdfAlgoSHA512(salt: Buffer)
-        case securePasswordKdfAlgoUnknown
-    
-    public func serialize(_ buffer: Buffer, _ boxed: Swift.Bool) {
-    switch self {
-                case .securePasswordKdfAlgoPBKDF2HMACSHA512iter100000(let salt):
-                    if boxed {
-                        buffer.appendInt32(-1141711456)
-                    }
-                    serializeBytes(salt, buffer: buffer, boxed: false)
-                    break
-                case .securePasswordKdfAlgoSHA512(let salt):
-                    if boxed {
-                        buffer.appendInt32(-2042159726)
-                    }
-                    serializeBytes(salt, buffer: buffer, boxed: false)
-                    break
-                case .securePasswordKdfAlgoUnknown:
-                    if boxed {
-                        buffer.appendInt32(4883767)
-                    }
-                    
-                    break
-    }
-    }
-    
-    public func descriptionFields() -> (String, [(String, Any)]) {
-        switch self {
-                case .securePasswordKdfAlgoPBKDF2HMACSHA512iter100000(let salt):
-                return ("securePasswordKdfAlgoPBKDF2HMACSHA512iter100000", [("salt", String(describing: salt))])
-                case .securePasswordKdfAlgoSHA512(let salt):
-                return ("securePasswordKdfAlgoSHA512", [("salt", String(describing: salt))])
-                case .securePasswordKdfAlgoUnknown:
-                return ("securePasswordKdfAlgoUnknown", [])
-    }
-    }
-    
-        public static func parse_securePasswordKdfAlgoPBKDF2HMACSHA512iter100000(_ reader: BufferReader) -> SecurePasswordKdfAlgo? {
-            var _1: Buffer?
-            _1 = parseBytes(reader)
-            let _c1 = _1 != nil
-            if _c1 {
-                return Api.SecurePasswordKdfAlgo.securePasswordKdfAlgoPBKDF2HMACSHA512iter100000(salt: _1!)
-            }
-            else {
-                return nil
-            }
-        }
-        public static func parse_securePasswordKdfAlgoSHA512(_ reader: BufferReader) -> SecurePasswordKdfAlgo? {
-            var _1: Buffer?
-            _1 = parseBytes(reader)
-            let _c1 = _1 != nil
-            if _c1 {
-                return Api.SecurePasswordKdfAlgo.securePasswordKdfAlgoSHA512(salt: _1!)
-            }
-            else {
-                return nil
-            }
-        }
-        public static func parse_securePasswordKdfAlgoUnknown(_ reader: BufferReader) -> SecurePasswordKdfAlgo? {
-            return Api.SecurePasswordKdfAlgo.securePasswordKdfAlgoUnknown
-        }
-    
-    }
-}
-public extension Api {
-    enum SecurePlainData: TypeConstructorDescription {
-        case securePlainEmail(email: String)
-        case securePlainPhone(phone: String)
-    
-    public func serialize(_ buffer: Buffer, _ boxed: Swift.Bool) {
-    switch self {
-                case .securePlainEmail(let email):
-                    if boxed {
-                        buffer.appendInt32(569137759)
-                    }
-                    serializeString(email, buffer: buffer, boxed: false)
-                    break
-                case .securePlainPhone(let phone):
-                    if boxed {
-                        buffer.appendInt32(2103482845)
-                    }
-                    serializeString(phone, buffer: buffer, boxed: false)
-                    break
-    }
-    }
-    
-    public func descriptionFields() -> (String, [(String, Any)]) {
-        switch self {
-                case .securePlainEmail(let email):
-                return ("securePlainEmail", [("email", String(describing: email))])
-                case .securePlainPhone(let phone):
-                return ("securePlainPhone", [("phone", String(describing: phone))])
-    }
-    }
-    
-        public static func parse_securePlainEmail(_ reader: BufferReader) -> SecurePlainData? {
-            var _1: String?
-            _1 = parseString(reader)
-            let _c1 = _1 != nil
-            if _c1 {
-                return Api.SecurePlainData.securePlainEmail(email: _1!)
-            }
-            else {
-                return nil
-            }
-        }
-        public static func parse_securePlainPhone(_ reader: BufferReader) -> SecurePlainData? {
-            var _1: String?
-            _1 = parseString(reader)
-            let _c1 = _1 != nil
-            if _c1 {
-                return Api.SecurePlainData.securePlainPhone(phone: _1!)
-            }
-            else {
-                return nil
-            }
-        }
-    
-    }
-}
-public extension Api {
-    enum SecureRequiredType: TypeConstructorDescription {
-        case secureRequiredType(flags: Int32, type: Api.SecureValueType)
-        case secureRequiredTypeOneOf(types: [Api.SecureRequiredType])
-    
-    public func serialize(_ buffer: Buffer, _ boxed: Swift.Bool) {
-    switch self {
-                case .secureRequiredType(let flags, let type):
-                    if boxed {
-                        buffer.appendInt32(-2103600678)
-                    }
-                    serializeInt32(flags, buffer: buffer, boxed: false)
-                    type.serialize(buffer, true)
-                    break
-                case .secureRequiredTypeOneOf(let types):
-                    if boxed {
-                        buffer.appendInt32(41187252)
-                    }
-                    buffer.appendInt32(481674261)
-                    buffer.appendInt32(Int32(types.count))
-                    for item in types {
-                        item.serialize(buffer, true)
-                    }
-                    break
-    }
-    }
-    
-    public func descriptionFields() -> (String, [(String, Any)]) {
-        switch self {
-                case .secureRequiredType(let flags, let type):
-                return ("secureRequiredType", [("flags", String(describing: flags)), ("type", String(describing: type))])
-                case .secureRequiredTypeOneOf(let types):
-                return ("secureRequiredTypeOneOf", [("types", String(describing: types))])
-    }
-    }
-    
-        public static func parse_secureRequiredType(_ reader: BufferReader) -> SecureRequiredType? {
-            var _1: Int32?
-            _1 = reader.readInt32()
-            var _2: Api.SecureValueType?
+        public static func parse_pageBlockFooter(_ reader: BufferReader) -> PageBlock? {
+            var _1: Api.RichText?
             if let signature = reader.readInt32() {
-                _2 = Api.parse(reader, signature: signature) as? Api.SecureValueType
+                _1 = Api.parse(reader, signature: signature) as? Api.RichText
             }
             let _c1 = _1 != nil
-            let _c2 = _2 != nil
-            if _c1 && _c2 {
-                return Api.SecureRequiredType.secureRequiredType(flags: _1!, type: _2!)
+            if _c1 {
+                return Api.PageBlock.pageBlockFooter(text: _1!)
             }
             else {
                 return nil
             }
         }
-        public static func parse_secureRequiredTypeOneOf(_ reader: BufferReader) -> SecureRequiredType? {
-            var _1: [Api.SecureRequiredType]?
+        public static func parse_pageBlockHeader(_ reader: BufferReader) -> PageBlock? {
+            var _1: Api.RichText?
+            if let signature = reader.readInt32() {
+                _1 = Api.parse(reader, signature: signature) as? Api.RichText
+            }
+            let _c1 = _1 != nil
+            if _c1 {
+                return Api.PageBlock.pageBlockHeader(text: _1!)
+            }
+            else {
+                return nil
+            }
+        }
+        public static func parse_pageBlockKicker(_ reader: BufferReader) -> PageBlock? {
+            var _1: Api.RichText?
+            if let signature = reader.readInt32() {
+                _1 = Api.parse(reader, signature: signature) as? Api.RichText
+            }
+            let _c1 = _1 != nil
+            if _c1 {
+                return Api.PageBlock.pageBlockKicker(text: _1!)
+            }
+            else {
+                return nil
+            }
+        }
+        public static func parse_pageBlockList(_ reader: BufferReader) -> PageBlock? {
+            var _1: [Api.PageListItem]?
             if let _ = reader.readInt32() {
-                _1 = Api.parseVector(reader, elementSignature: 0, elementType: Api.SecureRequiredType.self)
+                _1 = Api.parseVector(reader, elementSignature: 0, elementType: Api.PageListItem.self)
             }
             let _c1 = _1 != nil
             if _c1 {
-                return Api.SecureRequiredType.secureRequiredTypeOneOf(types: _1!)
+                return Api.PageBlock.pageBlockList(items: _1!)
             }
             else {
                 return nil
             }
         }
-    
-    }
-}
-public extension Api {
-    enum SecureSecretSettings: TypeConstructorDescription {
-        case secureSecretSettings(secureAlgo: Api.SecurePasswordKdfAlgo, secureSecret: Buffer, secureSecretId: Int64)
-    
-    public func serialize(_ buffer: Buffer, _ boxed: Swift.Bool) {
-    switch self {
-                case .secureSecretSettings(let secureAlgo, let secureSecret, let secureSecretId):
-                    if boxed {
-                        buffer.appendInt32(354925740)
-                    }
-                    secureAlgo.serialize(buffer, true)
-                    serializeBytes(secureSecret, buffer: buffer, boxed: false)
-                    serializeInt64(secureSecretId, buffer: buffer, boxed: false)
-                    break
-    }
-    }
-    
-    public func descriptionFields() -> (String, [(String, Any)]) {
-        switch self {
-                case .secureSecretSettings(let secureAlgo, let secureSecret, let secureSecretId):
-                return ("secureSecretSettings", [("secureAlgo", String(describing: secureAlgo)), ("secureSecret", String(describing: secureSecret)), ("secureSecretId", String(describing: secureSecretId))])
-    }
-    }
-    
-        public static func parse_secureSecretSettings(_ reader: BufferReader) -> SecureSecretSettings? {
-            var _1: Api.SecurePasswordKdfAlgo?
+        public static func parse_pageBlockMap(_ reader: BufferReader) -> PageBlock? {
+            var _1: Api.GeoPoint?
             if let signature = reader.readInt32() {
-                _1 = Api.parse(reader, signature: signature) as? Api.SecurePasswordKdfAlgo
+                _1 = Api.parse(reader, signature: signature) as? Api.GeoPoint
             }
-            var _2: Buffer?
-            _2 = parseBytes(reader)
-            var _3: Int64?
-            _3 = reader.readInt64()
-            let _c1 = _1 != nil
-            let _c2 = _2 != nil
-            let _c3 = _3 != nil
-            if _c1 && _c2 && _c3 {
-                return Api.SecureSecretSettings.secureSecretSettings(secureAlgo: _1!, secureSecret: _2!, secureSecretId: _3!)
-            }
-            else {
-                return nil
-            }
-        }
-    
-    }
-}
-public extension Api {
-    enum SecureValue: TypeConstructorDescription {
-        case secureValue(flags: Int32, type: Api.SecureValueType, data: Api.SecureData?, frontSide: Api.SecureFile?, reverseSide: Api.SecureFile?, selfie: Api.SecureFile?, translation: [Api.SecureFile]?, files: [Api.SecureFile]?, plainData: Api.SecurePlainData?, hash: Buffer)
-    
-    public func serialize(_ buffer: Buffer, _ boxed: Swift.Bool) {
-    switch self {
-                case .secureValue(let flags, let type, let data, let frontSide, let reverseSide, let selfie, let translation, let files, let plainData, let hash):
-                    if boxed {
-                        buffer.appendInt32(411017418)
-                    }
-                    serializeInt32(flags, buffer: buffer, boxed: false)
-                    type.serialize(buffer, true)
-                    if Int(flags) & Int(1 << 0) != 0 {data!.serialize(buffer, true)}
-                    if Int(flags) & Int(1 << 1) != 0 {frontSide!.serialize(buffer, true)}
-                    if Int(flags) & Int(1 << 2) != 0 {reverseSide!.serialize(buffer, true)}
-                    if Int(flags) & Int(1 << 3) != 0 {selfie!.serialize(buffer, true)}
-                    if Int(flags) & Int(1 << 6) != 0 {buffer.appendInt32(481674261)
-                    buffer.appendInt32(Int32(translation!.count))
-                    for item in translation! {
-                        item.serialize(buffer, true)
-                    }}
-                    if Int(flags) & Int(1 << 4) != 0 {buffer.appendInt32(481674261)
-                    buffer.appendInt32(Int32(files!.count))
-                    for item in files! {
-                        item.serialize(buffer, true)
-                    }}
-                    if Int(flags) & Int(1 << 5) != 0 {plainData!.serialize(buffer, true)}
-                    serializeBytes(hash, buffer: buffer, boxed: false)
-                    break
-    }
-    }
-    
-    public func descriptionFields() -> (String, [(String, Any)]) {
-        switch self {
-                case .secureValue(let flags, let type, let data, let frontSide, let reverseSide, let selfie, let translation, let files, let plainData, let hash):
-                return ("secureValue", [("flags", String(describing: flags)), ("type", String(describing: type)), ("data", String(describing: data)), ("frontSide", String(describing: frontSide)), ("reverseSide", String(describing: reverseSide)), ("selfie", String(describing: selfie)), ("translation", String(describing: translation)), ("files", String(describing: files)), ("plainData", String(describing: plainData)), ("hash", String(describing: hash))])
-    }
-    }
-    
-        public static func parse_secureValue(_ reader: BufferReader) -> SecureValue? {
-            var _1: Int32?
-            _1 = reader.readInt32()
-            var _2: Api.SecureValueType?
+            var _2: Int32?
+            _2 = reader.readInt32()
+            var _3: Int32?
+            _3 = reader.readInt32()
+            var _4: Int32?
+            _4 = reader.readInt32()
+            var _5: Api.PageCaption?
             if let signature = reader.readInt32() {
-                _2 = Api.parse(reader, signature: signature) as? Api.SecureValueType
+                _5 = Api.parse(reader, signature: signature) as? Api.PageCaption
             }
-            var _3: Api.SecureData?
-            if Int(_1!) & Int(1 << 0) != 0 {if let signature = reader.readInt32() {
-                _3 = Api.parse(reader, signature: signature) as? Api.SecureData
-            } }
-            var _4: Api.SecureFile?
-            if Int(_1!) & Int(1 << 1) != 0 {if let signature = reader.readInt32() {
-                _4 = Api.parse(reader, signature: signature) as? Api.SecureFile
-            } }
-            var _5: Api.SecureFile?
-            if Int(_1!) & Int(1 << 2) != 0 {if let signature = reader.readInt32() {
-                _5 = Api.parse(reader, signature: signature) as? Api.SecureFile
-            } }
-            var _6: Api.SecureFile?
-            if Int(_1!) & Int(1 << 3) != 0 {if let signature = reader.readInt32() {
-                _6 = Api.parse(reader, signature: signature) as? Api.SecureFile
-            } }
-            var _7: [Api.SecureFile]?
-            if Int(_1!) & Int(1 << 6) != 0 {if let _ = reader.readInt32() {
-                _7 = Api.parseVector(reader, elementSignature: 0, elementType: Api.SecureFile.self)
-            } }
-            var _8: [Api.SecureFile]?
-            if Int(_1!) & Int(1 << 4) != 0 {if let _ = reader.readInt32() {
-                _8 = Api.parseVector(reader, elementSignature: 0, elementType: Api.SecureFile.self)
-            } }
-            var _9: Api.SecurePlainData?
-            if Int(_1!) & Int(1 << 5) != 0 {if let signature = reader.readInt32() {
-                _9 = Api.parse(reader, signature: signature) as? Api.SecurePlainData
-            } }
-            var _10: Buffer?
-            _10 = parseBytes(reader)
-            let _c1 = _1 != nil
-            let _c2 = _2 != nil
-            let _c3 = (Int(_1!) & Int(1 << 0) == 0) || _3 != nil
-            let _c4 = (Int(_1!) & Int(1 << 1) == 0) || _4 != nil
-            let _c5 = (Int(_1!) & Int(1 << 2) == 0) || _5 != nil
-            let _c6 = (Int(_1!) & Int(1 << 3) == 0) || _6 != nil
-            let _c7 = (Int(_1!) & Int(1 << 6) == 0) || _7 != nil
-            let _c8 = (Int(_1!) & Int(1 << 4) == 0) || _8 != nil
-            let _c9 = (Int(_1!) & Int(1 << 5) == 0) || _9 != nil
-            let _c10 = _10 != nil
-            if _c1 && _c2 && _c3 && _c4 && _c5 && _c6 && _c7 && _c8 && _c9 && _c10 {
-                return Api.SecureValue.secureValue(flags: _1!, type: _2!, data: _3, frontSide: _4, reverseSide: _5, selfie: _6, translation: _7, files: _8, plainData: _9, hash: _10!)
-            }
-            else {
-                return nil
-            }
-        }
-    
-    }
-}
-public extension Api {
-    enum SecureValueError: TypeConstructorDescription {
-        case secureValueError(type: Api.SecureValueType, hash: Buffer, text: String)
-        case secureValueErrorData(type: Api.SecureValueType, dataHash: Buffer, field: String, text: String)
-        case secureValueErrorFile(type: Api.SecureValueType, fileHash: Buffer, text: String)
-        case secureValueErrorFiles(type: Api.SecureValueType, fileHash: [Buffer], text: String)
-        case secureValueErrorFrontSide(type: Api.SecureValueType, fileHash: Buffer, text: String)
-        case secureValueErrorReverseSide(type: Api.SecureValueType, fileHash: Buffer, text: String)
-        case secureValueErrorSelfie(type: Api.SecureValueType, fileHash: Buffer, text: String)
-        case secureValueErrorTranslationFile(type: Api.SecureValueType, fileHash: Buffer, text: String)
-        case secureValueErrorTranslationFiles(type: Api.SecureValueType, fileHash: [Buffer], text: String)
-    
-    public func serialize(_ buffer: Buffer, _ boxed: Swift.Bool) {
-    switch self {
-                case .secureValueError(let type, let hash, let text):
-                    if boxed {
-                        buffer.appendInt32(-2036501105)
-                    }
-                    type.serialize(buffer, true)
-                    serializeBytes(hash, buffer: buffer, boxed: false)
-                    serializeString(text, buffer: buffer, boxed: false)
-                    break
-                case .secureValueErrorData(let type, let dataHash, let field, let text):
-                    if boxed {
-                        buffer.appendInt32(-391902247)
-                    }
-                    type.serialize(buffer, true)
-                    serializeBytes(dataHash, buffer: buffer, boxed: false)
-                    serializeString(field, buffer: buffer, boxed: false)
-                    serializeString(text, buffer: buffer, boxed: false)
-                    break
-                case .secureValueErrorFile(let type, let fileHash, let text):
-                    if boxed {
-                        buffer.appendInt32(2054162547)
-                    }
-                    type.serialize(buffer, true)
-                    serializeBytes(fileHash, buffer: buffer, boxed: false)
-                    serializeString(text, buffer: buffer, boxed: false)
-                    break
-                case .secureValueErrorFiles(let type, let fileHash, let text):
-                    if boxed {
-                        buffer.appendInt32(1717706985)
-                    }
-                    type.serialize(buffer, true)
-                    buffer.appendInt32(481674261)
-                    buffer.appendInt32(Int32(fileHash.count))
-                    for item in fileHash {
-                        serializeBytes(item, buffer: buffer, boxed: false)
-                    }
-                    serializeString(text, buffer: buffer, boxed: false)
-                    break
-                case .secureValueErrorFrontSide(let type, let fileHash, let text):
-                    if boxed {
-                        buffer.appendInt32(12467706)
-                    }
-                    type.serialize(buffer, true)
-                    serializeBytes(fileHash, buffer: buffer, boxed: false)
-                    serializeString(text, buffer: buffer, boxed: false)
-                    break
-                case .secureValueErrorReverseSide(let type, let fileHash, let text):
-                    if boxed {
-                        buffer.appendInt32(-2037765467)
-                    }
-                    type.serialize(buffer, true)
-                    serializeBytes(fileHash, buffer: buffer, boxed: false)
-                    serializeString(text, buffer: buffer, boxed: false)
-                    break
-                case .secureValueErrorSelfie(let type, let fileHash, let text):
-                    if boxed {
-                        buffer.appendInt32(-449327402)
-                    }
-                    type.serialize(buffer, true)
-                    serializeBytes(fileHash, buffer: buffer, boxed: false)
-                    serializeString(text, buffer: buffer, boxed: false)
-                    break
-                case .secureValueErrorTranslationFile(let type, let fileHash, let text):
-                    if boxed {
-                        buffer.appendInt32(-1592506512)
-                    }
-                    type.serialize(buffer, true)
-                    serializeBytes(fileHash, buffer: buffer, boxed: false)
-                    serializeString(text, buffer: buffer, boxed: false)
-                    break
-                case .secureValueErrorTranslationFiles(let type, let fileHash, let text):
-                    if boxed {
-                        buffer.appendInt32(878931416)
-                    }
-                    type.serialize(buffer, true)
-                    buffer.appendInt32(481674261)
-                    buffer.appendInt32(Int32(fileHash.count))
-                    for item in fileHash {
-                        serializeBytes(item, buffer: buffer, boxed: false)
-                    }
-                    serializeString(text, buffer: buffer, boxed: false)
-                    break
-    }
-    }
-    
-    public func descriptionFields() -> (String, [(String, Any)]) {
-        switch self {
-                case .secureValueError(let type, let hash, let text):
-                return ("secureValueError", [("type", String(describing: type)), ("hash", String(describing: hash)), ("text", String(describing: text))])
-                case .secureValueErrorData(let type, let dataHash, let field, let text):
-                return ("secureValueErrorData", [("type", String(describing: type)), ("dataHash", String(describing: dataHash)), ("field", String(describing: field)), ("text", String(describing: text))])
-                case .secureValueErrorFile(let type, let fileHash, let text):
-                return ("secureValueErrorFile", [("type", String(describing: type)), ("fileHash", String(describing: fileHash)), ("text", String(describing: text))])
-                case .secureValueErrorFiles(let type, let fileHash, let text):
-                return ("secureValueErrorFiles", [("type", String(describing: type)), ("fileHash", String(describing: fileHash)), ("text", String(describing: text))])
-                case .secureValueErrorFrontSide(let type, let fileHash, let text):
-                return ("secureValueErrorFrontSide", [("type", String(describing: type)), ("fileHash", String(describing: fileHash)), ("text", String(describing: text))])
-                case .secureValueErrorReverseSide(let type, let fileHash, let text):
-                return ("secureValueErrorReverseSide", [("type", String(describing: type)), ("fileHash", String(describing: fileHash)), ("text", String(describing: text))])
-                case .secureValueErrorSelfie(let type, let fileHash, let text):
-                return ("secureValueErrorSelfie", [("type", String(describing: type)), ("fileHash", String(describing: fileHash)), ("text", String(describing: text))])
-                case .secureValueErrorTranslationFile(let type, let fileHash, let text):
-                return ("secureValueErrorTranslationFile", [("type", String(describing: type)), ("fileHash", String(describing: fileHash)), ("text", String(describing: text))])
-                case .secureValueErrorTranslationFiles(let type, let fileHash, let text):
-                return ("secureValueErrorTranslationFiles", [("type", String(describing: type)), ("fileHash", String(describing: fileHash)), ("text", String(describing: text))])
-    }
-    }
-    
-        public static func parse_secureValueError(_ reader: BufferReader) -> SecureValueError? {
-            var _1: Api.SecureValueType?
-            if let signature = reader.readInt32() {
-                _1 = Api.parse(reader, signature: signature) as? Api.SecureValueType
-            }
-            var _2: Buffer?
-            _2 = parseBytes(reader)
-            var _3: String?
-            _3 = parseString(reader)
-            let _c1 = _1 != nil
-            let _c2 = _2 != nil
-            let _c3 = _3 != nil
-            if _c1 && _c2 && _c3 {
-                return Api.SecureValueError.secureValueError(type: _1!, hash: _2!, text: _3!)
-            }
-            else {
-                return nil
-            }
-        }
-        public static func parse_secureValueErrorData(_ reader: BufferReader) -> SecureValueError? {
-            var _1: Api.SecureValueType?
-            if let signature = reader.readInt32() {
-                _1 = Api.parse(reader, signature: signature) as? Api.SecureValueType
-            }
-            var _2: Buffer?
-            _2 = parseBytes(reader)
-            var _3: String?
-            _3 = parseString(reader)
-            var _4: String?
-            _4 = parseString(reader)
             let _c1 = _1 != nil
             let _c2 = _2 != nil
             let _c3 = _3 != nil
             let _c4 = _4 != nil
-            if _c1 && _c2 && _c3 && _c4 {
-                return Api.SecureValueError.secureValueErrorData(type: _1!, dataHash: _2!, field: _3!, text: _4!)
+            let _c5 = _5 != nil
+            if _c1 && _c2 && _c3 && _c4 && _c5 {
+                return Api.PageBlock.pageBlockMap(geo: _1!, zoom: _2!, w: _3!, h: _4!, caption: _5!)
             }
             else {
                 return nil
             }
         }
-        public static func parse_secureValueErrorFile(_ reader: BufferReader) -> SecureValueError? {
-            var _1: Api.SecureValueType?
-            if let signature = reader.readInt32() {
-                _1 = Api.parse(reader, signature: signature) as? Api.SecureValueType
-            }
-            var _2: Buffer?
-            _2 = parseBytes(reader)
-            var _3: String?
-            _3 = parseString(reader)
-            let _c1 = _1 != nil
-            let _c2 = _2 != nil
-            let _c3 = _3 != nil
-            if _c1 && _c2 && _c3 {
-                return Api.SecureValueError.secureValueErrorFile(type: _1!, fileHash: _2!, text: _3!)
-            }
-            else {
-                return nil
-            }
-        }
-        public static func parse_secureValueErrorFiles(_ reader: BufferReader) -> SecureValueError? {
-            var _1: Api.SecureValueType?
-            if let signature = reader.readInt32() {
-                _1 = Api.parse(reader, signature: signature) as? Api.SecureValueType
-            }
-            var _2: [Buffer]?
+        public static func parse_pageBlockOrderedList(_ reader: BufferReader) -> PageBlock? {
+            var _1: [Api.PageListOrderedItem]?
             if let _ = reader.readInt32() {
-                _2 = Api.parseVector(reader, elementSignature: -1255641564, elementType: Buffer.self)
+                _1 = Api.parseVector(reader, elementSignature: 0, elementType: Api.PageListOrderedItem.self)
             }
-            var _3: String?
-            _3 = parseString(reader)
             let _c1 = _1 != nil
-            let _c2 = _2 != nil
-            let _c3 = _3 != nil
-            if _c1 && _c2 && _c3 {
-                return Api.SecureValueError.secureValueErrorFiles(type: _1!, fileHash: _2!, text: _3!)
+            if _c1 {
+                return Api.PageBlock.pageBlockOrderedList(items: _1!)
             }
             else {
                 return nil
             }
         }
-        public static func parse_secureValueErrorFrontSide(_ reader: BufferReader) -> SecureValueError? {
-            var _1: Api.SecureValueType?
+        public static func parse_pageBlockParagraph(_ reader: BufferReader) -> PageBlock? {
+            var _1: Api.RichText?
             if let signature = reader.readInt32() {
-                _1 = Api.parse(reader, signature: signature) as? Api.SecureValueType
+                _1 = Api.parse(reader, signature: signature) as? Api.RichText
             }
-            var _2: Buffer?
-            _2 = parseBytes(reader)
-            var _3: String?
-            _3 = parseString(reader)
             let _c1 = _1 != nil
-            let _c2 = _2 != nil
-            let _c3 = _3 != nil
-            if _c1 && _c2 && _c3 {
-                return Api.SecureValueError.secureValueErrorFrontSide(type: _1!, fileHash: _2!, text: _3!)
+            if _c1 {
+                return Api.PageBlock.pageBlockParagraph(text: _1!)
             }
             else {
                 return nil
             }
         }
-        public static func parse_secureValueErrorReverseSide(_ reader: BufferReader) -> SecureValueError? {
-            var _1: Api.SecureValueType?
+        public static func parse_pageBlockPhoto(_ reader: BufferReader) -> PageBlock? {
+            var _1: Int32?
+            _1 = reader.readInt32()
+            var _2: Int64?
+            _2 = reader.readInt64()
+            var _3: Api.PageCaption?
             if let signature = reader.readInt32() {
-                _1 = Api.parse(reader, signature: signature) as? Api.SecureValueType
+                _3 = Api.parse(reader, signature: signature) as? Api.PageCaption
             }
-            var _2: Buffer?
-            _2 = parseBytes(reader)
-            var _3: String?
-            _3 = parseString(reader)
+            var _4: String?
+            if Int(_1!) & Int(1 << 0) != 0 {_4 = parseString(reader) }
+            var _5: Int64?
+            if Int(_1!) & Int(1 << 0) != 0 {_5 = reader.readInt64() }
             let _c1 = _1 != nil
             let _c2 = _2 != nil
             let _c3 = _3 != nil
-            if _c1 && _c2 && _c3 {
-                return Api.SecureValueError.secureValueErrorReverseSide(type: _1!, fileHash: _2!, text: _3!)
+            let _c4 = (Int(_1!) & Int(1 << 0) == 0) || _4 != nil
+            let _c5 = (Int(_1!) & Int(1 << 0) == 0) || _5 != nil
+            if _c1 && _c2 && _c3 && _c4 && _c5 {
+                return Api.PageBlock.pageBlockPhoto(flags: _1!, photoId: _2!, caption: _3!, url: _4, webpageId: _5)
             }
             else {
                 return nil
             }
         }
-        public static func parse_secureValueErrorSelfie(_ reader: BufferReader) -> SecureValueError? {
-            var _1: Api.SecureValueType?
+        public static func parse_pageBlockPreformatted(_ reader: BufferReader) -> PageBlock? {
+            var _1: Api.RichText?
             if let signature = reader.readInt32() {
-                _1 = Api.parse(reader, signature: signature) as? Api.SecureValueType
+                _1 = Api.parse(reader, signature: signature) as? Api.RichText
             }
-            var _2: Buffer?
-            _2 = parseBytes(reader)
-            var _3: String?
-            _3 = parseString(reader)
-            let _c1 = _1 != nil
-            let _c2 = _2 != nil
-            let _c3 = _3 != nil
-            if _c1 && _c2 && _c3 {
-                return Api.SecureValueError.secureValueErrorSelfie(type: _1!, fileHash: _2!, text: _3!)
-            }
-            else {
-                return nil
-            }
-        }
-        public static func parse_secureValueErrorTranslationFile(_ reader: BufferReader) -> SecureValueError? {
-            var _1: Api.SecureValueType?
-            if let signature = reader.readInt32() {
-                _1 = Api.parse(reader, signature: signature) as? Api.SecureValueType
-            }
-            var _2: Buffer?
-            _2 = parseBytes(reader)
-            var _3: String?
-            _3 = parseString(reader)
-            let _c1 = _1 != nil
-            let _c2 = _2 != nil
-            let _c3 = _3 != nil
-            if _c1 && _c2 && _c3 {
-                return Api.SecureValueError.secureValueErrorTranslationFile(type: _1!, fileHash: _2!, text: _3!)
-            }
-            else {
-                return nil
-            }
-        }
-        public static func parse_secureValueErrorTranslationFiles(_ reader: BufferReader) -> SecureValueError? {
-            var _1: Api.SecureValueType?
-            if let signature = reader.readInt32() {
-                _1 = Api.parse(reader, signature: signature) as? Api.SecureValueType
-            }
-            var _2: [Buffer]?
-            if let _ = reader.readInt32() {
-                _2 = Api.parseVector(reader, elementSignature: -1255641564, elementType: Buffer.self)
-            }
-            var _3: String?
-            _3 = parseString(reader)
-            let _c1 = _1 != nil
-            let _c2 = _2 != nil
-            let _c3 = _3 != nil
-            if _c1 && _c2 && _c3 {
-                return Api.SecureValueError.secureValueErrorTranslationFiles(type: _1!, fileHash: _2!, text: _3!)
-            }
-            else {
-                return nil
-            }
-        }
-    
-    }
-}
-public extension Api {
-    enum SecureValueHash: TypeConstructorDescription {
-        case secureValueHash(type: Api.SecureValueType, hash: Buffer)
-    
-    public func serialize(_ buffer: Buffer, _ boxed: Swift.Bool) {
-    switch self {
-                case .secureValueHash(let type, let hash):
-                    if boxed {
-                        buffer.appendInt32(-316748368)
-                    }
-                    type.serialize(buffer, true)
-                    serializeBytes(hash, buffer: buffer, boxed: false)
-                    break
-    }
-    }
-    
-    public func descriptionFields() -> (String, [(String, Any)]) {
-        switch self {
-                case .secureValueHash(let type, let hash):
-                return ("secureValueHash", [("type", String(describing: type)), ("hash", String(describing: hash))])
-    }
-    }
-    
-        public static func parse_secureValueHash(_ reader: BufferReader) -> SecureValueHash? {
-            var _1: Api.SecureValueType?
-            if let signature = reader.readInt32() {
-                _1 = Api.parse(reader, signature: signature) as? Api.SecureValueType
-            }
-            var _2: Buffer?
-            _2 = parseBytes(reader)
+            var _2: String?
+            _2 = parseString(reader)
             let _c1 = _1 != nil
             let _c2 = _2 != nil
             if _c1 && _c2 {
-                return Api.SecureValueHash.secureValueHash(type: _1!, hash: _2!)
+                return Api.PageBlock.pageBlockPreformatted(text: _1!, language: _2!)
             }
             else {
                 return nil
             }
         }
-    
-    }
-}
-public extension Api {
-    enum SecureValueType: TypeConstructorDescription {
-        case secureValueTypeAddress
-        case secureValueTypeBankStatement
-        case secureValueTypeDriverLicense
-        case secureValueTypeEmail
-        case secureValueTypeIdentityCard
-        case secureValueTypeInternalPassport
-        case secureValueTypePassport
-        case secureValueTypePassportRegistration
-        case secureValueTypePersonalDetails
-        case secureValueTypePhone
-        case secureValueTypeRentalAgreement
-        case secureValueTypeTemporaryRegistration
-        case secureValueTypeUtilityBill
-    
-    public func serialize(_ buffer: Buffer, _ boxed: Swift.Bool) {
-    switch self {
-                case .secureValueTypeAddress:
-                    if boxed {
-                        buffer.appendInt32(-874308058)
-                    }
-                    
-                    break
-                case .secureValueTypeBankStatement:
-                    if boxed {
-                        buffer.appendInt32(-1995211763)
-                    }
-                    
-                    break
-                case .secureValueTypeDriverLicense:
-                    if boxed {
-                        buffer.appendInt32(115615172)
-                    }
-                    
-                    break
-                case .secureValueTypeEmail:
-                    if boxed {
-                        buffer.appendInt32(-1908627474)
-                    }
-                    
-                    break
-                case .secureValueTypeIdentityCard:
-                    if boxed {
-                        buffer.appendInt32(-1596951477)
-                    }
-                    
-                    break
-                case .secureValueTypeInternalPassport:
-                    if boxed {
-                        buffer.appendInt32(-1717268701)
-                    }
-                    
-                    break
-                case .secureValueTypePassport:
-                    if boxed {
-                        buffer.appendInt32(1034709504)
-                    }
-                    
-                    break
-                case .secureValueTypePassportRegistration:
-                    if boxed {
-                        buffer.appendInt32(-1713143702)
-                    }
-                    
-                    break
-                case .secureValueTypePersonalDetails:
-                    if boxed {
-                        buffer.appendInt32(-1658158621)
-                    }
-                    
-                    break
-                case .secureValueTypePhone:
-                    if boxed {
-                        buffer.appendInt32(-1289704741)
-                    }
-                    
-                    break
-                case .secureValueTypeRentalAgreement:
-                    if boxed {
-                        buffer.appendInt32(-1954007928)
-                    }
-                    
-                    break
-                case .secureValueTypeTemporaryRegistration:
-                    if boxed {
-                        buffer.appendInt32(-368907213)
-                    }
-                    
-                    break
-                case .secureValueTypeUtilityBill:
-                    if boxed {
-                        buffer.appendInt32(-63531698)
-                    }
-                    
-                    break
-    }
-    }
-    
-    public func descriptionFields() -> (String, [(String, Any)]) {
-        switch self {
-                case .secureValueTypeAddress:
-                return ("secureValueTypeAddress", [])
-                case .secureValueTypeBankStatement:
-                return ("secureValueTypeBankStatement", [])
-                case .secureValueTypeDriverLicense:
-                return ("secureValueTypeDriverLicense", [])
-                case .secureValueTypeEmail:
-                return ("secureValueTypeEmail", [])
-                case .secureValueTypeIdentityCard:
-                return ("secureValueTypeIdentityCard", [])
-                case .secureValueTypeInternalPassport:
-                return ("secureValueTypeInternalPassport", [])
-                case .secureValueTypePassport:
-                return ("secureValueTypePassport", [])
-                case .secureValueTypePassportRegistration:
-                return ("secureValueTypePassportRegistration", [])
-                case .secureValueTypePersonalDetails:
-                return ("secureValueTypePersonalDetails", [])
-                case .secureValueTypePhone:
-                return ("secureValueTypePhone", [])
-                case .secureValueTypeRentalAgreement:
-                return ("secureValueTypeRentalAgreement", [])
-                case .secureValueTypeTemporaryRegistration:
-                return ("secureValueTypeTemporaryRegistration", [])
-                case .secureValueTypeUtilityBill:
-                return ("secureValueTypeUtilityBill", [])
-    }
-    }
-    
-        public static func parse_secureValueTypeAddress(_ reader: BufferReader) -> SecureValueType? {
-            return Api.SecureValueType.secureValueTypeAddress
+        public static func parse_pageBlockPullquote(_ reader: BufferReader) -> PageBlock? {
+            var _1: Api.RichText?
+            if let signature = reader.readInt32() {
+                _1 = Api.parse(reader, signature: signature) as? Api.RichText
+            }
+            var _2: Api.RichText?
+            if let signature = reader.readInt32() {
+                _2 = Api.parse(reader, signature: signature) as? Api.RichText
+            }
+            let _c1 = _1 != nil
+            let _c2 = _2 != nil
+            if _c1 && _c2 {
+                return Api.PageBlock.pageBlockPullquote(text: _1!, caption: _2!)
+            }
+            else {
+                return nil
+            }
         }
-        public static func parse_secureValueTypeBankStatement(_ reader: BufferReader) -> SecureValueType? {
-            return Api.SecureValueType.secureValueTypeBankStatement
+        public static func parse_pageBlockRelatedArticles(_ reader: BufferReader) -> PageBlock? {
+            var _1: Api.RichText?
+            if let signature = reader.readInt32() {
+                _1 = Api.parse(reader, signature: signature) as? Api.RichText
+            }
+            var _2: [Api.PageRelatedArticle]?
+            if let _ = reader.readInt32() {
+                _2 = Api.parseVector(reader, elementSignature: 0, elementType: Api.PageRelatedArticle.self)
+            }
+            let _c1 = _1 != nil
+            let _c2 = _2 != nil
+            if _c1 && _c2 {
+                return Api.PageBlock.pageBlockRelatedArticles(title: _1!, articles: _2!)
+            }
+            else {
+                return nil
+            }
         }
-        public static func parse_secureValueTypeDriverLicense(_ reader: BufferReader) -> SecureValueType? {
-            return Api.SecureValueType.secureValueTypeDriverLicense
+        public static func parse_pageBlockSlideshow(_ reader: BufferReader) -> PageBlock? {
+            var _1: [Api.PageBlock]?
+            if let _ = reader.readInt32() {
+                _1 = Api.parseVector(reader, elementSignature: 0, elementType: Api.PageBlock.self)
+            }
+            var _2: Api.PageCaption?
+            if let signature = reader.readInt32() {
+                _2 = Api.parse(reader, signature: signature) as? Api.PageCaption
+            }
+            let _c1 = _1 != nil
+            let _c2 = _2 != nil
+            if _c1 && _c2 {
+                return Api.PageBlock.pageBlockSlideshow(items: _1!, caption: _2!)
+            }
+            else {
+                return nil
+            }
         }
-        public static func parse_secureValueTypeEmail(_ reader: BufferReader) -> SecureValueType? {
-            return Api.SecureValueType.secureValueTypeEmail
+        public static func parse_pageBlockSubheader(_ reader: BufferReader) -> PageBlock? {
+            var _1: Api.RichText?
+            if let signature = reader.readInt32() {
+                _1 = Api.parse(reader, signature: signature) as? Api.RichText
+            }
+            let _c1 = _1 != nil
+            if _c1 {
+                return Api.PageBlock.pageBlockSubheader(text: _1!)
+            }
+            else {
+                return nil
+            }
         }
-        public static func parse_secureValueTypeIdentityCard(_ reader: BufferReader) -> SecureValueType? {
-            return Api.SecureValueType.secureValueTypeIdentityCard
+        public static func parse_pageBlockSubtitle(_ reader: BufferReader) -> PageBlock? {
+            var _1: Api.RichText?
+            if let signature = reader.readInt32() {
+                _1 = Api.parse(reader, signature: signature) as? Api.RichText
+            }
+            let _c1 = _1 != nil
+            if _c1 {
+                return Api.PageBlock.pageBlockSubtitle(text: _1!)
+            }
+            else {
+                return nil
+            }
         }
-        public static func parse_secureValueTypeInternalPassport(_ reader: BufferReader) -> SecureValueType? {
-            return Api.SecureValueType.secureValueTypeInternalPassport
+        public static func parse_pageBlockTable(_ reader: BufferReader) -> PageBlock? {
+            var _1: Int32?
+            _1 = reader.readInt32()
+            var _2: Api.RichText?
+            if let signature = reader.readInt32() {
+                _2 = Api.parse(reader, signature: signature) as? Api.RichText
+            }
+            var _3: [Api.PageTableRow]?
+            if let _ = reader.readInt32() {
+                _3 = Api.parseVector(reader, elementSignature: 0, elementType: Api.PageTableRow.self)
+            }
+            let _c1 = _1 != nil
+            let _c2 = _2 != nil
+            let _c3 = _3 != nil
+            if _c1 && _c2 && _c3 {
+                return Api.PageBlock.pageBlockTable(flags: _1!, title: _2!, rows: _3!)
+            }
+            else {
+                return nil
+            }
         }
-        public static func parse_secureValueTypePassport(_ reader: BufferReader) -> SecureValueType? {
-            return Api.SecureValueType.secureValueTypePassport
+        public static func parse_pageBlockTitle(_ reader: BufferReader) -> PageBlock? {
+            var _1: Api.RichText?
+            if let signature = reader.readInt32() {
+                _1 = Api.parse(reader, signature: signature) as? Api.RichText
+            }
+            let _c1 = _1 != nil
+            if _c1 {
+                return Api.PageBlock.pageBlockTitle(text: _1!)
+            }
+            else {
+                return nil
+            }
         }
-        public static func parse_secureValueTypePassportRegistration(_ reader: BufferReader) -> SecureValueType? {
-            return Api.SecureValueType.secureValueTypePassportRegistration
+        public static func parse_pageBlockUnsupported(_ reader: BufferReader) -> PageBlock? {
+            return Api.PageBlock.pageBlockUnsupported
         }
-        public static func parse_secureValueTypePersonalDetails(_ reader: BufferReader) -> SecureValueType? {
-            return Api.SecureValueType.secureValueTypePersonalDetails
-        }
-        public static func parse_secureValueTypePhone(_ reader: BufferReader) -> SecureValueType? {
-            return Api.SecureValueType.secureValueTypePhone
-        }
-        public static func parse_secureValueTypeRentalAgreement(_ reader: BufferReader) -> SecureValueType? {
-            return Api.SecureValueType.secureValueTypeRentalAgreement
-        }
-        public static func parse_secureValueTypeTemporaryRegistration(_ reader: BufferReader) -> SecureValueType? {
-            return Api.SecureValueType.secureValueTypeTemporaryRegistration
-        }
-        public static func parse_secureValueTypeUtilityBill(_ reader: BufferReader) -> SecureValueType? {
-            return Api.SecureValueType.secureValueTypeUtilityBill
+        public static func parse_pageBlockVideo(_ reader: BufferReader) -> PageBlock? {
+            var _1: Int32?
+            _1 = reader.readInt32()
+            var _2: Int64?
+            _2 = reader.readInt64()
+            var _3: Api.PageCaption?
+            if let signature = reader.readInt32() {
+                _3 = Api.parse(reader, signature: signature) as? Api.PageCaption
+            }
+            let _c1 = _1 != nil
+            let _c2 = _2 != nil
+            let _c3 = _3 != nil
+            if _c1 && _c2 && _c3 {
+                return Api.PageBlock.pageBlockVideo(flags: _1!, videoId: _2!, caption: _3!)
+            }
+            else {
+                return nil
+            }
         }
     
     }

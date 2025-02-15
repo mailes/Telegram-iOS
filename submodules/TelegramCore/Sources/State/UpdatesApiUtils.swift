@@ -52,12 +52,13 @@ extension Api.MessageMedia {
                 } else {
                     return nil
                 }
-            case let .messageMediaDocument(_, document, _):
+            case let .messageMediaDocument(_, document, _, _):
                 if let document = document {
                     return collectPreCachedResources(for: document)
                 }
                 return nil
-            case let .messageMediaWebPage(webPage):
+            case let .messageMediaWebPage(flags, webPage):
+                let _ = flags
                 var result: [(MediaResource, Data)]?
                 switch webPage {
                     case let .webPage(_, _, _, _, _, _, _, _, _, photo, _, _, _, _, _, _, document, _, _):
@@ -85,23 +86,40 @@ extension Api.MessageMedia {
                 return nil
         }
     }
+    
+    var preCachedStories: [StoryId: Api.StoryItem]? {
+        switch self {
+        case let .messageMediaStory(_, peerId, id, story):
+            if let story = story {
+                return [StoryId(peerId: peerId.peerId, id: id): story]
+            } else {
+                return nil
+            }
+        default:
+            return nil
+        }
+    }
 }
 
 extension Api.Message {
     var rawId: Int32 {
         switch self {
-        case let .message(_, id, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _):
+        case let .message(_, _, id, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _):
                 return id
             case let .messageEmpty(_, id, _):
                 return id
-            case let .messageService(_, id, _, _, _, _, _, _):
+            case let .messageService(_, id, _, _, _, _, _, _, _):
                 return id
         }
     }
     
     func id(namespace: MessageId.Namespace = Namespaces.Message.Cloud) -> MessageId? {
         switch self {
-            case let .message(_, id, _, messagePeerId, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _):
+            case let .message(_, flags2, id, _, _, messagePeerId, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _):
+                var namespace = namespace
+                if (flags2 & (1 << 4)) != 0 {
+                    namespace = Namespaces.Message.ScheduledCloud
+                }
                 let peerId: PeerId = messagePeerId.peerId
                 return MessageId(peerId: peerId, namespace: namespace, id: id)
             case let .messageEmpty(_, id, peerId):
@@ -110,17 +128,30 @@ extension Api.Message {
                 } else {
                     return nil
                 }
-            case let .messageService(_, id, _, chatPeerId, _, _, _, _):
+            case let .messageService(_, id, _, chatPeerId, _, _, _, _, _):
                 let peerId: PeerId = chatPeerId.peerId
                 return MessageId(peerId: peerId, namespace: Namespaces.Message.Cloud, id: id)
+        }
+    }
+    
+    var peerId: PeerId? {
+        switch self {
+        case let .message(_, _, _, _, _, messagePeerId, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _):
+            let peerId: PeerId = messagePeerId.peerId
+            return peerId
+        case let .messageEmpty(_, _, peerId):
+            return peerId?.peerId
+        case let .messageService(_, _, _, chatPeerId, _, _, _, _, _):
+            let peerId: PeerId = chatPeerId.peerId
+            return peerId
         }
     }
 
     var timestamp: Int32? {
         switch self {
-            case let .message(_, _, _, _, _, _, _, date, _, _, _, _, _, _, _, _, _, _, _, _, _):
+            case let .message(_, _, _, _, _, _, _, _, _, _, _, date, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _):
                 return date
-            case let .messageService(_, _, _, _, _, date, _, _):
+            case let .messageService(_, _, _, _, _, date, _, _, _):
                 return date
             case .messageEmpty:
                 return nil
@@ -129,10 +160,19 @@ extension Api.Message {
     
     var preCachedResources: [(MediaResource, Data)]? {
         switch self {
-            case let .message(_, _, _, _, _, _, _, _, _, media, _, _, _, _, _, _, _, _, _, _, _):
-                return media?.preCachedResources
-            default:
-                return nil
+        case let .message(_, _, _, _, _, _, _, _, _, _, _, _, _, media, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _):
+            return media?.preCachedResources
+        default:
+            return nil
+        }
+    }
+    
+    var preCachedStories: [StoryId: Api.StoryItem]? {
+        switch self {
+        case let .message(_, _, _, _, _, _, _, _, _, _, _, _, _, media, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _):
+            return media?.preCachedStories
+        default:
+            return nil
         }
     }
 }
@@ -146,7 +186,7 @@ extension Api.Chat {
                 return PeerId(namespace: Namespaces.Peer.CloudGroup, id: PeerId.Id._internalFromInt64Value(id))
             case let .chatForbidden(id, _):
                 return PeerId(namespace: Namespaces.Peer.CloudGroup, id: PeerId.Id._internalFromInt64Value(id))
-            case let .channel(_, _, id, _, _, _, _, _, _, _, _, _, _, _):
+            case let .channel(_, _, id, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _):
                 return PeerId(namespace: Namespaces.Peer.CloudChannel, id: PeerId.Id._internalFromInt64Value(id))
             case let .channelForbidden(_, id, _, _, _):
                 return PeerId(namespace: Namespaces.Peer.CloudChannel, id: PeerId.Id._internalFromInt64Value(id))
@@ -157,7 +197,7 @@ extension Api.Chat {
 extension Api.User {
     var peerId: PeerId {
         switch self {
-            case let .user(_, _, id, _, _, _, _, _, _, _, _, _, _, _, _, _):
+            case let .user(_, _, id, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _):
                 return PeerId(namespace: Namespaces.Peer.CloudUser, id: PeerId.Id._internalFromInt64Value(id))
             case let .userEmpty(id):
                 return PeerId(namespace: Namespaces.Peer.CloudUser, id: PeerId.Id._internalFromInt64Value(id))
@@ -181,7 +221,7 @@ extension Api.Peer {
 extension Api.Dialog {
     var peerId: PeerId? {
         switch self {
-            case let .dialog(_, peer, _, _, _, _, _, _, _, _, _, _):
+            case let .dialog(_, peer, _, _, _, _, _, _, _, _, _, _, _):
                 return peer.peerId
             case .dialogFolder:
                 return nil
@@ -234,6 +274,8 @@ extension Api.Update {
             case let .updateEditChannelMessage(message, _, _):
                 return message
             case let .updateNewScheduledMessage(message):
+                return message
+            case let .updateQuickReplyMessage(message):
                 return message
             default:
                 return nil
@@ -288,8 +330,6 @@ extension Api.Update {
                 return [PeerId(namespace: Namespaces.Peer.CloudUser, id: PeerId.Id._internalFromInt64Value(userId))]
             case let .updateUserPhone(userId, _):
                 return [PeerId(namespace: Namespaces.Peer.CloudUser, id: PeerId.Id._internalFromInt64Value(userId))]
-            case let .updateUserPhoto(userId, _, _, _):
-                return [PeerId(namespace: Namespaces.Peer.CloudUser, id: PeerId.Id._internalFromInt64Value(userId))]
             case let .updateServiceNotification(_, inboxDate, _, _, _, _):
                 if let _ = inboxDate {
                     return [PeerId(namespace: Namespaces.Peer.CloudUser, id: PeerId.Id._internalFromInt64Value(777000))]
@@ -300,12 +340,14 @@ extension Api.Update {
                 return [peer.peerId]
             case let .updateNewScheduledMessage(message):
                 return apiMessagePeerIds(message)
+            case let .updateQuickReplyMessage(message):
+                return apiMessagePeerIds(message)
             default:
                 return []
         }
     }
     
-    var associatedMessageIds: [MessageId]? {
+    var associatedMessageIds: (replyIds: ReferencedReplyMessageIds, generalIds: [MessageId])? {
         switch self {
             case let .updateNewMessage(message, _, _):
                 return apiMessageAssociatedMessageIds(message)
@@ -314,6 +356,8 @@ extension Api.Update {
             case let .updateEditChannelMessage(message, _, _):
                 return apiMessageAssociatedMessageIds(message)
             case let .updateNewScheduledMessage(message):
+                return apiMessageAssociatedMessageIds(message)
+            case let .updateQuickReplyMessage(message):
                 return apiMessageAssociatedMessageIds(message)
             default:
                 break
@@ -575,6 +619,29 @@ extension Api.EncryptedMessage {
                 return PeerId(namespace: Namespaces.Peer.SecretChat, id: PeerId.Id._internalFromInt64Value(Int64(chatId)))
             case let .encryptedMessageService(_, chatId, _, _):
                 return PeerId(namespace: Namespaces.Peer.SecretChat, id: PeerId.Id._internalFromInt64Value(Int64(chatId)))
+        }
+    }
+}
+
+extension Api.InputMedia {
+    func withUpdatedStickers(_ stickers: [Api.InputDocument]?) -> Api.InputMedia {
+        switch self {
+        case let .inputMediaUploadedDocument(flags, file, thumb, mimeType, attributes, _, ttlSeconds):
+            var flags = flags
+            var attributes = attributes
+            if let _ = stickers {
+                flags |= (1 << 0)
+                attributes.append(.documentAttributeHasStickers)
+            }
+            return .inputMediaUploadedDocument(flags: flags, file: file, thumb: thumb, mimeType: mimeType, attributes: attributes, stickers: stickers, ttlSeconds: ttlSeconds)
+        case let .inputMediaUploadedPhoto(flags, file, _, ttlSeconds):
+            var flags = flags
+            if let _ = stickers {
+                flags |= (1 << 0)
+            }
+            return .inputMediaUploadedPhoto(flags: flags, file: file, stickers: stickers, ttlSeconds: ttlSeconds)
+        default:
+            return self
         }
     }
 }

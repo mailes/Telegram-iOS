@@ -2,7 +2,6 @@ import Foundation
 import UIKit
 import AsyncDisplayKit
 import Display
-import Postbox
 import TelegramCore
 import SwiftSignalKit
 import Photos
@@ -107,10 +106,14 @@ final class AvatarGalleryItemFooterContentNode: GalleryFooterContentNode {
         var buttonText: String?
         var canShare = true
         switch entry {
-            case let .image(_, _, _, videoRepresentations, peer, date, _, _, _, _):
-                nameText = peer.flatMap(EnginePeer.init)?.displayTitle(strings: self.presentationData.strings, displayOrder: self.presentationData.nameDisplayOrder) ?? ""
-                if let date = date {
+            case let .image(_, _, _, videoRepresentations, peer, date, _, _, _, _, isFallback, _):
+                if date != 0 || isFallback {
+                    nameText = peer?.displayTitle(strings: self.presentationData.strings, displayOrder: self.presentationData.nameDisplayOrder) ?? ""
+                }
+                if let date = date, date != 0 {
                     dateText = humanReadableStringForTimestamp(strings: self.strings, dateTimeFormat: self.dateTimeFormat, timestamp: date).string
+                } else if isFallback {
+                    dateText = !videoRepresentations.isEmpty ? self.strings.ProfilePhoto_PublicVideo : self.strings.ProfilePhoto_PublicPhoto
                 }
                 
                 if (!videoRepresentations.isEmpty) {
@@ -122,7 +125,7 @@ final class AvatarGalleryItemFooterContentNode: GalleryFooterContentNode {
                 }
             
                 if let peer = peer {
-                    canShare = !peer.isCopyProtectionEnabled
+                    canShare = !peer._asPeer().isCopyProtectionEnabled
                 }
             default:
                 break

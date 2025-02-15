@@ -7,6 +7,7 @@ import TelegramPresentationData
 import ItemListUI
 import MergeLists
 import Photos
+import MediaAssetsContext
 
 private struct MediaGroupsGridAlbumEntry: Comparable, Identifiable {
     let theme: PresentationTheme
@@ -140,7 +141,7 @@ private final class MediaGroupsGridAlbumItemNode : ListViewItemNode {
     override func didLoad() {
         super.didLoad()
         
-        self.imageNode.cornerRadius = 10.0
+        self.imageNode.cornerRadius = 5.0
         if #available(iOS 13.0, *) {
             self.imageNode.layer.cornerCurve = .continuous
         }
@@ -184,8 +185,8 @@ private final class MediaGroupsGridAlbumItemNode : ListViewItemNode {
         }
     }
     
-    override func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
-        super.animateInsertion(currentTimestamp, duration: duration, short: short)
+    override func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
+        super.animateInsertion(currentTimestamp, duration: duration, options: options)
         
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.2)
     }
@@ -221,11 +222,11 @@ private func preparedTransition(action: @escaping (PHAssetCollection) -> Void, f
 }
 
 final class MediaGroupsAlbumGridItem: ListViewItem {
-    let presentationData: ItemListPresentationData
+    let presentationData: PresentationData
     let collections: [PHAssetCollection]
     let action: (PHAssetCollection) -> Void
     
-    public init(presentationData: ItemListPresentationData, collections: [PHAssetCollection], action: @escaping (PHAssetCollection) -> Void) {
+    public init(presentationData: PresentationData, collections: [PHAssetCollection], action: @escaping (PHAssetCollection) -> Void) {
         self.presentationData = presentationData
         self.collections = collections
         self.action = action
@@ -347,7 +348,8 @@ private class MediaGroupsAlbumGridItemNode: ListViewItemNode {
                                 firstItem = result.firstObject
                             }
                             if let firstItem = firstItem {
-                                entries.append(MediaGroupsGridAlbumEntry(theme: item.presentationData.theme, index: index, collection: collection, firstItem: firstItem, count: presentationStringsFormattedNumber(Int32(result.count))))
+                                let count = presentationStringsFormattedNumber(Int32(result.count), item.presentationData.dateTimeFormat.groupingSeparator)
+                                entries.append(MediaGroupsGridAlbumEntry(theme: item.presentationData.theme, index: index, collection: collection, firstItem: firstItem, count: count))
                                 index += 1
                             }
                         }
@@ -365,7 +367,7 @@ private class MediaGroupsAlbumGridItemNode: ListViewItemNode {
         }
     }
     
-    override func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
+    override func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: duration * 0.5)
     }
     

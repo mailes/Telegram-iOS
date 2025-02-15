@@ -12,13 +12,19 @@ enum ChatListNodeEntryId: Hashable {
     case PeerId(Int64)
     case ThreadId(Int64)
     case GroupId(EngineChatList.Group)
+    case ContactId(EnginePeer.Id)
     case ArchiveIntro
+    case EmptyIntro
+    case SectionHeader
+    case Notice
     case additionalCategory(Int)
 }
 
 enum ChatListNodeEntrySortIndex: Comparable {
     case index(EngineChatList.Item.Index)
     case additionalCategory(Int)
+    case sectionHeader
+    case contact(id: EnginePeer.Id, presence: EnginePeer.Presence)
     
     static func <(lhs: ChatListNodeEntrySortIndex, rhs: ChatListNodeEntrySortIndex) -> Bool {
         switch lhs {
@@ -28,6 +34,10 @@ enum ChatListNodeEntrySortIndex: Comparable {
                 return lhsIndex < rhsIndex
             case .additionalCategory:
                 return false
+            case .sectionHeader:
+                return true
+            case .contact:
+                return true
             }
         case let .additionalCategory(lhsIndex):
             switch rhs {
@@ -35,6 +45,30 @@ enum ChatListNodeEntrySortIndex: Comparable {
                 return lhsIndex < rhsIndex
             case .index:
                 return true
+            case .sectionHeader:
+                return true
+            case .contact:
+                return true
+            }
+        case .sectionHeader:
+            switch rhs {
+            case .additionalCategory, .index, .sectionHeader:
+                return false
+            case .contact:
+                return true
+            }
+        case let .contact(lhsId, lhsPresense):
+            switch rhs {
+            case .sectionHeader:
+                return false
+            case let .contact(rhsId, rhsPresense):
+                if lhsPresense != rhsPresense {
+                    return rhsPresense.status > rhsPresense.status
+                } else {
+                    return lhsId < rhsId
+                }
+            default:
+                return false
             }
         }
     }
@@ -45,46 +79,357 @@ public enum ChatListNodeEntryPromoInfo: Equatable {
     case psa(type: String, message: String?)
 }
 
+public enum ChatListNotice: Equatable {
+    case clearStorage(sizeFraction: Double)
+    case setupPassword
+    case premiumUpgrade(discount: Int32)
+    case premiumAnnualDiscount(discount: Int32)
+    case premiumRestore(discount: Int32)
+    case xmasPremiumGift
+    case setupBirthday
+    case birthdayPremiumGift(peers: [EnginePeer], birthdays: [EnginePeer.Id: TelegramBirthday])
+    case reviewLogin(newSessionReview: NewSessionReview, totalCount: Int)
+    case premiumGrace
+    case starsSubscriptionLowBalance(amount: StarsAmount, peers: [EnginePeer])
+    case setupPhoto(EnginePeer)
+}
+
 enum ChatListNodeEntry: Comparable, Identifiable {
+    struct PeerEntryData: Equatable {
+        var index: EngineChatList.Item.Index
+        var presentationData: ChatListPresentationData
+        var messages: [EngineMessage]
+        var readState: EnginePeerReadCounters?
+        var isRemovedFromTotalUnreadCount: Bool
+        var draftState: ChatListItemContent.DraftState?
+        var mediaDraftContentType: EngineChatList.MediaDraftContentType?
+        var peer: EngineRenderedPeer
+        var threadInfo: ChatListItemContent.ThreadInfo?
+        var presence: EnginePeer.Presence?
+        var hasUnseenMentions: Bool
+        var hasUnseenReactions: Bool
+        var editing: Bool
+        var hasActiveRevealControls: Bool
+        var selected: Bool
+        var inputActivities: [(EnginePeer, PeerInputActivity)]?
+        var promoInfo: ChatListNodeEntryPromoInfo?
+        var hasFailedMessages: Bool
+        var isContact: Bool
+        var autoremoveTimeout: Int32?
+        var forumTopicData: EngineChatList.ForumTopicData?
+        var topForumTopicItems: [EngineChatList.ForumTopicData]
+        var revealed: Bool
+        var storyState: ChatListNodeState.StoryState?
+        var requiresPremiumForMessaging: Bool
+        var displayAsTopicList: Bool
+        
+        init(
+            index: EngineChatList.Item.Index,
+            presentationData: ChatListPresentationData,
+            messages: [EngineMessage],
+            readState: EnginePeerReadCounters?,
+            isRemovedFromTotalUnreadCount: Bool,
+            draftState: ChatListItemContent.DraftState?,
+            mediaDraftContentType: EngineChatList.MediaDraftContentType?,
+            peer: EngineRenderedPeer,
+            threadInfo: ChatListItemContent.ThreadInfo?,
+            presence: EnginePeer.Presence?,
+            hasUnseenMentions: Bool,
+            hasUnseenReactions: Bool,
+            editing: Bool,
+            hasActiveRevealControls: Bool,
+            selected: Bool,
+            inputActivities: [(EnginePeer, PeerInputActivity)]?,
+            promoInfo: ChatListNodeEntryPromoInfo?,
+            hasFailedMessages: Bool,
+            isContact: Bool,
+            autoremoveTimeout: Int32?,
+            forumTopicData: EngineChatList.ForumTopicData?,
+            topForumTopicItems: [EngineChatList.ForumTopicData],
+            revealed: Bool,
+            storyState: ChatListNodeState.StoryState?,
+            requiresPremiumForMessaging: Bool,
+            displayAsTopicList: Bool
+        ) {
+            self.index = index
+            self.presentationData = presentationData
+            self.messages = messages
+            self.readState = readState
+            self.isRemovedFromTotalUnreadCount = isRemovedFromTotalUnreadCount
+            self.draftState = draftState
+            self.mediaDraftContentType = mediaDraftContentType
+            self.peer = peer
+            self.threadInfo = threadInfo
+            self.presence = presence
+            self.hasUnseenMentions = hasUnseenMentions
+            self.hasUnseenReactions = hasUnseenReactions
+            self.editing = editing
+            self.hasActiveRevealControls = hasActiveRevealControls
+            self.selected = selected
+            self.inputActivities = inputActivities
+            self.promoInfo = promoInfo
+            self.hasFailedMessages = hasFailedMessages
+            self.isContact = isContact
+            self.autoremoveTimeout = autoremoveTimeout
+            self.forumTopicData = forumTopicData
+            self.topForumTopicItems = topForumTopicItems
+            self.revealed = revealed
+            self.storyState = storyState
+            self.requiresPremiumForMessaging = requiresPremiumForMessaging
+            self.displayAsTopicList = displayAsTopicList
+        }
+        
+        static func ==(lhs: PeerEntryData, rhs: PeerEntryData) -> Bool {
+            if lhs.index != rhs.index {
+                return false
+            }
+            if lhs.presentationData !== rhs.presentationData {
+                return false
+            }
+            if lhs.readState != rhs.readState {
+                return false
+            }
+            if lhs.messages.count != rhs.messages.count {
+                return false
+            }
+            for i in 0 ..< lhs.messages.count {
+                if lhs.messages[i].stableVersion != rhs.messages[i].stableVersion {
+                    return false
+                }
+                if lhs.messages[i].id != rhs.messages[i].id {
+                    return false
+                }
+                if lhs.messages[i].associatedMessages.count != rhs.messages[i].associatedMessages.count {
+                    return false
+                }
+                for (id, message) in lhs.messages[i].associatedMessages {
+                    if let otherMessage = rhs.messages[i].associatedMessages[id] {
+                        if message.stableVersion != otherMessage.stableVersion {
+                            return false
+                        }
+                    } else {
+                        return false
+                    }
+                }
+            }
+            if lhs.isRemovedFromTotalUnreadCount != rhs.isRemovedFromTotalUnreadCount {
+                return false
+            }
+            if let lhsPeerPresence = lhs.presence, let rhsPeerPresence = rhs.presence {
+                if lhsPeerPresence != rhsPeerPresence {
+                    return false
+                }
+            } else if (lhs.presence != nil) != (rhs.presence != nil) {
+                return false
+            }
+            if let lhsEmbeddedState = lhs.draftState, let rhsEmbeddedState = rhs.draftState {
+                if lhsEmbeddedState != rhsEmbeddedState {
+                    return false
+                }
+            } else if (lhs.draftState != nil) != (rhs.draftState != nil) {
+                return false
+            }
+            if lhs.mediaDraftContentType != rhs.mediaDraftContentType {
+                return false
+            }
+            if lhs.editing != rhs.editing {
+                return false
+            }
+            if lhs.hasActiveRevealControls != rhs.hasActiveRevealControls {
+                return false
+            }
+            if lhs.selected != rhs.selected {
+                return false
+            }
+            if lhs.peer != rhs.peer {
+                return false
+            }
+            if lhs.threadInfo != rhs.threadInfo {
+                return false
+            }
+            if lhs.hasUnseenMentions != rhs.hasUnseenMentions {
+                return false
+            }
+            if lhs.hasUnseenReactions != rhs.hasUnseenReactions {
+                return false
+            }
+            if let lhsInputActivities = lhs.inputActivities, let rhsInputActivities = rhs.inputActivities {
+                if lhsInputActivities.count != rhsInputActivities.count {
+                    return false
+                }
+                for i in 0 ..< lhsInputActivities.count {
+                    if lhsInputActivities[i].0 != rhsInputActivities[i].0 {
+                        return false
+                    }
+                    if lhsInputActivities[i].1 != rhsInputActivities[i].1 {
+                        return false
+                    }
+                }
+            } else if (lhs.inputActivities != nil) != (rhs.inputActivities != nil) {
+                return false
+            }
+            if lhs.promoInfo != rhs.promoInfo {
+                return false
+            }
+            if lhs.hasFailedMessages != rhs.hasFailedMessages {
+                return false
+            }
+            if lhs.isContact != rhs.isContact {
+                return false
+            }
+            if lhs.autoremoveTimeout != rhs.autoremoveTimeout {
+                return false
+            }
+            if lhs.forumTopicData != rhs.forumTopicData {
+                return false
+            }
+            if lhs.topForumTopicItems != rhs.topForumTopicItems {
+                return false
+            }
+            if lhs.revealed != rhs.revealed {
+                return false
+            }
+            if lhs.storyState != rhs.storyState {
+                return false
+            }
+            if lhs.requiresPremiumForMessaging != rhs.requiresPremiumForMessaging {
+                return false
+            }
+            if lhs.displayAsTopicList != rhs.displayAsTopicList {
+                return false
+            }
+            return true
+        }
+    }
+    
+    struct ContactEntryData: Equatable {
+        var presentationData: ChatListPresentationData
+        var peer: EnginePeer
+        var presence: EnginePeer.Presence
+        
+        init(presentationData: ChatListPresentationData, peer: EnginePeer, presence: EnginePeer.Presence) {
+            self.presentationData = presentationData
+            self.peer = peer
+            self.presence = presence
+        }
+        
+        static func ==(lhs: ContactEntryData, rhs: ContactEntryData) -> Bool {
+            if lhs.presentationData !== rhs.presentationData {
+                return false
+            }
+            if lhs.peer != rhs.peer {
+                return false
+            }
+            if lhs.presence != rhs.presence {
+                return false
+            }
+            return true
+        }
+    }
+    
+    struct GroupReferenceEntryData: Equatable {
+        var index: EngineChatList.Item.Index
+        var presentationData: ChatListPresentationData
+        var groupId: EngineChatList.Group
+        var peers: [EngineChatList.GroupItem.Item]
+        var message: EngineMessage?
+        var editing: Bool
+        var unreadCount: Int
+        var revealed: Bool
+        var hiddenByDefault: Bool
+        var storyState: ChatListNodeState.StoryState?
+        
+        init(
+            index: EngineChatList.Item.Index,
+            presentationData: ChatListPresentationData,
+            groupId: EngineChatList.Group,
+            peers: [EngineChatList.GroupItem.Item],
+            message: EngineMessage?,
+            editing: Bool,
+            unreadCount: Int,
+            revealed: Bool,
+            hiddenByDefault: Bool,
+            storyState: ChatListNodeState.StoryState?
+        ) {
+            self.index = index
+            self.presentationData = presentationData
+            self.groupId = groupId
+            self.peers = peers
+            self.message = message
+            self.editing = editing
+            self.unreadCount = unreadCount
+            self.revealed = revealed
+            self.hiddenByDefault = hiddenByDefault
+            self.storyState = storyState
+        }
+        
+        static func ==(lhs: GroupReferenceEntryData, rhs: GroupReferenceEntryData) -> Bool {
+            if lhs.index != rhs.index {
+                return false
+            }
+            if lhs.presentationData !== rhs.presentationData {
+                return false
+            }
+            if lhs.groupId != rhs.groupId {
+                return false
+            }
+            if lhs.peers != rhs.peers {
+                return false
+            }
+            if lhs.message?.stableId != rhs.message?.stableId {
+                return false
+            }
+            if lhs.editing != rhs.editing {
+                return false
+            }
+            if lhs.unreadCount != rhs.unreadCount {
+                return false
+            }
+            if lhs.revealed != rhs.revealed {
+                return false
+            }
+            if lhs.hiddenByDefault != rhs.hiddenByDefault {
+                return false
+            }
+            if lhs.storyState != rhs.storyState {
+                return false
+            }
+            
+            return true
+        }
+    }
+    
     case HeaderEntry
-    case PeerEntry(
-        index: EngineChatList.Item.Index,
-        presentationData: ChatListPresentationData,
-        messages: [EngineMessage],
-        readState: EnginePeerReadCounters?,
-        isRemovedFromTotalUnreadCount: Bool,
-        draftState: ChatListItemContent.DraftState?,
-        peer: EngineRenderedPeer,
-        threadInfo: ChatListItemContent.ThreadInfo?,
-        presence: EnginePeer.Presence?,
-        hasUnseenMentions: Bool,
-        hasUnseenReactions: Bool,
-        editing: Bool,
-        hasActiveRevealControls: Bool,
-        selected: Bool,
-        inputActivities: [(EnginePeer, PeerInputActivity)]?,
-        promoInfo: ChatListNodeEntryPromoInfo?,
-        hasFailedMessages: Bool,
-        isContact: Bool,
-        forumTopicData: EngineChatList.ForumTopicData?
-    )
+    case PeerEntry(PeerEntryData)
     case HoleEntry(EngineMessage.Index, theme: PresentationTheme)
-    case GroupReferenceEntry(index: EngineChatList.Item.Index, presentationData: ChatListPresentationData, groupId: EngineChatList.Group, peers: [EngineChatList.GroupItem.Item], message: EngineMessage?, editing: Bool, unreadCount: Int, revealed: Bool, hiddenByDefault: Bool)
+    case GroupReferenceEntry(GroupReferenceEntryData)
+    case ContactEntry(ContactEntryData)
     case ArchiveIntro(presentationData: ChatListPresentationData)
+    case EmptyIntro(presentationData: ChatListPresentationData)
+    case SectionHeader(presentationData: ChatListPresentationData, displayHide: Bool)
+    case Notice(presentationData: ChatListPresentationData, notice: ChatListNotice)
     case AdditionalCategory(index: Int, id: Int, title: String, image: UIImage?, appearance: ChatListNodeAdditionalCategory.Appearance, selected: Bool, presentationData: ChatListPresentationData)
     
     var sortIndex: ChatListNodeEntrySortIndex {
         switch self {
         case .HeaderEntry:
             return .index(.chatList(.absoluteUpperBound))
-        case let .PeerEntry(index, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _):
-            return .index(index)
+        case let .PeerEntry(peerEntry):
+            return .index(peerEntry.index)
         case let .HoleEntry(holeIndex, _):
             return .index(.chatList(EngineChatList.Item.Index.ChatList(pinningIndex: nil, messageIndex: holeIndex)))
-        case let .GroupReferenceEntry(index, _, _, _, _, _, _, _, _):
-            return .index(index)
+        case let .GroupReferenceEntry(groupReferenceEntry):
+            return .index(groupReferenceEntry.index)
+        case let .ContactEntry(contactEntry):
+            return .contact(id: contactEntry.peer.id, presence: contactEntry.presence)
         case .ArchiveIntro:
             return .index(.chatList(EngineChatList.Item.Index.ChatList.absoluteUpperBound.successor))
+        case .EmptyIntro:
+            return .index(.chatList(EngineChatList.Item.Index.ChatList.absoluteUpperBound.successor))
+        case .SectionHeader:
+            return .sectionHeader
+        case .Notice:
+            return .index(.chatList(EngineChatList.Item.Index.ChatList.absoluteUpperBound.successor.successor))
         case let .AdditionalCategory(index, _, _, _, _, _, _):
             return .additionalCategory(index)
         }
@@ -94,8 +439,8 @@ enum ChatListNodeEntry: Comparable, Identifiable {
         switch self {
         case .HeaderEntry:
             return .Header
-        case let .PeerEntry(index, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _):
-            switch index {
+        case let .PeerEntry(peerEntry):
+            switch peerEntry.index {
             case let .chatList(index):
                 return .PeerId(index.messageIndex.id.peerId.toInt64())
             case let .forum(_, _, threadId, _, _):
@@ -103,10 +448,18 @@ enum ChatListNodeEntry: Comparable, Identifiable {
             }
         case let .HoleEntry(holeIndex, _):
             return .Hole(Int64(holeIndex.id.id))
-        case let .GroupReferenceEntry(_, _, groupId, _, _, _, _, _, _):
-            return .GroupId(groupId)
+        case let .GroupReferenceEntry(groupReferenceEntry):
+            return .GroupId(groupReferenceEntry.groupId)
+        case let .ContactEntry(contactEntry):
+            return .ContactId(contactEntry.peer.id)
         case .ArchiveIntro:
             return .ArchiveIntro
+        case .EmptyIntro:
+            return .EmptyIntro
+        case .SectionHeader:
+            return .SectionHeader
+        case .Notice:
+            return .Notice
         case let .AdditionalCategory(_, id, _, _, _, _, _):
             return .additionalCategory(id)
         }
@@ -124,109 +477,11 @@ enum ChatListNodeEntry: Comparable, Identifiable {
                 } else {
                     return false
                 }
-            case let .PeerEntry(lhsIndex, lhsPresentationData, lhsMessages, lhsUnreadCount, lhsIsRemovedFromTotalUnreadCount, lhsEmbeddedState, lhsPeer, lhsThreadInfo, lhsPresence, lhsHasUnseenMentions, lhsHasUnseenReactions, lhsEditing, lhsHasRevealControls, lhsSelected, lhsInputActivities, lhsAd, lhsHasFailedMessages, lhsIsContact, lhsForumThreadTitle):
-                switch rhs {
-                    case let .PeerEntry(rhsIndex, rhsPresentationData, rhsMessages, rhsUnreadCount, rhsIsRemovedFromTotalUnreadCount, rhsEmbeddedState, rhsPeer, rhsThreadInfo, rhsPresence, rhsHasUnseenMentions, rhsHasUnseenReactions, rhsEditing, rhsHasRevealControls, rhsSelected, rhsInputActivities, rhsAd, rhsHasFailedMessages, rhsIsContact, rhsForumThreadTitle):
-                        if lhsIndex != rhsIndex {
-                            return false
-                        }
-                        if lhsPresentationData !== rhsPresentationData {
-                            return false
-                        }
-                        if lhsUnreadCount != rhsUnreadCount {
-                            return false
-                        }
-                        if lhsMessages.count != rhsMessages.count {
-                            return false
-                        }
-                        for i in 0 ..< lhsMessages.count {
-                            if lhsMessages[i].stableVersion != rhsMessages[i].stableVersion {
-                                return false
-                            }
-                            if lhsMessages[i].id != rhsMessages[i].id {
-                                return false
-                            }
-                            if lhsMessages[i].associatedMessages.count != rhsMessages[i].associatedMessages.count {
-                                return false
-                            }
-                            for (id, message) in lhsMessages[i].associatedMessages {
-                                if let otherMessage = rhsMessages[i].associatedMessages[id] {
-                                    if message.stableVersion != otherMessage.stableVersion {
-                                        return false
-                                    }
-                                } else {
-                                    return false
-                                }
-                            }
-                        }
-                        if lhsIsRemovedFromTotalUnreadCount != rhsIsRemovedFromTotalUnreadCount {
-                            return false
-                        }
-                        if let lhsPeerPresence = lhsPresence, let rhsPeerPresence = rhsPresence {
-                            if lhsPeerPresence != rhsPeerPresence {
-                                return false
-                            }
-                        } else if (lhsPresence != nil) != (rhsPresence != nil) {
-                            return false
-                        }
-                        if let lhsEmbeddedState = lhsEmbeddedState, let rhsEmbeddedState = rhsEmbeddedState {
-                            if lhsEmbeddedState != rhsEmbeddedState {
-                                return false
-                            }
-                        } else if (lhsEmbeddedState != nil) != (rhsEmbeddedState != nil) {
-                            return false
-                        }
-                        if lhsEditing != rhsEditing {
-                            return false
-                        }
-                        if lhsHasRevealControls != rhsHasRevealControls {
-                            return false
-                        }
-                        if lhsSelected != rhsSelected {
-                            return false
-                        }
-                        if lhsPeer != rhsPeer {
-                            return false
-                        }
-                        if lhsThreadInfo != rhsThreadInfo {
-                            return false
-                        }
-                        if lhsHasUnseenMentions != rhsHasUnseenMentions {
-                            return false
-                        }
-                        if lhsHasUnseenReactions != rhsHasUnseenReactions {
-                            return false
-                        }
-                        if let lhsInputActivities = lhsInputActivities, let rhsInputActivities = rhsInputActivities {
-                            if lhsInputActivities.count != rhsInputActivities.count {
-                                return false
-                            }
-                            for i in 0 ..< lhsInputActivities.count {
-                                if lhsInputActivities[i].0 != rhsInputActivities[i].0 {
-                                    return false
-                                }
-                                if lhsInputActivities[i].1 != rhsInputActivities[i].1 {
-                                    return false
-                                }
-                            }
-                        } else if (lhsInputActivities != nil) != (rhsInputActivities != nil) {
-                            return false
-                        }
-                        if lhsAd != rhsAd {
-                            return false
-                        }
-                        if lhsHasFailedMessages != rhsHasFailedMessages {
-                            return false
-                        }
-                        if lhsIsContact != rhsIsContact {
-                            return false
-                        }
-                        if lhsForumThreadTitle != rhsForumThreadTitle {
-                            return false
-                        }
-                        return true
-                    default:
-                        return false
+            case let .PeerEntry(peerEntry):
+                if case .PeerEntry(peerEntry) = rhs {
+                    return true
+                } else {
+                    return false
                 }
             case let .HoleEntry(lhsHole, lhsTheme):
                 switch rhs {
@@ -235,35 +490,14 @@ enum ChatListNodeEntry: Comparable, Identifiable {
                     default:
                         return false
                 }
-            case let .GroupReferenceEntry(lhsIndex, lhsPresentationData, lhsGroupId, lhsPeers, lhsMessage, lhsEditing, lhsUnreadState, lhsRevealed, lhsHiddenByDefault):
-                if case let .GroupReferenceEntry(rhsIndex, rhsPresentationData, rhsGroupId, rhsPeers, rhsMessage, rhsEditing, rhsUnreadState, rhsRevealed, rhsHiddenByDefault) = rhs {
-                    if lhsIndex != rhsIndex {
-                        return false
-                    }
-                    if lhsPresentationData !== rhsPresentationData {
-                        return false
-                    }
-                    if lhsGroupId != rhsGroupId {
-                        return false
-                    }
-                    if lhsPeers != rhsPeers {
-                        return false
-                    }
-                    if lhsMessage?.stableId != rhsMessage?.stableId {
-                        return false
-                    }
-                    if lhsEditing != rhsEditing {
-                        return false
-                    }
-                    if lhsUnreadState != rhsUnreadState {
-                        return false
-                    }
-                    if lhsRevealed != rhsRevealed {
-                        return false
-                    }
-                    if lhsHiddenByDefault != rhsHiddenByDefault {
-                        return false
-                    }
+            case let .GroupReferenceEntry(groupReferenceEntry):
+                if case .GroupReferenceEntry(groupReferenceEntry) = rhs {
+                    return true
+                } else {
+                    return false
+                }
+            case let .ContactEntry(contactEntry):
+                if case .ContactEntry(contactEntry) = rhs {
                     return true
                 } else {
                     return false
@@ -271,6 +505,39 @@ enum ChatListNodeEntry: Comparable, Identifiable {
             case let .ArchiveIntro(lhsPresentationData):
                 if case let .ArchiveIntro(rhsPresentationData) = rhs {
                     if lhsPresentationData !== rhsPresentationData {
+                        return false
+                    }
+                    return true
+                } else {
+                    return false
+                }
+            case let .EmptyIntro(lhsPresentationData):
+                if case let .EmptyIntro(rhsPresentationData) = rhs {
+                    if lhsPresentationData !== rhsPresentationData {
+                        return false
+                    }
+                    return true
+                } else {
+                    return false
+                }
+            case let .SectionHeader(lhsPresentationData, lhsDisplayHide):
+                if case let .SectionHeader(rhsPresentationData, rhsDisplayHide) = rhs {
+                    if lhsPresentationData !== rhsPresentationData {
+                        return false
+                    }
+                    if lhsDisplayHide != rhsDisplayHide {
+                        return false
+                    }
+                    return true
+                } else {
+                    return false
+                }
+            case let .Notice(lhsPresentationData, lhsInfo):
+                if case let .Notice(rhsPresentationData, rhsInfo) = rhs {
+                    if lhsPresentationData !== rhsPresentationData {
+                        return false
+                    }
+                    if lhsInfo != rhsInfo {
                         return false
                     }
                     return true
@@ -316,14 +583,57 @@ private func offsetPinnedIndex(_ index: EngineChatList.Item.Index, offset: UInt1
     }
 }
 
-func chatListNodeEntriesForView(_ view: EngineChatList, state: ChatListNodeState, savedMessagesPeer: EnginePeer?, foundPeers: [(EnginePeer, EnginePeer?)], hideArchivedFolderByDefault: Bool, displayArchiveIntro: Bool, mode: ChatListNodeMode, chatListLocation: ChatListControllerLocation) -> (entries: [ChatListNodeEntry], loading: Bool) {
+struct ChatListContactPeer {
+    var peer: EnginePeer
+    var presence: EnginePeer.Presence
+    
+    init(peer: EnginePeer, presence: EnginePeer.Presence) {
+        self.peer = peer
+        self.presence = presence
+    }
+}
+
+func chatListNodeEntriesForView(view: EngineChatList, state: ChatListNodeState, savedMessagesPeer: EnginePeer?, foundPeers: [(EnginePeer, EnginePeer?)], hideArchivedFolderByDefault: Bool, displayArchiveIntro: Bool, notice: ChatListNotice?, mode: ChatListNodeMode, chatListLocation: ChatListControllerLocation, contacts: [ChatListContactPeer], accountPeerId: EnginePeer.Id, isMainTab: Bool) -> (entries: [ChatListNodeEntry], loading: Bool) {
+    var groupItems = view.groupItems
+    if isMainTab && state.archiveStoryState != nil && groupItems.isEmpty {
+        groupItems.append(EngineChatList.GroupItem(
+            id: .archive,
+            topMessage: nil,
+            items: [],
+            unreadCount: 0
+        ))
+    }
+    
     var result: [ChatListNodeEntry] = []
+    
+    var hasContacts = false
+    if !view.hasEarlier {
+        var existingPeerIds = Set<EnginePeer.Id>()
+        for item in view.items {
+            existingPeerIds.insert(item.renderedPeer.peerId)
+        }
+        
+        for contact in contacts {
+            if existingPeerIds.contains(contact.peer.id) {
+                continue
+            }
+            result.append(.ContactEntry(ChatListNodeEntry.ContactEntryData(
+                presentationData: state.presentationData,
+                peer: contact.peer,
+                presence: contact.presence
+            )))
+            hasContacts = true
+        }
+        if hasContacts {
+            result.append(.SectionHeader(presentationData: state.presentationData, displayHide: !view.items.isEmpty))
+        }
+    }
     
     var pinnedIndexOffset: UInt16 = 0
     
     if !view.hasLater, case .chatList = mode {
         var groupEntryCount = 0
-        for _ in view.groupItems {
+        for _ in groupItems {
             groupEntryCount += 1
         }
         pinnedIndexOffset += UInt16(groupEntryCount)
@@ -341,6 +651,9 @@ func chatListNodeEntriesForView(_ view: EngineChatList, state: ChatListNodeState
     if !view.hasLater && savedMessagesPeer == nil {
         pinnedIndexOffset += UInt16(filteredAdditionalItemEntries.count)
     }
+    
+    var hiddenGeneralThread: ChatListNodeEntry?
+    
     loop: for entry in view.items {
         var peerId: EnginePeer.Id?
         var threadId: Int64?
@@ -371,7 +684,7 @@ func chatListNodeEntriesForView(_ view: EngineChatList, state: ChatListNodeState
         if let draft = entry.draft {
             draftState = ChatListItemContent.DraftState(draft: draft)
         }
-        
+                
         var hasActiveRevealControls = false
         if let peerId {
             hasActiveRevealControls = ChatListNodeState.ItemId(peerId: peerId, threadId: threadId) == state.peerIdWithRevealedOptions
@@ -390,11 +703,54 @@ func chatListNodeEntriesForView(_ view: EngineChatList, state: ChatListNodeState
         
         var threadInfo: ChatListItemContent.ThreadInfo?
         if let threadData = entry.threadData, let threadId = threadId {
-            threadInfo = ChatListItemContent.ThreadInfo(id: threadId, info: threadData.info, isOwnedByMe: threadData.isOwnedByMe, isClosed: threadData.isClosed)
+            threadInfo = ChatListItemContent.ThreadInfo(id: threadId, info: threadData.info, isOwnedByMe: threadData.isOwnedByMe, isClosed: threadData.isClosed, isHidden: threadData.isHidden)
         }
 
-        result.append(.PeerEntry(index: offsetPinnedIndex(entry.index, offset: pinnedIndexOffset), presentationData: state.presentationData, messages: updatedMessages, readState: updatedCombinedReadState, isRemovedFromTotalUnreadCount: entry.isMuted, draftState: draftState, peer: entry.renderedPeer, threadInfo: threadInfo, presence: entry.presence, hasUnseenMentions: entry.hasUnseenMentions, hasUnseenReactions: entry.hasUnseenReactions, editing: state.editing, hasActiveRevealControls: hasActiveRevealControls, selected: isSelected, inputActivities: inputActivities, promoInfo: nil, hasFailedMessages: entry.hasFailed, isContact: entry.isContact, forumTopicData: entry.forumTopicData))
+        let entry: ChatListNodeEntry = .PeerEntry(ChatListNodeEntry.PeerEntryData(
+            index: offsetPinnedIndex(entry.index, offset: pinnedIndexOffset),
+            presentationData: state.presentationData,
+            messages: updatedMessages,
+            readState: updatedCombinedReadState,
+            isRemovedFromTotalUnreadCount: entry.isMuted,
+            draftState: draftState,
+            mediaDraftContentType: entry.mediaDraftContentType,
+            peer: entry.renderedPeer,
+            threadInfo: threadInfo,
+            presence: entry.presence,
+            hasUnseenMentions: entry.hasUnseenMentions,
+            hasUnseenReactions: entry.hasUnseenReactions,
+            editing: state.editing,
+            hasActiveRevealControls: hasActiveRevealControls,
+            selected: isSelected,
+            inputActivities: inputActivities,
+            promoInfo: nil,
+            hasFailedMessages: entry.hasFailed,
+            isContact: entry.isContact,
+            autoremoveTimeout: entry.autoremoveTimeout,
+            forumTopicData: entry.forumTopicData,
+            topForumTopicItems: entry.topForumTopicItems,
+            revealed: threadId == 1 && (state.hiddenItemShouldBeTemporaryRevealed || state.editing),
+            storyState: entry.renderedPeer.peerId == accountPeerId ? nil : entry.storyStats.flatMap { stats -> ChatListNodeState.StoryState in
+                return ChatListNodeState.StoryState(
+                    stats: stats,
+                    hasUnseenCloseFriends: stats.hasUnseenCloseFriends
+                )
+            },
+            requiresPremiumForMessaging: entry.isPremiumRequiredToMessage,
+            displayAsTopicList: entry.displayAsTopicList
+        ))
+        
+        if let threadInfo, threadInfo.isHidden {
+            hiddenGeneralThread = entry
+        } else {
+            result.append(entry)
+        }
     }
+    
+    if let hiddenGeneralThread {
+        result.append(hiddenGeneralThread)
+    }
+    
     if !view.hasLater {
         var pinningIndex: UInt16 = UInt16(pinnedIndexOffset == 0 ? 0 : (pinnedIndexOffset - 1))
         
@@ -408,13 +764,14 @@ func chatListNodeEntriesForView(_ view: EngineChatList, state: ChatListNodeState
                     }
                     
                     let messageIndex = EngineMessage.Index(id: EngineMessage.Id(peerId: peer.0.id, namespace: 0, id: 0), timestamp: 1)
-                    result.append(.PeerEntry(
+                    result.append(.PeerEntry(ChatListNodeEntry.PeerEntryData(
                         index: .chatList(EngineChatList.Item.Index.ChatList(pinningIndex: foundPinningIndex, messageIndex: messageIndex)),
                         presentationData: state.presentationData,
                         messages: [],
                         readState: nil,
                         isRemovedFromTotalUnreadCount: false,
                         draftState: nil,
+                        mediaDraftContentType: nil,
                         peer: EngineRenderedPeer(peerId: peer.0.id, peers: peers, associatedMedia: [:]),
                         threadInfo: nil,
                         presence: nil,
@@ -427,15 +784,48 @@ func chatListNodeEntriesForView(_ view: EngineChatList, state: ChatListNodeState
                         promoInfo: nil,
                         hasFailedMessages: false,
                         isContact: false,
-                        forumTopicData: nil
-                    ))
+                        autoremoveTimeout: nil,
+                        forumTopicData: nil,
+                        topForumTopicItems: [],
+                        revealed: false,
+                        storyState: nil,
+                        requiresPremiumForMessaging: false,
+                        displayAsTopicList: false
+                    )))
                     if foundPinningIndex != 0 {
                         foundPinningIndex -= 1
                     }
                 }
             }
             
-            result.append(.PeerEntry(index: .chatList(EngineChatList.Item.Index.ChatList.absoluteUpperBound.predecessor), presentationData: state.presentationData, messages: [], readState: nil, isRemovedFromTotalUnreadCount: false, draftState: nil, peer: EngineRenderedPeer(peerId: savedMessagesPeer.id, peers: [savedMessagesPeer.id: savedMessagesPeer], associatedMedia: [:]), threadInfo: nil, presence: nil, hasUnseenMentions: false, hasUnseenReactions: false, editing: state.editing, hasActiveRevealControls: false, selected: state.selectedPeerIds.contains(savedMessagesPeer.id), inputActivities: nil, promoInfo: nil, hasFailedMessages: false, isContact: false, forumTopicData: nil))
+            result.append(.PeerEntry(ChatListNodeEntry.PeerEntryData(
+                index: .chatList(EngineChatList.Item.Index.ChatList.absoluteUpperBound.predecessor),
+                presentationData: state.presentationData,
+                messages: [],
+                readState: nil,
+                isRemovedFromTotalUnreadCount: false,
+                draftState: nil,
+                mediaDraftContentType: nil,
+                peer: EngineRenderedPeer(peerId: savedMessagesPeer.id, peers: [savedMessagesPeer.id: savedMessagesPeer], associatedMedia: [:]),
+                threadInfo: nil,
+                presence: nil,
+                hasUnseenMentions: false,
+                hasUnseenReactions: false,
+                editing: state.editing,
+                hasActiveRevealControls: false,
+                selected: state.selectedPeerIds.contains(savedMessagesPeer.id),
+                inputActivities: nil,
+                promoInfo: nil,
+                hasFailedMessages: false,
+                isContact: false,
+                autoremoveTimeout: nil,
+                forumTopicData: nil,
+                topForumTopicItems: [],
+                revealed: false,
+                storyState: nil,
+                requiresPremiumForMessaging: false,
+                displayAsTopicList: false
+            )))
         } else {
             if !filteredAdditionalItemEntries.isEmpty {
                 for item in filteredAdditionalItemEntries.reversed() {
@@ -462,16 +852,16 @@ func chatListNodeEntriesForView(_ view: EngineChatList, state: ChatListNodeState
                     default:
                         break
                     }
-                    
-                    result.append(.PeerEntry(
+                    result.append(.PeerEntry(ChatListNodeEntry.PeerEntryData(
                         index: .chatList(EngineChatList.Item.Index.ChatList(pinningIndex: pinningIndex, messageIndex: index.messageIndex)),
                         presentationData: state.presentationData,
                         messages: item.item.messages,
                         readState: item.item.readCounters,
                         isRemovedFromTotalUnreadCount: item.item.isMuted,
                         draftState: draftState,
+                        mediaDraftContentType: item.item.mediaDraftContentType,
                         peer: item.item.renderedPeer,
-                        threadInfo: item.item.threadData.flatMap { ChatListItemContent.ThreadInfo(id: threadId, info: $0.info, isOwnedByMe: $0.isOwnedByMe, isClosed: $0.isClosed) },
+                        threadInfo: item.item.threadData.flatMap { ChatListItemContent.ThreadInfo(id: threadId, info: $0.info, isOwnedByMe: $0.isOwnedByMe, isClosed: $0.isClosed, isHidden: $0.isHidden) },
                         presence: item.item.presence,
                         hasUnseenMentions: item.item.hasUnseenMentions,
                         hasUnseenReactions: item.item.hasUnseenReactions,
@@ -482,8 +872,14 @@ func chatListNodeEntriesForView(_ view: EngineChatList, state: ChatListNodeState
                         promoInfo: promoInfo,
                         hasFailedMessages: item.item.hasFailed,
                         isContact: item.item.isContact,
-                        forumTopicData: item.item.forumTopicData
-                    ))
+                        autoremoveTimeout: item.item.autoremoveTimeout,
+                        forumTopicData: item.item.forumTopicData,
+                        topForumTopicItems: item.item.topForumTopicItems,
+                        revealed: state.hiddenItemShouldBeTemporaryRevealed || state.editing,
+                        storyState: nil,
+                        requiresPremiumForMessaging: false,
+                        displayAsTopicList: false
+                    )))
                     if pinningIndex != 0 {
                         pinningIndex -= 1
                     }
@@ -492,9 +888,13 @@ func chatListNodeEntriesForView(_ view: EngineChatList, state: ChatListNodeState
         }
         
         if !view.hasLater, case .chatList = mode {
-            for groupReference in view.groupItems {
+            for groupReference in groupItems {
                 let messageIndex = EngineMessage.Index(id: EngineMessage.Id(peerId: EnginePeer.Id(0), namespace: 0, id: 0), timestamp: 1)
-                result.append(.GroupReferenceEntry(
+                var mappedStoryState: ChatListNodeState.StoryState?
+                if let archiveStoryState = state.archiveStoryState {
+                    mappedStoryState = archiveStoryState
+                }
+                result.append(.GroupReferenceEntry(ChatListNodeEntry.GroupReferenceEntryData(
                     index: .chatList(EngineChatList.Item.Index.ChatList(pinningIndex: pinningIndex, messageIndex: messageIndex)),
                     presentationData: state.presentationData,
                     groupId: groupReference.id,
@@ -502,26 +902,52 @@ func chatListNodeEntriesForView(_ view: EngineChatList, state: ChatListNodeState
                     message: groupReference.topMessage,
                     editing: state.editing,
                     unreadCount: groupReference.unreadCount,
-                    revealed: state.archiveShouldBeTemporaryRevealed,
-                    hiddenByDefault: hideArchivedFolderByDefault
-                ))
+                    revealed: state.hiddenItemShouldBeTemporaryRevealed,
+                    hiddenByDefault: hideArchivedFolderByDefault,
+                    storyState: mappedStoryState
+                )))
                 if pinningIndex != 0 {
                     pinningIndex -= 1
                 }
             }
             
             if displayArchiveIntro {
-                result.append(.ArchiveIntro(presentationData: state.presentationData))
+                //result.append(.ArchiveIntro(presentationData: state.presentationData))
+            } else if !contacts.isEmpty && !result.contains(where: { entry in
+                if case .PeerEntry = entry {
+                    return true
+                } else {
+                    return false
+                }
+            }) {
+                result.append(.EmptyIntro(presentationData: state.presentationData))
+            }
+            
+            if let notice {
+                result.append(.Notice(presentationData: state.presentationData, notice: notice))
             }
             
             result.append(.HeaderEntry)
         }
         
-        if !view.hasLater, case let .peers(_, _, additionalCategories, _) = mode {
-            var index = 0
-            for category in additionalCategories.reversed(){
-                result.append(.AdditionalCategory(index: index, id: category.id, title: category.title, image: category.icon, appearance: category.appearance, selected: state.selectedAdditionalCategoryIds.contains(category.id), presentationData: state.presentationData))
-                index += 1
+        if !view.hasLater {
+            if case let .peers(_, _, additionalCategories, _, _, _) = mode {
+                var index = 0
+                for category in additionalCategories.reversed() {
+                    result.append(.AdditionalCategory(index: index, id: category.id, title: category.title, image: category.icon, appearance: category.appearance, selected: state.selectedAdditionalCategoryIds.contains(category.id), presentationData: state.presentationData))
+                    index += 1
+                }
+            } else if case let .peerType(types, hasCreate) = mode, !result.isEmpty && hasCreate {
+                for type in types {
+                    switch type {
+                    case .group:
+                        result.append(.AdditionalCategory(index: 0, id: 0, title: state.presentationData.strings.RequestPeer_CreateNewGroup, image: PresentationResourcesItemList.createGroupIcon(state.presentationData.theme), appearance: .action, selected: false, presentationData: state.presentationData))
+                    case .channel:
+                        result.append(.AdditionalCategory(index: 0, id: 0, title: state.presentationData.strings.RequestPeer_CreateNewChannel, image: PresentationResourcesItemList.createGroupIcon(state.presentationData.theme), appearance: .action, selected: false, presentationData: state.presentationData))
+                    default:
+                        break
+                    }
+                }
             }
         }
     }

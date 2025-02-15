@@ -2,7 +2,6 @@ import Foundation
 import UIKit
 import Display
 import SwiftSignalKit
-import Postbox
 import TelegramCore
 import TelegramPresentationData
 import ItemListUI
@@ -12,10 +11,12 @@ import AlertUI
 import PresentationDataUtils
 
 private final class ResetPasswordControllerArguments {
+    let context: AccountContext
     let updateCodeText: (String) -> Void
     let openHelp: () -> Void
     
-    init(updateCodeText: @escaping (String) -> Void, openHelp: @escaping () -> Void) {
+    init(context: AccountContext, updateCodeText: @escaping (String) -> Void, openHelp: @escaping () -> Void) {
+        self.context = context
         self.updateCodeText = updateCodeText
         self.openHelp = openHelp
     }
@@ -129,7 +130,7 @@ public func resetPasswordController(context: AccountContext, emailPattern: Strin
     let saveDisposable = MetaDisposable()
     actionsDisposable.add(saveDisposable)
     
-    let arguments = ResetPasswordControllerArguments(updateCodeText: { updatedText in
+    let arguments = ResetPasswordControllerArguments(context: context, updateCodeText: { updatedText in
         updateState { state in
             var state = state
             state.code = updatedText

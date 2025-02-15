@@ -149,7 +149,12 @@ func _internal_togglePeerUnreadMarkInteractively(transaction: Transaction, netwo
         return
     }
     
-    if let channel = peer as? TelegramChannel, channel.flags.contains(.isForum) {
+    var displayAsRegularChat: Bool = false
+    if let cachedData = transaction.getPeerCachedData(peerId: peerId) as? CachedChannelData {
+        displayAsRegularChat = cachedData.viewForumAsMessages.knownValue ?? false
+    }
+    
+    if let channel = peer as? TelegramChannel, channel.flags.contains(.isForum), !displayAsRegularChat {
         for item in transaction.getMessageHistoryThreadIndex(peerId: peerId, limit: 20) {
             guard var data = transaction.getMessageHistoryThreadInfo(peerId: peerId, threadId: item.threadId)?.data.get(MessageHistoryThreadData.self) else {
                 continue
@@ -190,7 +195,7 @@ func _internal_togglePeerUnreadMarkInteractively(transaction: Transaction, netwo
         }
         
         if !hasUnread && peerId.namespace == Namespaces.Peer.SecretChat {
-            let unseenSummary = transaction.getMessageTagSummary(peerId: peerId, threadId: nil, tagMask: .unseenPersonalMessage, namespace: Namespaces.Message.Cloud)
+            let unseenSummary = transaction.getMessageTagSummary(peerId: peerId, threadId: nil, tagMask: .unseenPersonalMessage, namespace: Namespaces.Message.Cloud, customTag: nil)
             let actionSummary = transaction.getPendingMessageActionsSummary(peerId: peerId, type: PendingMessageActionType.consumeUnseenPersonalMessage, namespace: Namespaces.Message.Cloud)
             if (unseenSummary?.count ?? 0) - (actionSummary ?? 0) > 0 {
                 hasUnread = true
@@ -235,7 +240,7 @@ public func clearPeerUnseenReactionsInteractively(account: Account, peerId: Peer
 }
 
 func _internal_markAllChatsAsReadInteractively(transaction: Transaction, network: Network, viewTracker: AccountViewTracker, groupId: PeerGroupId, filterPredicate: ChatListFilterPredicate?) {
-    for peerId in transaction.getUnreadChatListPeerIds(groupId: groupId, filterPredicate: filterPredicate) {
+    for peerId in transaction.getUnreadChatListPeerIds(groupId: groupId, filterPredicate: filterPredicate, additionalFilter: nil, stopOnFirstMatch: false) {
         _internal_togglePeerUnreadMarkInteractively(transaction: transaction, network: network, viewTracker: viewTracker, peerId: peerId, setToValue: false)
     }
 }

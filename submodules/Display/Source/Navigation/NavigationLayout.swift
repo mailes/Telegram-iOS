@@ -43,12 +43,26 @@ func makeNavigationLayout(mode: NavigationControllerMode, layout: ContainerViewL
             requiresModal = true
             beginsModal = true
             isStandalone = true
+        case .standaloneFlatModal:
+            requiresModal = true
+            beginsModal = true
+            isStandalone = true
+            isFlat = true
         case .modalInLargeLayout:
             switch layout.metrics.widthClass {
             case .compact:
                 requiresModal = false
             case .regular:
                 requiresModal = true
+            }
+        case .modalInCompactLayout:
+            switch layout.metrics.widthClass {
+            case .compact:
+                requiresModal = true
+            case .regular:
+                requiresModal = true
+                beginsModal = true
+                isFlat = true
             }
         }
         if requiresModal {
@@ -59,7 +73,10 @@ func makeNavigationLayout(mode: NavigationControllerMode, layout: ContainerViewL
                 modalStack[modalStack.count - 1].controllers.append(controller)
             }
         } else if !modalStack.isEmpty {
-            controller._presentedInModal = true
+            if modalStack[modalStack.count - 1].isFlat {
+            } else {
+                controller._presentedInModal = true
+            }
             if modalStack[modalStack.count - 1].isStandalone {
                 modalStack.append(ModalContainerLayout(controllers: [controller], isFlat: isFlat, isStandalone: isStandalone))
             } else {
@@ -70,6 +87,7 @@ func makeNavigationLayout(mode: NavigationControllerMode, layout: ContainerViewL
             rootControllers.append(controller)
         }
     }
+    
     let rootLayout: RootNavigationLayout
     switch mode {
     case .single:

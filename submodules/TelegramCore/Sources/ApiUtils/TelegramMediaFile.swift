@@ -6,7 +6,7 @@ import TelegramApi
 func dimensionsForFileAttributes(_ attributes: [TelegramMediaFileAttribute]) -> PixelDimensions? {
     for attribute in attributes {
         switch attribute {
-            case let .Video(_, size, _):
+            case let .Video(_, size, _, _, _, _):
                 return size
             case let .ImageSize(size):
                 return size
@@ -17,13 +17,13 @@ func dimensionsForFileAttributes(_ attributes: [TelegramMediaFileAttribute]) -> 
     return nil
 }
 
-func durationForFileAttributes(_ attributes: [TelegramMediaFileAttribute]) -> Int32? {
+func durationForFileAttributes(_ attributes: [TelegramMediaFileAttribute]) -> Double? {
     for attribute in attributes {
         switch attribute {
-            case let .Video(duration, _, _):
-                return Int32(duration)
+            case let .Video(duration, _, _, _, _, _):
+                return duration
             case let .Audio(_, duration, _, _, _):
-                return Int32(duration)
+                return Double(duration)
             default:
                 break
         }
@@ -42,7 +42,7 @@ public extension TelegramMediaFile {
         }
     }
     
-    var duration: Int32? {
+    var duration: Double? {
         return durationForFileAttributes(self.attributes)
     }
 }
@@ -68,6 +68,8 @@ extension StickerPackReference {
             self = .emojiGenericAnimations
         case .inputStickerSetEmojiDefaultStatuses:
             self = .iconStatusEmoji
+        case .inputStickerSetEmojiChannelDefaultStatuses:
+            self = .iconChannelStatusEmoji
         case .inputStickerSetEmojiDefaultTopicIcons:
             self = .iconTopicEmoji
         }
@@ -97,7 +99,7 @@ func telegramMediaFileAttributesFromApiAttributes(_ attributes: [Api.DocumentAtt
                 result.append(.ImageSize(size: PixelDimensions(width: w, height: h)))
             case .documentAttributeAnimated:
                 result.append(.Animated)
-            case let .documentAttributeVideo(flags, duration, w, h):
+            case let .documentAttributeVideo(flags, duration, w, h, preloadSize, videoStart, videoCodec):
                 var videoFlags = TelegramMediaVideoFlags()
                 if (flags & (1 << 0)) != 0 {
                     videoFlags.insert(.instantRoundVideo)
@@ -105,14 +107,18 @@ func telegramMediaFileAttributesFromApiAttributes(_ attributes: [Api.DocumentAtt
                 if (flags & (1 << 1)) != 0 {
                     videoFlags.insert(.supportsStreaming)
                 }
-                result.append(.Video(duration: Int(duration), size: PixelDimensions(width: w, height: h), flags: videoFlags))
+                if (flags & (1 << 3)) != 0 {
+                    videoFlags.insert(.isSilent)
+                }
+                result.append(.Video(duration: Double(duration), size: PixelDimensions(width: w, height: h), flags: videoFlags, preloadSize: preloadSize, coverTime: videoStart, videoCodec: videoCodec))
             case let .documentAttributeAudio(flags, duration, title, performer, waveform):
                 let isVoice = (flags & (1 << 10)) != 0
                 let waveformBuffer: Data? = waveform?.makeData()
                 result.append(.Audio(isVoice: isVoice, duration: Int(duration), title: title, performer: performer, waveform: waveformBuffer))
             case let .documentAttributeCustomEmoji(flags, alt, stickerSet):
                 let isFree = (flags & (1 << 0)) != 0
-                result.append(.CustomEmoji(isPremium: !isFree, alt: alt, packReference: StickerPackReference(apiInputSet: stickerSet)))
+                let isSingleColor = (flags & (1 << 1)) != 0
+                result.append(.CustomEmoji(isPremium: !isFree, isSingleColor: isSingleColor, alt: alt, packReference: StickerPackReference(apiInputSet: stickerSet)))
         }
     }
     return result
@@ -134,13 +140,13 @@ func telegramMediaFileThumbnailRepresentationsFromApiSizes(datacenterId: Int32, 
         switch size {
             case let .photoCachedSize(type, w, h, _):
                 let resource = CloudDocumentSizeMediaResource(datacenterId: datacenterId, documentId: documentId, accessHash: accessHash, sizeSpec: type, fileReference: fileReference)
-                representations.append(TelegramMediaImageRepresentation(dimensions: PixelDimensions(width: w, height: h), resource: resource, progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false))
+                representations.append(TelegramMediaImageRepresentation(dimensions: PixelDimensions(width: w, height: h), resource: resource, progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false, isPersonal: false))
             case let .photoSize(type, w, h, _):
                 let resource = CloudDocumentSizeMediaResource(datacenterId: datacenterId, documentId: documentId, accessHash: accessHash, sizeSpec: type, fileReference: fileReference)
-                representations.append(TelegramMediaImageRepresentation(dimensions: PixelDimensions(width: w, height: h), resource: resource, progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false))
+                representations.append(TelegramMediaImageRepresentation(dimensions: PixelDimensions(width: w, height: h), resource: resource, progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false, isPersonal: false))
             case let .photoSizeProgressive(type, w, h, sizes):
                 let resource = CloudDocumentSizeMediaResource(datacenterId: datacenterId, documentId: documentId, accessHash: accessHash, sizeSpec: type, fileReference: fileReference)
-                representations.append(TelegramMediaImageRepresentation(dimensions: PixelDimensions(width: w, height: h), resource: resource, progressiveSizes: sizes, immediateThumbnailData: nil, hasVideo: false))
+                representations.append(TelegramMediaImageRepresentation(dimensions: PixelDimensions(width: w, height: h), resource: resource, progressiveSizes: sizes, immediateThumbnailData: nil, hasVideo: false, isPersonal: false))
             case let .photoPathSize(_, data):
                 immediateThumbnailData = data.makeData()
             case let .photoStrippedSize(_, data):
@@ -152,7 +158,7 @@ func telegramMediaFileThumbnailRepresentationsFromApiSizes(datacenterId: Int32, 
     return (immediateThumbnailData, representations)
 }
 
-func telegramMediaFileFromApiDocument(_ document: Api.Document) -> TelegramMediaFile? {
+func telegramMediaFileFromApiDocument(_ document: Api.Document, altDocuments: [Api.Document]?) -> TelegramMediaFile? {
     switch document {
         case let .document(_, id, accessHash, fileReference, _, mimeType, size, thumbs, videoThumbs, dcId, attributes):
             var parsedAttributes = telegramMediaFileAttributesFromApiAttributes(attributes)
@@ -171,11 +177,18 @@ func telegramMediaFileFromApiDocument(_ document: Api.Document) -> TelegramMedia
                         videoThumbnails.append(TelegramMediaFile.VideoThumbnail(
                             dimensions: PixelDimensions(width: w, height: h),
                             resource: resource))
+                    case .videoSizeEmojiMarkup, .videoSizeStickerMarkup:
+                        break
                     }
                 }
             }
+        
+            var alternativeRepresentations: [Media] = []
+            if let altDocuments {
+                alternativeRepresentations = altDocuments.compactMap { telegramMediaFileFromApiDocument($0, altDocuments: []) }
+            }
             
-            return TelegramMediaFile(fileId: MediaId(namespace: Namespaces.Media.CloudFile, id: id), partialReference: nil, resource: CloudDocumentMediaResource(datacenterId: Int(dcId), fileId: id, accessHash: accessHash, size: size, fileReference: fileReference.makeData(), fileName: fileNameFromFileAttributes(parsedAttributes)), previewRepresentations: previewRepresentations, videoThumbnails: videoThumbnails, immediateThumbnailData: immediateThumbnail, mimeType: mimeType, size: size, attributes: parsedAttributes)
+            return TelegramMediaFile(fileId: MediaId(namespace: Namespaces.Media.CloudFile, id: id), partialReference: nil, resource: CloudDocumentMediaResource(datacenterId: Int(dcId), fileId: id, accessHash: accessHash, size: size, fileReference: fileReference.makeData(), fileName: fileNameFromFileAttributes(parsedAttributes)), previewRepresentations: previewRepresentations, videoThumbnails: videoThumbnails, immediateThumbnailData: immediateThumbnail, mimeType: mimeType, size: size, attributes: parsedAttributes, alternativeRepresentations: alternativeRepresentations)
         case .documentEmpty:
             return nil
     }

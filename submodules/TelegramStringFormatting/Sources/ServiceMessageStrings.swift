@@ -34,8 +34,8 @@ private func peerMentionsAttributes(primaryTextColor: UIColor, peerIds: [(Int, E
     return result
 }
 
-public func plainServiceMessageString(strings: PresentationStrings, nameDisplayOrder: PresentationPersonNameOrder, dateTimeFormat: PresentationDateTimeFormat, message: EngineMessage, accountPeerId: EnginePeer.Id, forChatList: Bool, forForumOverview: Bool) -> (text: String, spoilerRanges: [NSRange], customEmojiRanges: [(NSRange, ChatTextInputTextCustomEmojiAttribute)])? {
-    if let attributedString = universalServiceMessageString(presentationData: nil, strings: strings, nameDisplayOrder: nameDisplayOrder, dateTimeFormat: dateTimeFormat, message: message, accountPeerId: accountPeerId, forChatList: forChatList, forForumOverview: forForumOverview) {
+public func plainServiceMessageString(strings: PresentationStrings, nameDisplayOrder: PresentationPersonNameOrder, dateTimeFormat: PresentationDateTimeFormat, message: EngineMessage, accountPeerId: EnginePeer.Id, forChatList: Bool, forForumOverview: Bool, forAdditionalServiceMessage: Bool = false) -> (text: String, spoilerRanges: [NSRange], customEmojiRanges: [(NSRange, ChatTextInputTextCustomEmojiAttribute)])? {
+    if let attributedString = universalServiceMessageString(presentationData: nil, strings: strings, nameDisplayOrder: nameDisplayOrder, dateTimeFormat: dateTimeFormat, message: message, accountPeerId: accountPeerId, forChatList: forChatList, forForumOverview: forForumOverview, forAdditionalServiceMessage: forAdditionalServiceMessage) {
         var ranges: [NSRange] = []
         var customEmojiRanges: [(NSRange, ChatTextInputTextCustomEmojiAttribute)] = []
         attributedString.enumerateAttributes(in: NSRange(location: 0, length: attributedString.length), options: [], using: { attributes, range, _ in
@@ -51,7 +51,35 @@ public func plainServiceMessageString(strings: PresentationStrings, nameDisplayO
     }
 }
 
-public func universalServiceMessageString(presentationData: (PresentationTheme, TelegramWallpaper)?, strings: PresentationStrings, nameDisplayOrder: PresentationPersonNameOrder, dateTimeFormat: PresentationDateTimeFormat, message: EngineMessage, accountPeerId: EnginePeer.Id, forChatList: Bool, forForumOverview: Bool) -> NSAttributedString? {
+private func peerDisplayTitles(_ peerIds: [PeerId], _ dict: SimpleDictionary<PeerId, Peer>, strings: PresentationStrings, nameDisplayOrder: PresentationPersonNameOrder) -> String {
+    var peers: [Peer] = []
+    for id in peerIds {
+        if let peer = dict[id] {
+            peers.append(peer)
+        }
+    }
+    return peerDisplayTitles(peers, strings: strings, nameDisplayOrder: nameDisplayOrder)
+}
+
+private func peerDisplayTitles(_ peers: [Peer], strings: PresentationStrings, nameDisplayOrder: PresentationPersonNameOrder) -> String {
+    if peers.count == 0 {
+        return ""
+    } else {
+        var string = ""
+        var first = true
+        for peer in peers {
+            if first {
+                first = false
+            } else {
+                string.append(", ")
+            }
+            string.append(EnginePeer(peer).displayTitle(strings: strings, displayOrder: nameDisplayOrder))
+        }
+        return string
+    }
+}
+
+public func universalServiceMessageString(presentationData: (PresentationTheme, TelegramWallpaper)?, strings: PresentationStrings, nameDisplayOrder: PresentationPersonNameOrder, dateTimeFormat: PresentationDateTimeFormat, message: EngineMessage, accountPeerId: EnginePeer.Id, forChatList: Bool, forForumOverview: Bool, forAdditionalServiceMessage: Bool = false) -> NSAttributedString? {
     var attributedString: NSAttributedString?
     
     let primaryTextColor: UIColor
@@ -67,6 +95,7 @@ public func universalServiceMessageString(presentationData: (PresentationTheme, 
     for media in message.media {
         if let action = media as? TelegramMediaAction {
             let authorName = message.author?.displayTitle(strings: strings, displayOrder: nameDisplayOrder) ?? ""
+            let compactAuthorName = message.author?.compactDisplayTitle ?? ""
             
             var isChannel = false
             if message.id.peerId.namespace == Namespaces.Peer.CloudChannel, let peer = message.peers[message.id.peerId] as? TelegramChannel, case .broadcast = peer.info {
@@ -96,9 +125,9 @@ public func universalServiceMessageString(presentationData: (PresentationTheme, 
                     let resultTitleString: PresentationStrings.FormattedString
                     if peerIds.count == 1 {
                         attributePeerIds.append((1, peerIds.first))
-                        resultTitleString = strings.Notification_Invited(authorName, peerDebugDisplayTitles(peerIds, message.peers))
+                        resultTitleString = strings.Notification_Invited(authorName, peerDisplayTitles(peerIds, message.peers, strings: strings, nameDisplayOrder: nameDisplayOrder))
                     } else {
-                        resultTitleString = strings.Notification_InvitedMultiple(authorName, peerDebugDisplayTitles(peerIds, message.peers))
+                        resultTitleString = strings.Notification_InvitedMultiple(authorName, peerDisplayTitles(peerIds, message.peers, strings: strings, nameDisplayOrder: nameDisplayOrder))
                     }
                     
                     attributedString = addAttributesToStringWithRanges(resultTitleString._tuple, body: bodyAttributes, argumentAttributes: peerMentionsAttributes(primaryTextColor: primaryTextColor, peerIds: attributePeerIds))
@@ -115,7 +144,7 @@ public func universalServiceMessageString(presentationData: (PresentationTheme, 
                     if peerIds.count == 1 {
                         attributePeerIds.append((1, peerIds.first))
                     }
-                    attributedString = addAttributesToStringWithRanges(strings.Notification_Kicked(authorName, peerDebugDisplayTitles(peerIds, message.peers))._tuple, body: bodyAttributes, argumentAttributes: peerMentionsAttributes(primaryTextColor: primaryTextColor, peerIds: attributePeerIds))
+                    attributedString = addAttributesToStringWithRanges(strings.Notification_Kicked(authorName, peerDisplayTitles(peerIds, message.peers, strings: strings, nameDisplayOrder: nameDisplayOrder))._tuple, body: bodyAttributes, argumentAttributes: peerMentionsAttributes(primaryTextColor: primaryTextColor, peerIds: attributePeerIds))
                 }
             case let .photoUpdated(image):
                 if authorName.isEmpty || isChannel {
@@ -206,13 +235,12 @@ public func universalServiceMessageString(presentationData: (PresentationTheme, 
                             } else {
                                 for attribute in file.attributes {
                                     switch attribute {
-                                    case let .Video(_, _, flags):
+                                    case let .Video(_, _, flags, _, _, _):
                                         if flags.contains(.instantRoundVideo) {
                                             type = .round
                                         } else {
                                             type = .video
                                         }
-                                        break inner
                                     case let .Audio(isVoice, _, _, _, _):
                                         if isVoice {
                                             type = .audio
@@ -336,7 +364,7 @@ public func universalServiceMessageString(presentationData: (PresentationTheme, 
                 }
             case .channelMigratedFromGroup, .groupMigratedToChannel:
                 attributedString = NSAttributedString(string: "", font: titleFont, textColor: primaryTextColor)
-            case let .messageAutoremoveTimeoutUpdated(timeout):
+            case let .messageAutoremoveTimeoutUpdated(timeout, autoSourcePeerId):
                 let authorString: String
                 if let author = messageMainPeer(message) {
                     authorString = author.compactDisplayTitle
@@ -349,37 +377,41 @@ public func universalServiceMessageString(presentationData: (PresentationTheme, 
                 if timeout > 0 {
                     let timeValue = timeIntervalString(strings: strings, value: timeout, preferLowerValue: false)
                     
-                    let string: String
-                    if let _ = messagePeer as? TelegramUser {
-                        if message.author?.id == accountPeerId {
-                            string = strings.Conversation_AutoremoveTimerSetUserYou(timeValue).string
+                    if let user = messagePeer as? TelegramUser {
+                        if let autoSourcePeerId = autoSourcePeerId {
+                            if autoSourcePeerId == accountPeerId {
+                                attributedString = NSAttributedString(string: strings.Conversation_AutoremoveTimerSetUserGlobalYou(timeValue).string, font: titleFont, textColor: primaryTextColor)
+                            } else {
+                                attributedString = addAttributesToStringWithRanges(strings.Conversation_AutoremoveTimerSetUserGlobal(authorString, timeValue)._tuple, body: bodyAttributes, argumentAttributes: peerMentionsAttributes(primaryTextColor: primaryTextColor, peerIds: [(0, user.id)]))
+                            }
+                        } else if message.author?.id == accountPeerId {
+                            attributedString = NSAttributedString(string: strings.Conversation_AutoremoveTimerSetUserYou(timeValue).string, font: titleFont, textColor: primaryTextColor)
                         } else {
-                            string = strings.Conversation_AutoremoveTimerSetUser(authorString, timeValue).string
+                            attributedString = NSAttributedString(string: strings.Conversation_AutoremoveTimerSetUser(authorString, timeValue).string, font: titleFont, textColor: primaryTextColor)
                         }
                     } else if let _ = messagePeer as? TelegramGroup {
                         if message.author?.id == accountPeerId {
-                            string = strings.Conversation_AutoremoveTimerSetUserYou(timeValue).string
+                            attributedString = NSAttributedString(string: strings.Conversation_AutoremoveTimerSetUserYou(timeValue).string, font: titleFont, textColor: primaryTextColor)
                         } else {
-                            string = strings.Conversation_AutoremoveTimerSetGroup(timeValue).string
+                            attributedString = NSAttributedString(string: strings.Conversation_AutoremoveTimerSetGroup(timeValue).string, font: titleFont, textColor: primaryTextColor)
                         }
                     } else if let channel = messagePeer as? TelegramChannel {
                         if message.author?.id == accountPeerId {
-                            string = strings.Conversation_AutoremoveTimerSetUserYou(timeValue).string
+                            attributedString = NSAttributedString(string: strings.Conversation_AutoremoveTimerSetUserYou(timeValue).string, font: titleFont, textColor: primaryTextColor)
                         } else {
                             if case .group = channel.info {
-                                string = strings.Conversation_AutoremoveTimerSetGroup(timeValue).string
+                                attributedString = NSAttributedString(string: strings.Conversation_AutoremoveTimerSetGroup(timeValue).string, font: titleFont, textColor: primaryTextColor)
                             } else {
-                                string = strings.Conversation_AutoremoveTimerSetChannel(timeValue).string
+                                attributedString = NSAttributedString(string: strings.Conversation_AutoremoveTimerSetChannel(timeValue).string, font: titleFont, textColor: primaryTextColor)
                             }
                         }
                     } else {
                         if message.author?.id == accountPeerId {
-                            string = strings.Notification_MessageLifetimeChangedOutgoing(timeValue).string
+                            attributedString = NSAttributedString(string: strings.Notification_MessageLifetimeChangedOutgoing(timeValue).string, font: titleFont, textColor: primaryTextColor)
                         } else {
-                            string = strings.Notification_MessageLifetimeChanged(authorString, timeValue).string
+                            attributedString = NSAttributedString(string: strings.Notification_MessageLifetimeChanged(authorString, timeValue).string, font: titleFont, textColor: primaryTextColor)
                         }
                     }
-                    attributedString = NSAttributedString(string: string, font: titleFont, textColor: primaryTextColor)
                 } else {
                     let string: String
                     if let _ = messagePeer as? TelegramUser {
@@ -389,10 +421,18 @@ public func universalServiceMessageString(presentationData: (PresentationTheme, 
                             string = strings.Conversation_AutoremoveTimerRemovedUser(authorString).string
                         }
                     } else if let _ = messagePeer as? TelegramGroup {
-                        string = strings.Conversation_AutoremoveTimerRemovedGroup
+                        if message.author?.id == accountPeerId {
+                            string = strings.Conversation_AutoremoveTimerRemovedUserYou
+                        } else {
+                            string = strings.Conversation_AutoremoveTimerRemovedGroup
+                        }
                     } else if let channel = messagePeer as? TelegramChannel {
                         if case .group = channel.info {
-                            string = strings.Conversation_AutoremoveTimerRemovedGroup
+                            if message.author?.id == accountPeerId {
+                                string = strings.Conversation_AutoremoveTimerRemovedUserYou
+                            } else {
+                                string = strings.Conversation_AutoremoveTimerRemovedGroup
+                            }
                         } else {
                             string = strings.Conversation_AutoremoveTimerRemovedChannel
                         }
@@ -506,7 +546,16 @@ public func universalServiceMessageString(presentationData: (PresentationTheme, 
                 
                 range = (mutableString.string as NSString).range(of: "{amount}")
                 if range.location != NSNotFound {
-                    mutableString.replaceCharacters(in: range, with: NSAttributedString(string: formatCurrencyAmount(totalAmount, currency: currency), font: titleBoldFont, textColor: primaryTextColor))
+                    if currency == "XTR" {
+                        let amountAttributedString = NSMutableAttributedString(string: "#\(totalAmount)", font: titleBoldFont, textColor: primaryTextColor)
+                        if let range = amountAttributedString.string.range(of: "#") {
+                            amountAttributedString.addAttribute(ChatTextInputAttributes.customEmoji, value: ChatTextInputTextCustomEmojiAttribute(interactivelySelectedFromPackId: nil, fileId: 0, file: nil, custom: .stars(tinted: true)), range: NSRange(range, in: amountAttributedString.string))
+                            amountAttributedString.addAttribute(.baselineOffset, value: 1.5, range: NSRange(range, in: amountAttributedString.string))
+                        }
+                        mutableString.replaceCharacters(in: range, with: amountAttributedString)
+                    } else {
+                        mutableString.replaceCharacters(in: range, with: NSAttributedString(string: formatCurrencyAmount(totalAmount, currency: currency), font: titleBoldFont, textColor: primaryTextColor))
+                    }
                 }
                 range = (mutableString.string as NSString).range(of: "{name}")
                 if range.location != NSNotFound {
@@ -584,10 +633,26 @@ public func universalServiceMessageString(presentationData: (PresentationTheme, 
                         attributedString = addAttributesToStringWithRanges(titleString._tuple, body: bodyAttributes, argumentAttributes: peerMentionsAttributes(primaryTextColor: primaryTextColor, peerIds: attributePeerIds))
                     }
                 }
-            case let .customText(text, entities):
-                attributedString = stringWithAppliedEntities(text, entities: entities, baseColor: primaryTextColor, linkColor: primaryTextColor, baseFont: titleFont, linkFont: titleBoldFont, boldFont: titleBoldFont, italicFont: titleFont, boldItalicFont: titleBoldFont, fixedFont: titleFont, blockQuoteFont: titleFont, underlineLinks: false, message: message._asMessage())
+            case let .customText(text, entities, additionalAttributes):
+                let mutableAttributedString = NSMutableAttributedString(attributedString: stringWithAppliedEntities(text, entities: entities, baseColor: primaryTextColor, linkColor: primaryTextColor, baseFont: titleFont, linkFont: titleBoldFont, boldFont: titleBoldFont, italicFont: titleFont, boldItalicFont: titleBoldFont, fixedFont: titleFont, blockQuoteFont: titleFont, underlineLinks: false, message: message._asMessage()))
+                if let additionalAttributes {
+                    for (range, key, value) in additionalAttributes.attributes {
+                        mutableAttributedString.addAttribute(key, value: value, range: range)
+                    }
+                }
+                attributedString = mutableAttributedString
             case let .botDomainAccessGranted(domain):
                 attributedString = NSAttributedString(string: strings.AuthSessions_Message(domain).string, font: titleFont, textColor: primaryTextColor)
+            case let .botAppAccessGranted(appName, type):
+                let text: String
+                if type == .attachMenu {
+                    text = strings.Notification_BotWriteAllowedMenu
+                } else if type == .request {
+                    text = strings.Notification_BotWriteAllowedRequest
+                } else {
+                    text = strings.AuthSessions_MessageApp(appName ?? "").string
+                }
+                attributedString = NSAttributedString(string: text, font: titleFont, textColor: primaryTextColor)
             case let .botSentSecureValues(types):
                 var typesString = ""
                 var hasIdentity = false
@@ -640,10 +705,10 @@ public func universalServiceMessageString(presentationData: (PresentationTheme, 
                         resultTitleString = strings.Notification_VoiceChatInvitationForYou(authorName)
                     } else {
                         attributePeerIds.append((1, peerIds.first))
-                        resultTitleString = strings.Notification_VoiceChatInvitation(authorName, peerDebugDisplayTitles(peerIds, message.peers))
+                        resultTitleString = strings.Notification_VoiceChatInvitation(authorName, peerDisplayTitles(peerIds, message.peers, strings: strings, nameDisplayOrder: nameDisplayOrder))
                     }
                 } else {
-                    resultTitleString = strings.Notification_VoiceChatInvitation(authorName, peerDebugDisplayTitles(peerIds, message.peers))
+                    resultTitleString = strings.Notification_VoiceChatInvitation(authorName, peerDisplayTitles(peerIds, message.peers, strings: strings, nameDisplayOrder: nameDisplayOrder))
                 }
                 
                 attributedString = addAttributesToStringWithRanges(resultTitleString._tuple, body: bodyAttributes, argumentAttributes: peerMentionsAttributes(primaryTextColor: primaryTextColor, peerIds: attributePeerIds))
@@ -655,7 +720,7 @@ public func universalServiceMessageString(presentationData: (PresentationTheme, 
                         attributedString = NSAttributedString(string: strings.Notification_YouDisabledTheme, font: titleFont, textColor: primaryTextColor)
                     } else {
                         let attributePeerIds: [(Int, EnginePeer.Id?)] = [(0, message.author?.id)]
-                        let resultTitleString = strings.Notification_DisabledTheme(authorName)
+                        let resultTitleString = strings.Notification_DisabledTheme(compactAuthorName)
                         attributedString = addAttributesToStringWithRanges(resultTitleString._tuple, body: bodyAttributes, argumentAttributes: peerMentionsAttributes(primaryTextColor: primaryTextColor, peerIds: attributePeerIds))
                     }
                 } else {
@@ -664,30 +729,91 @@ public func universalServiceMessageString(presentationData: (PresentationTheme, 
                     } else if message.author?.id == accountPeerId {
                         attributedString = NSAttributedString(string: strings.Notification_YouChangedTheme(emoji).string, font: titleFont, textColor: primaryTextColor)
                     } else {
-                        let resultTitleString = strings.Notification_ChangedTheme(authorName, emoji)
+                        let resultTitleString = strings.Notification_ChangedTheme(compactAuthorName, emoji)
                         attributedString = addAttributesToStringWithRanges(resultTitleString._tuple, body: bodyAttributes, argumentAttributes: [0: boldAttributes])
                     }
                 }
             case let .webViewData(text):
                 attributedString = NSAttributedString(string: strings.Notification_WebAppSentData(text).string, font: titleFont, textColor: primaryTextColor)
-            case let .giftPremium(currency, amount, _):
-                let price = formatCurrencyAmount(amount, currency: currency)
-                if message.author?.id == accountPeerId {
-                    attributedString = addAttributesToStringWithRanges(strings.Notification_PremiumGift_SentYou(price)._tuple, body: bodyAttributes, argumentAttributes: [0: boldAttributes])
+            case let .giftPremium(currency, amount, _, _, _, _, _):
+                if !forAdditionalServiceMessage {
+                    attributedString = NSAttributedString(string: strings.Notification_Gift, font: titleFont, textColor: primaryTextColor)
                 } else {
-                    var attributes = peerMentionsAttributes(primaryTextColor: primaryTextColor, peerIds: [(0, message.author?.id)])
-                    attributes[1] = boldAttributes
-                    attributedString = addAttributesToStringWithRanges(strings.Notification_PremiumGift_Sent(authorName, price)._tuple, body: bodyAttributes, argumentAttributes: attributes)
+                    let price = formatCurrencyAmount(amount, currency: currency)
+                    if message.author?.id == accountPeerId {
+                        attributedString = addAttributesToStringWithRanges(strings.Notification_PremiumGift_SentYou(price)._tuple, body: bodyAttributes, argumentAttributes: [0: boldAttributes])
+                    } else {
+                        var attributes = peerMentionsAttributes(primaryTextColor: primaryTextColor, peerIds: [(0, message.author?.id)])
+                        attributes[1] = boldAttributes
+                        attributedString = addAttributesToStringWithRanges(strings.Notification_PremiumGift_Sent(compactAuthorName, price)._tuple, body: bodyAttributes, argumentAttributes: attributes)
+                    }
+                }
+            case let .giftStars(currency, amount, count, _, _, _):
+                let _ = count
+                if !forAdditionalServiceMessage {
+                    attributedString = NSAttributedString(string: strings.Notification_Gift, font: titleFont, textColor: primaryTextColor)
+                } else {
+                    let price = formatCurrencyAmount(amount, currency: currency)
+                    if message.author?.id == accountPeerId {
+                        attributedString = addAttributesToStringWithRanges(strings.Notification_StarsGift_SentYou(price)._tuple, body: bodyAttributes, argumentAttributes: [0: boldAttributes])
+                    } else {
+                        var authorName = compactAuthorName
+                        var peerIds: [(Int, EnginePeer.Id?)] = [(0, message.author?.id)]
+                        if message.id.peerId.namespace == Namespaces.Peer.CloudUser && message.id.peerId.id._internalGetInt64Value() == 777000 {
+                            authorName = strings.Notification_StarsGift_UnknownUser
+                            peerIds = []
+                        }
+                        var attributes = peerMentionsAttributes(primaryTextColor: primaryTextColor, peerIds: peerIds)
+                        attributes[1] = boldAttributes
+                        attributedString = addAttributesToStringWithRanges(strings.Notification_StarsGift_Sent(authorName, price)._tuple, body: bodyAttributes, argumentAttributes: attributes)
+                    }
                 }
             case let .topicCreated(title, iconColor, iconFileId):
                 if forForumOverview {
                     let maybeFileId = iconFileId ?? 0
-                    attributedString = addAttributesToStringWithRanges(strings.Notification_OverviewTopicCreated(".", title)._tuple, body: bodyAttributes, argumentAttributes: [0: MarkdownAttributeSet(font: titleFont, textColor: primaryTextColor, additionalAttributes: [ChatTextInputAttributes.customEmoji.rawValue: ChatTextInputTextCustomEmojiAttribute(interactivelySelectedFromPackId: nil, fileId: maybeFileId, file: nil, topicInfo: maybeFileId == 0 ? EngineMessageHistoryThread.Info(title: title, icon: nil, iconColor: iconColor) : nil)])])
+                    attributedString = addAttributesToStringWithRanges(strings.Notification_OverviewTopicCreated(".", title)._tuple, body: bodyAttributes, argumentAttributes: [0: MarkdownAttributeSet(font: titleFont, textColor: primaryTextColor, additionalAttributes: [ChatTextInputAttributes.customEmoji.rawValue: ChatTextInputTextCustomEmojiAttribute(interactivelySelectedFromPackId: nil, fileId: maybeFileId, file: nil, custom: maybeFileId == 0 ? .topic(id: message.threadId ?? 0, info: EngineMessageHistoryThread.Info(title: title, icon: nil, iconColor: iconColor)) : nil)])])
                 } else {
                     attributedString = NSAttributedString(string: strings.Notification_ForumTopicCreated, font: titleFont, textColor: primaryTextColor)
                 }
             case let .topicEdited(components):
-                if let isClosed = components.compactMap({ item -> Bool? in
+                if let isHidden = components.compactMap({ item -> Bool? in
+                    switch item {
+                    case let .isHidden(isHidden):
+                        return isHidden
+                    default:
+                        return nil
+                    }
+                }).first {
+                    if case let .user(user) = message.author {
+                        if forForumOverview {
+                            var title: String = ""
+                            var iconColor: Int32 = 0
+                            var maybeFileId: Int64 = 0
+                            if let info = message.associatedThreadInfo {
+                                iconColor = info.iconColor
+                                title = info.title
+                                maybeFileId = info.icon ?? 0
+                            }
+                            if isHidden {
+                                attributedString = addAttributesToStringWithRanges(strings.Notification_OverviewTopicHidden(EnginePeer.user(user).displayTitle(strings: strings, displayOrder: nameDisplayOrder), ".", title)._tuple, body: bodyAttributes, argumentAttributes: [0: peerMentionAttributes(primaryTextColor: primaryTextColor, peerId: user.id), 1: MarkdownAttributeSet(font: titleFont, textColor: primaryTextColor, additionalAttributes: [ChatTextInputAttributes.customEmoji.rawValue: ChatTextInputTextCustomEmojiAttribute(interactivelySelectedFromPackId: nil, fileId: maybeFileId, file: nil, custom: maybeFileId == 0 ? .topic(id: message.threadId ?? 0, info: EngineMessageHistoryThread.Info(title: title, icon: nil, iconColor: iconColor)) : nil)])])
+                            } else {
+                                attributedString = addAttributesToStringWithRanges(strings.Notification_OverviewTopicUnhidden(EnginePeer.user(user).displayTitle(strings: strings, displayOrder: nameDisplayOrder), ".", title)._tuple, body: bodyAttributes, argumentAttributes: [0: peerMentionAttributes(primaryTextColor: primaryTextColor, peerId: user.id), 1: MarkdownAttributeSet(font: titleFont, textColor: primaryTextColor, additionalAttributes: [ChatTextInputAttributes.customEmoji.rawValue: ChatTextInputTextCustomEmojiAttribute(interactivelySelectedFromPackId: nil, fileId: maybeFileId, file: nil, custom: maybeFileId == 0 ? .topic(id: message.threadId ?? 0, info: EngineMessageHistoryThread.Info(title: title, icon: nil, iconColor: iconColor)) : nil)])])
+                            }
+                        } else {
+                            if isHidden {
+                                attributedString = addAttributesToStringWithRanges(strings.Notification_ForumTopicHiddenAuthor(EnginePeer.user(user).displayTitle(strings: strings, displayOrder: nameDisplayOrder))._tuple, body: bodyAttributes, argumentAttributes: [0: peerMentionAttributes(primaryTextColor: primaryTextColor, peerId: user.id)])
+                            } else {
+                                attributedString = addAttributesToStringWithRanges(strings.Notification_ForumTopicUnhiddenAuthor(EnginePeer.user(user).displayTitle(strings: strings, displayOrder: nameDisplayOrder))._tuple, body: bodyAttributes, argumentAttributes: [0: peerMentionAttributes(primaryTextColor: primaryTextColor, peerId: user.id)])
+                            }
+                        }
+                    } else {
+                        if isHidden {
+                            attributedString = NSAttributedString(string: strings.Notification_ForumTopicHidden, font: titleFont, textColor: primaryTextColor)
+                        } else {
+                            attributedString = NSAttributedString(string: strings.Notification_ForumTopicUnhidden, font: titleFont, textColor: primaryTextColor)
+                        }
+                    }
+                } else if let isClosed = components.compactMap({ item -> Bool? in
                     switch item {
                     case let .isClosed(isClosed):
                         return isClosed
@@ -706,9 +832,9 @@ public func universalServiceMessageString(presentationData: (PresentationTheme, 
                                 maybeFileId = info.icon ?? 0
                             }
                             if isClosed {
-                                attributedString = addAttributesToStringWithRanges(strings.Notification_OverviewTopicClosed(EnginePeer.user(user).displayTitle(strings: strings, displayOrder: nameDisplayOrder), ".", title)._tuple, body: bodyAttributes, argumentAttributes: [0: peerMentionAttributes(primaryTextColor: primaryTextColor, peerId: user.id), 1: MarkdownAttributeSet(font: titleFont, textColor: primaryTextColor, additionalAttributes: [ChatTextInputAttributes.customEmoji.rawValue: ChatTextInputTextCustomEmojiAttribute(interactivelySelectedFromPackId: nil, fileId: maybeFileId, file: nil, topicInfo: maybeFileId == 0 ? EngineMessageHistoryThread.Info(title: title, icon: nil, iconColor: iconColor) : nil)])])
+                                attributedString = addAttributesToStringWithRanges(strings.Notification_OverviewTopicClosed(EnginePeer.user(user).displayTitle(strings: strings, displayOrder: nameDisplayOrder), ".", title)._tuple, body: bodyAttributes, argumentAttributes: [0: peerMentionAttributes(primaryTextColor: primaryTextColor, peerId: user.id), 1: MarkdownAttributeSet(font: titleFont, textColor: primaryTextColor, additionalAttributes: [ChatTextInputAttributes.customEmoji.rawValue: ChatTextInputTextCustomEmojiAttribute(interactivelySelectedFromPackId: nil, fileId: maybeFileId, file: nil, custom: maybeFileId == 0 ? .topic(id: message.threadId ?? 0, info: EngineMessageHistoryThread.Info(title: title, icon: nil, iconColor: iconColor)) : nil)])])
                             } else {
-                                attributedString = addAttributesToStringWithRanges(strings.Notification_OverviewTopicReopened(EnginePeer.user(user).displayTitle(strings: strings, displayOrder: nameDisplayOrder), ".", title)._tuple, body: bodyAttributes, argumentAttributes: [0: peerMentionAttributes(primaryTextColor: primaryTextColor, peerId: user.id), 1: MarkdownAttributeSet(font: titleFont, textColor: primaryTextColor, additionalAttributes: [ChatTextInputAttributes.customEmoji.rawValue: ChatTextInputTextCustomEmojiAttribute(interactivelySelectedFromPackId: nil, fileId: maybeFileId, file: nil, topicInfo: maybeFileId == 0 ? EngineMessageHistoryThread.Info(title: title, icon: nil, iconColor: iconColor) : nil)])])
+                                attributedString = addAttributesToStringWithRanges(strings.Notification_OverviewTopicReopened(EnginePeer.user(user).displayTitle(strings: strings, displayOrder: nameDisplayOrder), ".", title)._tuple, body: bodyAttributes, argumentAttributes: [0: peerMentionAttributes(primaryTextColor: primaryTextColor, peerId: user.id), 1: MarkdownAttributeSet(font: titleFont, textColor: primaryTextColor, additionalAttributes: [ChatTextInputAttributes.customEmoji.rawValue: ChatTextInputTextCustomEmojiAttribute(interactivelySelectedFromPackId: nil, fileId: maybeFileId, file: nil, custom: maybeFileId == 0 ? .topic(id: message.threadId ?? 0, info: EngineMessageHistoryThread.Info(title: title, icon: nil, iconColor: iconColor)) : nil)])])
                             }
                         } else {
                             if isClosed {
@@ -746,7 +872,7 @@ public func universalServiceMessageString(presentationData: (PresentationTheme, 
                         }
                         attributedString = addAttributesToStringWithRanges(strings.Notification_ForumTopicRenamedIconChangedAuthor(EnginePeer.user(user).displayTitle(strings: strings, displayOrder: nameDisplayOrder), ".", title)._tuple, body: bodyAttributes, argumentAttributes: [
                             0: peerMentionAttributes(primaryTextColor: primaryTextColor, peerId: user.id),
-                            1: MarkdownAttributeSet(font: titleFont, textColor: primaryTextColor, additionalAttributes: [ChatTextInputAttributes.customEmoji.rawValue: ChatTextInputTextCustomEmojiAttribute(interactivelySelectedFromPackId: nil, fileId: maybeFileId, file: nil, topicInfo: maybeFileId == 0 ? EngineMessageHistoryThread.Info(title: title, icon: nil, iconColor: iconColor) : nil)])
+                            1: MarkdownAttributeSet(font: titleFont, textColor: primaryTextColor, additionalAttributes: [ChatTextInputAttributes.customEmoji.rawValue: ChatTextInputTextCustomEmojiAttribute(interactivelySelectedFromPackId: nil, fileId: maybeFileId, file: nil, custom: maybeFileId == 0 ? .topic(id: message.threadId ?? 0, info: EngineMessageHistoryThread.Info(title: title, icon: nil, iconColor: iconColor)) : nil)])
                         ])
                     } else {
                         attributedString = NSAttributedString(string: strings.Notification_ForumTopicRenamed(title).string, font: titleFont, textColor: primaryTextColor)
@@ -779,15 +905,227 @@ public func universalServiceMessageString(presentationData: (PresentationTheme, 
                         title = info.title
                     }
                     if case let .user(user) = message.author {
-                        attributedString = addAttributesToStringWithRanges(strings.Notification_ForumTopicIconChangedAuthor(EnginePeer.user(user).displayTitle(strings: strings, displayOrder: nameDisplayOrder), ".")._tuple, body: bodyAttributes, argumentAttributes: [0: peerMentionAttributes(primaryTextColor: primaryTextColor, peerId: user.id), 1: MarkdownAttributeSet(font: titleFont, textColor: primaryTextColor, additionalAttributes: [ChatTextInputAttributes.customEmoji.rawValue: ChatTextInputTextCustomEmojiAttribute(interactivelySelectedFromPackId: nil, fileId: maybeFileId, file: nil, topicInfo: maybeFileId == 0 ? EngineMessageHistoryThread.Info(title: title, icon: nil, iconColor: iconColor) : nil)])])
+                        attributedString = addAttributesToStringWithRanges(strings.Notification_ForumTopicIconChangedAuthor(EnginePeer.user(user).displayTitle(strings: strings, displayOrder: nameDisplayOrder), ".")._tuple, body: bodyAttributes, argumentAttributes: [0: peerMentionAttributes(primaryTextColor: primaryTextColor, peerId: user.id), 1: MarkdownAttributeSet(font: titleFont, textColor: primaryTextColor, additionalAttributes: [ChatTextInputAttributes.customEmoji.rawValue: ChatTextInputTextCustomEmojiAttribute(interactivelySelectedFromPackId: nil, fileId: maybeFileId, file: nil, custom: maybeFileId == 0 ? .topic(id: message.threadId ?? 0, info: EngineMessageHistoryThread.Info(title: title, icon: nil, iconColor: iconColor)) : nil)])])
                     } else {
-                        attributedString = addAttributesToStringWithRanges(strings.Notification_ForumTopicIconChanged(".")._tuple, body: bodyAttributes, argumentAttributes: [0: MarkdownAttributeSet(font: titleFont, textColor: primaryTextColor, additionalAttributes: [ChatTextInputAttributes.customEmoji.rawValue: ChatTextInputTextCustomEmojiAttribute(interactivelySelectedFromPackId: nil, fileId: maybeFileId, file: nil, topicInfo: maybeFileId == 0 ? EngineMessageHistoryThread.Info(title: title, icon: nil, iconColor: iconColor) : nil)])])
+                        attributedString = addAttributesToStringWithRanges(strings.Notification_ForumTopicIconChanged(".")._tuple, body: bodyAttributes, argumentAttributes: [0: MarkdownAttributeSet(font: titleFont, textColor: primaryTextColor, additionalAttributes: [ChatTextInputAttributes.customEmoji.rawValue: ChatTextInputTextCustomEmojiAttribute(interactivelySelectedFromPackId: nil, fileId: maybeFileId, file: nil, custom: maybeFileId == 0 ? .topic(id: message.threadId ?? 0, info: EngineMessageHistoryThread.Info(title: title, icon: nil, iconColor: iconColor)) : nil)])])
+                    }
+                }
+            case let .suggestedProfilePhoto(image):
+                if (image?.videoRepresentations.isEmpty ?? true) {
+                    attributedString = NSAttributedString(string: strings.Notification_SuggestedProfilePhoto, font: titleFont, textColor: primaryTextColor)
+                } else {
+                    attributedString = NSAttributedString(string: strings.Notification_SuggestedProfileVideo, font: titleFont, textColor: primaryTextColor)
+                }
+            case .attachMenuBotAllowed:
+                attributedString = NSAttributedString(string: strings.Notification_BotWriteAllowed, font: titleFont, textColor: primaryTextColor)
+            case let .requestedPeer(_, peerIds):
+                let botName = message.peers[message.id.peerId].flatMap(EnginePeer.init)?.displayTitle(strings: strings, displayOrder: nameDisplayOrder) ?? ""
+                var attributePeerIds: [(Int, EnginePeer.Id?)] = []
+                let resultTitleString: PresentationStrings.FormattedString
+                if peerIds.count == 1 {
+                    attributePeerIds.append((0, peerIds.first))
+                    attributePeerIds.append((1, message.id.peerId))
+                    resultTitleString = strings.Notification_RequestedPeer(peerDisplayTitles(peerIds, message.peers, strings: strings, nameDisplayOrder: nameDisplayOrder), botName)
+                } else {
+                    attributePeerIds.append((1, message.id.peerId))
+                    resultTitleString = strings.Notification_RequestedPeerMultiple(peerDisplayTitles(peerIds, message.peers, strings: strings, nameDisplayOrder: nameDisplayOrder), botName)
+                }
+                attributedString = addAttributesToStringWithRanges(resultTitleString._tuple, body: bodyAttributes, argumentAttributes: peerMentionsAttributes(primaryTextColor: primaryTextColor, peerIds: attributePeerIds))
+            case let .setChatWallpaper(_, forBoth):
+                var isGroup = false
+                let messagePeer = message.peers[message.id.peerId]
+                if let channel = messagePeer as? TelegramChannel, case .group = channel.info {
+                    isGroup = true
+                }
+                if message.author?.id == accountPeerId {
+                    if forBoth {
+                        let peerName = message.peers[message.id.peerId].flatMap(EnginePeer.init)?.compactDisplayTitle ?? ""
+                        let resultTitleString = strings.Notification_YouChangedWallpaperBoth(peerName)
+                        attributedString = addAttributesToStringWithRanges(resultTitleString._tuple, body: bodyAttributes, argumentAttributes: [0: boldAttributes])
+                    } else {
+                        attributedString = NSAttributedString(string: isGroup ? strings.Notification_YouChangedGroupWallpaper : strings.Notification_YouChangedWallpaper, font: titleFont, textColor: primaryTextColor)
+                    }
+                } else {
+                    if message.id.peerId.isGroupOrChannel {
+                        attributedString = NSAttributedString(string: isGroup ? strings.Notification_GroupChangedWallpaper : strings.Notification_ChannelChangedWallpaper, font: titleFont, textColor: primaryTextColor)
+                    } else {
+                        let resultTitleString = strings.Notification_ChangedWallpaper(compactAuthorName)
+                        attributedString = addAttributesToStringWithRanges(resultTitleString._tuple, body: bodyAttributes, argumentAttributes: [0: boldAttributes])
+                    }
+                }
+            case .setSameChatWallpaper:
+                if message.author?.id == accountPeerId {
+                    attributedString = NSAttributedString(string: strings.Notification_YouChangedToSameWallpaper, font: titleFont, textColor: primaryTextColor)
+                } else {
+                    let resultTitleString = strings.Notification_ChangedToSameWallpaper(compactAuthorName)
+                    attributedString = addAttributesToStringWithRanges(resultTitleString._tuple, body: bodyAttributes, argumentAttributes: [0: boldAttributes])
+                }
+            case let .giftCode(_, _, _, boostPeerId, _, currency, amount, _, _, text, entities):
+                if !forAdditionalServiceMessage, let text {
+                    let mutableAttributedString = NSMutableAttributedString(attributedString: stringWithAppliedEntities(text, entities: entities ?? [], baseColor: primaryTextColor, linkColor: primaryTextColor, baseFont: titleFont, linkFont: titleBoldFont, boldFont: titleBoldFont, italicFont: titleFont, boldItalicFont: titleBoldFont, fixedFont: titleFont, blockQuoteFont: titleFont, underlineLinks: false, message: message._asMessage()))
+                    attributedString = mutableAttributedString
+                } else if boostPeerId == nil, let currency, let amount {
+                    if !forAdditionalServiceMessage {
+                        attributedString = NSAttributedString(string: strings.Notification_Gift, font: titleFont, textColor: primaryTextColor)
+                    } else {
+                        let price = formatCurrencyAmount(amount, currency: currency)
+                        if message.author?.id == accountPeerId {
+                            attributedString = addAttributesToStringWithRanges(strings.Notification_PremiumGift_SentYou(price)._tuple, body: bodyAttributes, argumentAttributes: [0: boldAttributes])
+                        } else {
+                            var attributes = peerMentionsAttributes(primaryTextColor: primaryTextColor, peerIds: [(0, message.author?.id)])
+                            attributes[1] = boldAttributes
+                            attributedString = addAttributesToStringWithRanges(strings.Notification_PremiumGift_Sent(compactAuthorName, price)._tuple, body: bodyAttributes, argumentAttributes: attributes)
+                        }
+                    }
+                } else {
+                    attributedString = NSAttributedString(string: strings.Notification_GiftLink, font: titleFont, textColor: primaryTextColor)
+                }
+            case let .giveawayLaunched(stars):
+                var isGroup = false
+                let messagePeer = message.peers[message.id.peerId]
+                if let channel = messagePeer as? TelegramChannel, case .group = channel.info {
+                    isGroup = true
+                }
+                let resultTitleString: PresentationStrings.FormattedString
+                if let stars {
+                    let starsString = strings.Notification_StarsGiveawayStarted_Stars(Int32(stars))
+                    resultTitleString = isGroup ? strings.Notification_StarsGiveawayStartedGroup(compactAuthorName, starsString) : strings.Notification_StarsGiveawayStarted(compactAuthorName, starsString)
+                } else {
+                    resultTitleString = isGroup ? strings.Notification_GiveawayStartedGroup(compactAuthorName) : strings.Notification_GiveawayStarted(compactAuthorName)
+                }
+                attributedString = addAttributesToStringWithRanges(resultTitleString._tuple, body: bodyAttributes, argumentAttributes: [0: boldAttributes])
+            case .joinedChannel:
+                attributedString = NSAttributedString(string: strings.Notification_ChannelJoinedByYou, font: titleBoldFont, textColor: primaryTextColor)
+            case let .giveawayResults(winners, unclaimed, stars):
+                var isGroup = false
+                let messagePeer = message.peers[message.id.peerId]
+                if let channel = messagePeer as? TelegramChannel, case .group = channel.info {
+                    isGroup = true
+                }
+                if winners == 0 {
+                    if stars {
+                        attributedString = parseMarkdownIntoAttributedString(isGroup ? strings.Notification_StarsGiveawayResultsNoWinners_Group : strings.Notification_StarsGiveawayResultsNoWinners, attributes: MarkdownAttributes(body: bodyAttributes, bold: boldAttributes, link: bodyAttributes, linkAttribute: { _ in return nil }))
+                    } else {
+                        attributedString = parseMarkdownIntoAttributedString(isGroup ? strings.Notification_GiveawayResultsNoWinners_Group(unclaimed) : strings.Notification_GiveawayResultsNoWinners(unclaimed), attributes: MarkdownAttributes(body: bodyAttributes, bold: boldAttributes, link: bodyAttributes, linkAttribute: { _ in return nil }))
+                    }
+                } else if unclaimed > 0 {
+                    let winnersString = parseMarkdownIntoAttributedString(strings.Notification_GiveawayResultsMixedWinners(winners), attributes: MarkdownAttributes(body: bodyAttributes, bold: boldAttributes, link: bodyAttributes, linkAttribute: { _ in return nil }))
+                    let unclaimedString = parseMarkdownIntoAttributedString(isGroup ? strings.Notification_GiveawayResultsMixedUnclaimed_Group(unclaimed) : strings.Notification_GiveawayResultsMixedUnclaimed(unclaimed), attributes: MarkdownAttributes(body: bodyAttributes, bold: boldAttributes, link: bodyAttributes, linkAttribute: { _ in return nil }))
+                    let combinedString = NSMutableAttributedString(attributedString: winnersString)
+                    combinedString.append(NSAttributedString(string: "\n"))
+                    combinedString.append(unclaimedString)
+                    attributedString = combinedString
+                } else {
+                    attributedString = parseMarkdownIntoAttributedString(strings.Notification_GiveawayResults(winners), attributes: MarkdownAttributes(body: bodyAttributes, bold: boldAttributes, link: bodyAttributes, linkAttribute: { _ in return nil }))
+                }
+            case let .boostsApplied(boosts):
+                if message.author?.id == accountPeerId {
+                    if boosts == 1 {
+                        attributedString = NSAttributedString(string: strings.Notification_Boost_SingleYou, font: titleFont, textColor: primaryTextColor)
+                    } else {
+                        let boostsString = strings.Notification_Boost_Times(boosts)
+                        attributedString = NSAttributedString(string: strings.Notification_Boost_MultipleYou(boostsString).string, font: titleFont, textColor: primaryTextColor)
+                    }
+                } else {
+                    let peerName = message.author?.compactDisplayTitle ?? ""
+                    if boosts == 1 {
+                        let resultTitleString = strings.Notification_Boost_Single(peerName)
+                        attributedString = addAttributesToStringWithRanges(resultTitleString._tuple, body: bodyAttributes, argumentAttributes: [0: boldAttributes])
+                    } else {
+                        let boostsString = strings.Notification_Boost_Times(boosts)
+                        let resultTitleString = strings.Notification_Boost_Multiple(peerName, boostsString)
+                        attributedString = addAttributesToStringWithRanges(resultTitleString._tuple, body: bodyAttributes, argumentAttributes: [0: boldAttributes])
+                    }
+                }
+            case let .paymentRefunded(peerId, currency, totalAmount, _, _):
+                let patternString = strings.Notification_Refund
+                
+                let mutableString = NSMutableAttributedString()
+                mutableString.append(NSAttributedString(string: patternString, font: titleFont, textColor: primaryTextColor))
+                
+                var range = NSRange(location: NSNotFound, length: 0)
+                range = (mutableString.string as NSString).range(of: "{amount}")
+                if range.location != NSNotFound {
+                    if currency == "XTR" {
+                        let amountAttributedString = NSMutableAttributedString(string: "#\(totalAmount)", font: titleBoldFont, textColor: primaryTextColor)
+                        if let range = amountAttributedString.string.range(of: "#") {
+                            amountAttributedString.addAttribute(ChatTextInputAttributes.customEmoji, value: ChatTextInputTextCustomEmojiAttribute(interactivelySelectedFromPackId: nil, fileId: 0, file: nil, custom: .stars(tinted: true)), range: NSRange(range, in: amountAttributedString.string))
+                            amountAttributedString.addAttribute(.baselineOffset, value: 1.5, range: NSRange(range, in: amountAttributedString.string))
+                        }
+                        mutableString.replaceCharacters(in: range, with: amountAttributedString)
+                    } else {
+                        mutableString.replaceCharacters(in: range, with: NSAttributedString(string: formatCurrencyAmount(totalAmount, currency: currency), font: titleBoldFont, textColor: primaryTextColor))
+                    }
+                }
+                range = (mutableString.string as NSString).range(of: "{name}")
+                if range.location != NSNotFound {
+                    let peerName = message.peers[peerId].flatMap { EnginePeer($0) }?.compactDisplayTitle ?? ""
+                    mutableString.replaceCharacters(in: range, with: NSAttributedString(string: peerName, font: titleBoldFont, textColor: primaryTextColor))
+                    mutableString.addAttribute(NSAttributedString.Key(TelegramTextAttributes.PeerMention), value: TelegramPeerMention(peerId: peerId, mention: ""), range: NSMakeRange(range.location, (peerName as NSString).length))
+                }
+                attributedString = mutableString
+            case .prizeStars:
+                attributedString = NSAttributedString(string: strings.Notification_StarsPrize, font: titleFont, textColor: primaryTextColor)
+            case let .starGift(gift, _, text, entities, _, _, _, _, _, upgradeStars, _, _):
+                if !forAdditionalServiceMessage {
+                    if let text {
+                        let mutableAttributedString = NSMutableAttributedString(attributedString: stringWithAppliedEntities(text, entities: entities ?? [], baseColor: primaryTextColor, linkColor: primaryTextColor, baseFont: titleFont, linkFont: titleBoldFont, boldFont: titleBoldFont, italicFont: titleFont, boldItalicFont: titleBoldFont, fixedFont: titleFont, blockQuoteFont: titleFont, underlineLinks: false, message: message._asMessage()))
+                        attributedString = mutableAttributedString
+                    } else {
+                        attributedString = NSAttributedString(string: strings.Notification_Gift, font: titleFont, textColor: primaryTextColor)
+                    }
+                } else if case let .generic(gift) = gift {
+                    var finalPrice = gift.price
+                    if let upgradeStars {
+                        finalPrice += upgradeStars
+                    }
+                    let starsPrice = strings.Notification_StarsGift_Stars(Int32(finalPrice))
+                    var authorName = compactAuthorName
+                    var peerIds: [(Int, EnginePeer.Id?)] = [(0, message.author?.id)]
+                    if message.id.peerId.namespace == Namespaces.Peer.CloudUser && message.id.peerId.id._internalGetInt64Value() == 777000 {
+                        authorName = strings.Notification_StarsGift_UnknownUser
+                        peerIds = []
+                    }
+                    if message.id.peerId == accountPeerId {
+                        attributedString = addAttributesToStringWithRanges(strings.Notification_StarsGift_Self_Bought(starsPrice)._tuple, body: bodyAttributes, argumentAttributes: [0: boldAttributes])
+                    } else if message.author?.id == accountPeerId {
+                        attributedString = addAttributesToStringWithRanges(strings.Notification_StarsGift_SentYou(starsPrice)._tuple, body: bodyAttributes, argumentAttributes: [0: boldAttributes])
+                    } else {
+                        var attributes = peerMentionsAttributes(primaryTextColor: primaryTextColor, peerIds: peerIds)
+                        attributes[1] = boldAttributes
+                        attributedString = addAttributesToStringWithRanges(strings.Notification_StarsGift_Sent(authorName, starsPrice)._tuple, body: bodyAttributes, argumentAttributes: attributes)
+                    }
+                }
+            case let .starGiftUnique(gift, isUpgrade, _, _, _, _, _):
+                if case let .unique(gift) = gift {
+                    if !forAdditionalServiceMessage {
+                        attributedString = NSAttributedString(string: "\(gift.title) #\(gift.number)", font: titleFont, textColor: primaryTextColor)
+                    } else if let messagePeer = message.peers[message.id.peerId] {
+                        let peerName = EnginePeer(messagePeer).compactDisplayTitle
+                        let peerIds: [(Int, EnginePeer.Id?)] = [(0, messagePeer.id)]
+                        if isUpgrade {
+                            if message.id.peerId == accountPeerId {
+                                attributedString = NSAttributedString(string: strings.Notification_StarsGift_UpgradeSelf, font: titleFont, textColor: primaryTextColor)
+                            } else if message.author?.id == accountPeerId {
+                                let attributes = peerMentionsAttributes(primaryTextColor: primaryTextColor, peerIds: peerIds)
+                                attributedString = addAttributesToStringWithRanges(strings.Notification_StarsGift_UpgradeYou(peerName)._tuple, body: bodyAttributes, argumentAttributes: attributes)
+                            } else {
+                                let attributes = peerMentionsAttributes(primaryTextColor: primaryTextColor, peerIds: peerIds)
+                                attributedString = addAttributesToStringWithRanges(strings.Notification_StarsGift_Upgrade(peerName)._tuple, body: bodyAttributes, argumentAttributes: attributes)
+                            }
+                        } else {
+                            if message.author?.id == accountPeerId {
+                                attributedString = NSAttributedString(string: strings.Notification_StarsGift_TransferYou, font: titleFont, textColor: primaryTextColor)
+                            } else {
+                                let attributes = peerMentionsAttributes(primaryTextColor: primaryTextColor, peerIds: peerIds)
+                                attributedString = addAttributesToStringWithRanges(strings.Notification_StarsGift_Transfer(peerName)._tuple, body: bodyAttributes, argumentAttributes: attributes)
+                            }
+                        }
                     }
                 }
             case .unknown:
                 attributedString = nil
             }
-            
             break
         } else if let expiredMedia = media as? TelegramMediaExpiredContent {
             switch expiredMedia.data {
@@ -795,7 +1133,21 @@ public func universalServiceMessageString(presentationData: (PresentationTheme, 
                 attributedString = NSAttributedString(string: strings.Message_ImageExpired, font: titleFont, textColor: primaryTextColor)
             case .file:
                 attributedString = NSAttributedString(string: strings.Message_VideoExpired, font: titleFont, textColor: primaryTextColor)
+            case .videoMessage:
+                attributedString = NSAttributedString(string: strings.Message_VideoMessageExpired, font: titleFont, textColor: primaryTextColor)
+            case .voiceMessage:
+                attributedString = NSAttributedString(string: strings.Message_VoiceMessageExpired, font: titleFont, textColor: primaryTextColor)
             }
+        } else if let _ = media as? TelegramMediaStory {
+            let compactPeerName = message.peers[message.id.peerId].flatMap(EnginePeer.init)?.compactDisplayTitle ?? ""
+            
+            let resultTitleString: PresentationStrings.FormattedString
+            if message.flags.contains(.Incoming) {
+                resultTitleString = PresentationStrings.FormattedString(string: strings.Conversation_StoryExpiredMentionTextIncoming, ranges: [])
+            } else {
+                resultTitleString = strings.Conversation_StoryExpiredMentionTextOutgoing(compactPeerName)
+            }
+            attributedString = addAttributesToStringWithRanges(resultTitleString._tuple, body: bodyAttributes, argumentAttributes: [0: boldAttributes])
         }
     }
     

@@ -71,7 +71,7 @@ func _internal_checkOwnershipTranfserAvailability(postbox: Postbox, network: Net
     }
 }
 
-func _internal_updateChannelOwnership(account: Account, accountStateManager: AccountStateManager, channelId: PeerId, memberId: PeerId, password: String) -> Signal<[(ChannelParticipant?, RenderedChannelParticipant)], ChannelOwnershipTransferError> {
+func _internal_updateChannelOwnership(account: Account, channelId: PeerId, memberId: PeerId, password: String) -> Signal<[(ChannelParticipant?, RenderedChannelParticipant)], ChannelOwnershipTransferError> {
     guard !password.isEmpty else {
         return .fail(.invalidPassword)
     }
@@ -86,7 +86,7 @@ func _internal_updateChannelOwnership(account: Account, accountStateManager: Acc
                 let flags: TelegramChatAdminRightsFlags = TelegramChatAdminRightsFlags.peerSpecific(peer: .channel(channel))
                     
                 let updatedParticipant = ChannelParticipant.creator(id: user.id, adminInfo: nil, rank: currentParticipant?.rank)
-                let updatedPreviousCreator = ChannelParticipant.member(id: accountUser.id, invitedAt: Int32(Date().timeIntervalSince1970), adminInfo: ChannelParticipantAdminInfo(rights: TelegramChatAdminRights(rights: flags), promotedBy: accountUser.id, canBeEditedByAccountPeer: false), banInfo: nil, rank: currentCreator?.rank)
+                let updatedPreviousCreator = ChannelParticipant.member(id: accountUser.id, invitedAt: Int32(Date().timeIntervalSince1970), adminInfo: ChannelParticipantAdminInfo(rights: TelegramChatAdminRights(rights: flags), promotedBy: accountUser.id, canBeEditedByAccountPeer: false), banInfo: nil, rank: currentCreator?.rank, subscriptionUntilDate: nil)
                 
                 let checkPassword = _internal_twoStepAuthData(account.network)
                 |> mapError { error -> ChannelOwnershipTransferError in
@@ -141,7 +141,7 @@ func _internal_updateChannelOwnership(account: Account, accountStateManager: Acc
                         return .generic
                     }
                     |> mapToSignal { updates -> Signal<[(ChannelParticipant?, RenderedChannelParticipant)], ChannelOwnershipTransferError> in
-                        accountStateManager.addUpdates(updates)
+                        account.stateManager.addUpdates(updates)
                         
                         return account.postbox.transaction { transaction -> [(ChannelParticipant?, RenderedChannelParticipant)] in
                             transaction.updatePeerCachedData(peerIds: Set([channelId]), update: { _, cachedData -> CachedPeerData? in
@@ -152,7 +152,7 @@ func _internal_updateChannelOwnership(account: Account, accountStateManager: Acc
                                         switch currentParticipant {
                                             case .creator:
                                                 wasAdmin = true
-                                            case let .member(_, _, adminInfo, _, _):
+                                            case let .member(_, _, adminInfo, _, _, _):
                                                 if let _ = adminInfo {
                                                     wasAdmin = true
                                                 }

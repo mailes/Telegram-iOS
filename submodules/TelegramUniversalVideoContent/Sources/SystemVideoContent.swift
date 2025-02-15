@@ -14,28 +14,30 @@ import RangeSet
 
 public final class SystemVideoContent: UniversalVideoContent {
     public let id: AnyHashable
+    let userLocation: MediaResourceUserLocation
     let url: String
     let imageReference: ImageMediaReference
     public let dimensions: CGSize
-    public let duration: Int32
+    public let duration: Double
     
-    public init(url: String, imageReference: ImageMediaReference, dimensions: CGSize, duration: Int32) {
+    public init(userLocation: MediaResourceUserLocation, url: String, imageReference: ImageMediaReference, dimensions: CGSize, duration: Double) {
         self.id = AnyHashable(url)
         self.url = url
+        self.userLocation = userLocation
         self.imageReference = imageReference
         self.dimensions = dimensions
         self.duration = duration
     }
     
-    public func makeContentNode(postbox: Postbox, audioSession: ManagedAudioSession) -> UniversalVideoContentNode & ASDisplayNode {
-        return SystemVideoContentNode(postbox: postbox, audioSessionManager: audioSession, url: self.url, imageReference: self.imageReference, intrinsicDimensions: self.dimensions, approximateDuration: self.duration)
+    public func makeContentNode(context: AccountContext, postbox: Postbox, audioSession: ManagedAudioSession) -> UniversalVideoContentNode & ASDisplayNode {
+        return SystemVideoContentNode(postbox: postbox, audioSessionManager: audioSession, userLocation: self.userLocation, url: self.url, imageReference: self.imageReference, intrinsicDimensions: self.dimensions, approximateDuration: self.duration)
     }
 }
 
 private final class SystemVideoContentNode: ASDisplayNode, UniversalVideoContentNode {
     private let url: String
     private let intrinsicDimensions: CGSize
-    private let approximateDuration: Int32
+    private let approximateDuration: Double
     
     private let audioSessionManager: ManagedAudioSession
     private let audioSessionDisposable = MetaDisposable()
@@ -54,6 +56,10 @@ private final class SystemVideoContentNode: ASDisplayNode, UniversalVideoContent
     private let _bufferingStatus = Promise<(RangeSet<Int64>, Int64)?>()
     var bufferingStatus: Signal<(RangeSet<Int64>, Int64)?, NoError> {
         return self._bufferingStatus.get()
+    }
+    
+    var isNativePictureInPictureActive: Signal<Bool, NoError> {
+        return .single(false)
     }
     
     private let _ready = Promise<Void>()
@@ -81,7 +87,7 @@ private final class SystemVideoContentNode: ASDisplayNode, UniversalVideoContent
     
     private var seekId: Int = 0
     
-    init(postbox: Postbox, audioSessionManager: ManagedAudioSession, url: String, imageReference: ImageMediaReference, intrinsicDimensions: CGSize, approximateDuration: Int32) {
+    init(postbox: Postbox, audioSessionManager: ManagedAudioSession, userLocation: MediaResourceUserLocation, url: String, imageReference: ImageMediaReference, intrinsicDimensions: CGSize, approximateDuration: Double) {
         self.audioSessionManager = audioSessionManager
         
         self.url = url
@@ -104,7 +110,7 @@ private final class SystemVideoContentNode: ASDisplayNode, UniversalVideoContent
         
         super.init()
         
-        self.imageNode.setSignal(chatMessagePhoto(postbox: postbox, photoReference: imageReference))
+        self.imageNode.setSignal(chatMessagePhoto(postbox: postbox, userLocation: userLocation, photoReference: imageReference))
         
         self.addSubnode(self.imageNode)
         self.addSubnode(self.playerNode)
@@ -162,7 +168,7 @@ private final class SystemVideoContentNode: ASDisplayNode, UniversalVideoContent
         if let currentItem = self.player.currentItem {
             duration = CMTimeGetSeconds(currentItem.duration)
         } else {
-            duration = Double(self.approximateDuration)
+            duration = self.approximateDuration
         }
         
         if keyPath == "rate" {
@@ -205,7 +211,7 @@ private final class SystemVideoContentNode: ASDisplayNode, UniversalVideoContent
         }
     }
     
-    func updateLayout(size: CGSize, transition: ContainedViewLayoutTransition) {
+    func updateLayout(size: CGSize, actualSize: CGSize, transition: ContainedViewLayoutTransition) {
         transition.updatePosition(node: self.playerNode, position: CGPoint(x: size.width / 2.0, y: size.height / 2.0))
         transition.updateTransformScale(node: self.playerNode, scale: size.width / self.intrinsicDimensions.width)
         
@@ -219,10 +225,10 @@ private final class SystemVideoContentNode: ASDisplayNode, UniversalVideoContent
     func play() {
         assert(Queue.mainQueue().isCurrent())
         if !self.initializedStatus {
-            self._status.set(MediaPlayerStatus(generationTimestamp: 0.0, duration: Double(self.approximateDuration), dimensions: CGSize(), timestamp: 0.0, baseRate: 1.0, seekId: self.seekId, status: .buffering(initial: true, whilePlaying: true, progress: 0.0, display: true), soundEnabled: true))
+            self._status.set(MediaPlayerStatus(generationTimestamp: 0.0, duration: self.approximateDuration, dimensions: CGSize(), timestamp: 0.0, baseRate: 1.0, seekId: self.seekId, status: .buffering(initial: true, whilePlaying: true, progress: 0.0, display: true), soundEnabled: true))
         }
         if !self.hasAudioSession {
-            self.audioSessionDisposable.set(self.audioSessionManager.push(audioSessionType: .play, activate: { [weak self] _ in
+            self.audioSessionDisposable.set(self.audioSessionManager.push(audioSessionType: .play(mixWithOthers: false), activate: { [weak self] _ in
                 self?.hasAudioSession = true
                 self?.player.play()
             }, deactivate: { [weak self] _ in
@@ -238,7 +244,7 @@ private final class SystemVideoContentNode: ASDisplayNode, UniversalVideoContent
     func pause() {
         assert(Queue.mainQueue().isCurrent())
         if !self.initializedStatus {
-            self._status.set(MediaPlayerStatus(generationTimestamp: 0.0, duration: Double(self.approximateDuration), dimensions: CGSize(), timestamp: 0.0, baseRate: 1.0, seekId: self.seekId, status: .paused, soundEnabled: true))
+            self._status.set(MediaPlayerStatus(generationTimestamp: 0.0, duration: self.approximateDuration, dimensions: CGSize(), timestamp: 0.0, baseRate: 1.0, seekId: self.seekId, status: .paused, soundEnabled: true))
         }
         self.player.pause()
     }
@@ -265,6 +271,12 @@ private final class SystemVideoContentNode: ASDisplayNode, UniversalVideoContent
     func playOnceWithSound(playAndRecord: Bool, seek: MediaPlayerSeek, actionAtEnd: MediaPlayerPlayOnceWithSoundActionAtEnd) {
     }
     
+    func setSoundMuted(soundMuted: Bool) {
+    }
+    
+    func continueWithOverridingAmbientMode(isAmbient: Bool) {
+    }
+    
     func setForceAudioToSpeaker(_ forceAudioToSpeaker: Bool) {
     }
     
@@ -275,6 +287,17 @@ private final class SystemVideoContentNode: ASDisplayNode, UniversalVideoContent
     }
     
     func setBaseRate(_ baseRate: Double) {
+    }
+    
+    func setVideoQuality(_ videoQuality: UniversalVideoContentVideoQuality) {
+    }
+    
+    func videoQualityState() -> (current: Int, preferred: UniversalVideoContentVideoQuality, available: [Int])? {
+        return nil
+    }
+    
+    func videoQualityStateSignal() -> Signal<(current: Int, preferred: UniversalVideoContentVideoQuality, available: [Int])?, NoError> {
+        return .single(nil)
     }
     
     func addPlaybackCompleted(_ f: @escaping () -> Void) -> Int {
@@ -292,6 +315,16 @@ private final class SystemVideoContentNode: ASDisplayNode, UniversalVideoContent
     }
 
     func setCanPlaybackWithoutHierarchy(_ canPlaybackWithoutHierarchy: Bool) {
+    }
+    
+    func enterNativePictureInPicture() -> Bool {
+        return false
+    }
+    
+    func exitNativePictureInPicture() {
+    }
+    
+    func setNativePictureInPictureIsActive(_ value: Bool) {
     }
 }
 

@@ -31,7 +31,7 @@ func _internal_inactiveChannelList(network: Network) -> Signal<[InactiveChannel]
             var participantsCounts: [PeerId: Int32] = [:]
             for chat in chats {
                 switch chat {
-                case let .channel(_, _, _, _, _, _, _, _, _, _, _, _, participantsCountValue, _):
+                case let .channel(_, _, _, _, _, _, _, _, _, _, _, _, participantsCountValue, _, _, _, _, _, _, _, _):
                     if let participantsCountValue = participantsCountValue {
                         participantsCounts[chat.peerId] = participantsCountValue
                     }
@@ -41,7 +41,7 @@ func _internal_inactiveChannelList(network: Network) -> Signal<[InactiveChannel]
             }
             var inactive: [InactiveChannel] = []
             for (i, channel) in channels.enumerated() {
-                inactive.append(InactiveChannel(peer: channel, lastActivityDate: dates[i], participantsCount: participantsCounts[channel.id]))
+                inactive.append(InactiveChannel(peer: channel, lastActivityDate: i < dates.count ? dates[i] : 0, participantsCount: participantsCounts[channel.id]))
             }
             return inactive
         }

@@ -16,7 +16,7 @@ import UIKit
 private let milionsScale = "M"
 private let thousandsScale = "K"
 
-class ScalesNumberFormatter: NumberFormatter {
+class ScalesNumberFormatter: NumberFormatter, @unchecked Sendable {
     override func string(from number: NSNumber) -> String? {
         let value = number.doubleValue
         let pow = log10(value)
@@ -35,3 +35,30 @@ class ScalesNumberFormatter: NumberFormatter {
         }
     }
 }
+
+class TonNumberFormatter: NumberFormatter, @unchecked Sendable {
+    override func string(from number: NSNumber) -> String? {
+        var balanceText = "\(number.intValue)"
+        let decimalSeparator = self.decimalSeparator ?? "."
+        while balanceText.count < 10 {
+            balanceText.insert("0", at: balanceText.startIndex)
+        }
+        balanceText.insert(contentsOf: decimalSeparator, at: balanceText.index(balanceText.endIndex, offsetBy: -9))
+        while true {
+            if balanceText.hasSuffix("0") {
+                if balanceText.hasSuffix("\(decimalSeparator)0") {
+                    balanceText.removeLast()
+                    balanceText.removeLast()
+                    break
+                } else {
+                    balanceText.removeLast()
+                }
+            } else {
+                break
+            }
+        }
+        return balanceText
+    }
+}
+
+

@@ -38,6 +38,10 @@ swift_library(
         "//submodules/InvisibleInkDustNode:InvisibleInkDustNode",
         "//submodules/AuthorizationUtils:AuthorizationUtils",
         "//submodules/ManagedAnimationNode:ManagedAnimationNode",
+        "//submodules/AlertUI:AlertUI",
+        "//submodules/TelegramUI/Components/TextNodeWithEntities:TextNodeWithEntities",
+        "//submodules/MoreButtonNode:MoreButtonNode",
+        "//submodules/ContextUI:ContextUI",
     ],
     visibility = [
         "//visibility:public",

@@ -60,6 +60,7 @@ public enum ItemListControllerTitle: Equatable {
     case text(String)
     case textWithSubtitle(String, String)
     case sectionControl([String], Int)
+    case textWithTabs(String, [String], Int)
 }
 
 public final class ItemListControllerTabBarItem: Equatable {
@@ -105,6 +106,10 @@ public struct ItemListControllerState {
 }
 
 open class ItemListController: ViewController, KeyShortcutResponder, PresentableController {
+    var controllerNode: ItemListControllerNode {
+        return (self.displayNode as! ItemListControllerNode)
+    }
+    
     private let state: Signal<(ItemListControllerState, (ItemListNodeState, Any)), NoError>
     
     private var leftNavigationButtonTitleAndStyle: (ItemListNavigationButtonContent, ItemListNavigationButtonStyle)?
@@ -113,6 +118,7 @@ open class ItemListController: ViewController, KeyShortcutResponder, Presentable
     private var tabBarItemInfo: ItemListControllerTabBarItem?
     private var navigationButtonActions: (left: (() -> Void)?, right: (() -> Void)?, secondaryRight: (() -> Void)?) = (nil, nil, nil)
     private var segmentedTitleView: ItemListControllerSegmentedTitleView?
+    private var tabsNavigationContentNode: ItemListControllerTabsContentNode?
     
     private var presentationData: ItemListPresentationData
     
@@ -137,7 +143,7 @@ open class ItemListController: ViewController, KeyShortcutResponder, Presentable
     public var experimentalSnapScrollToItem: Bool = false {
         didSet {
             if self.isNodeLoaded {
-                (self.displayNode as! ItemListControllerNode).listNode.experimentalSnapScrollToItem = self.experimentalSnapScrollToItem
+                self.controllerNode.listNode.experimentalSnapScrollToItem = self.experimentalSnapScrollToItem
             }
         }
     }
@@ -145,7 +151,7 @@ open class ItemListController: ViewController, KeyShortcutResponder, Presentable
     public var enableInteractiveDismiss = false {
         didSet {
             if self.isNodeLoaded {
-                (self.displayNode as! ItemListControllerNode).enableInteractiveDismiss = self.enableInteractiveDismiss
+                self.controllerNode.enableInteractiveDismiss = self.enableInteractiveDismiss
             }
         }
     }
@@ -153,7 +159,7 @@ open class ItemListController: ViewController, KeyShortcutResponder, Presentable
     public var alwaysSynchronous = false {
         didSet {
             if self.isNodeLoaded {
-                (self.displayNode as! ItemListControllerNode).alwaysSynchronous = self.alwaysSynchronous
+                self.controllerNode.alwaysSynchronous = self.alwaysSynchronous
             }
         }
     }
@@ -161,7 +167,7 @@ open class ItemListController: ViewController, KeyShortcutResponder, Presentable
     public var visibleEntriesUpdated: ((ItemListNodeVisibleEntries) -> Void)? {
         didSet {
             if self.isNodeLoaded {
-                (self.displayNode as! ItemListControllerNode).visibleEntriesUpdated = self.visibleEntriesUpdated
+                self.controllerNode.visibleEntriesUpdated = self.visibleEntriesUpdated
             }
         }
     }
@@ -169,14 +175,14 @@ open class ItemListController: ViewController, KeyShortcutResponder, Presentable
     public var beganInteractiveDragging: (() -> Void)? {
         didSet {
             if self.isNodeLoaded {
-                (self.displayNode as! ItemListControllerNode).beganInteractiveDragging = self.beganInteractiveDragging
+                self.controllerNode.beganInteractiveDragging = self.beganInteractiveDragging
             }
         }
     }
     
     public var visibleBottomContentOffset: ListViewVisibleContentOffset {
         if self.isNodeLoaded {
-            return (self.displayNode as! ItemListControllerNode).listNode.visibleBottomContentOffset()
+            return self.controllerNode.listNode.visibleBottomContentOffset()
         } else {
             return .unknown
         }
@@ -184,7 +190,7 @@ open class ItemListController: ViewController, KeyShortcutResponder, Presentable
     public var visibleBottomContentOffsetChanged: ((ListViewVisibleContentOffset) -> Void)? {
         didSet {
             if self.isNodeLoaded {
-                (self.displayNode as! ItemListControllerNode).visibleBottomContentOffsetChanged = self.visibleBottomContentOffsetChanged
+                self.controllerNode.visibleBottomContentOffsetChanged = self.visibleBottomContentOffsetChanged
             }
         }
     }
@@ -192,7 +198,7 @@ open class ItemListController: ViewController, KeyShortcutResponder, Presentable
     public var contentOffsetChanged: ((ListViewVisibleContentOffset, Bool) -> Void)? {
         didSet {
             if self.isNodeLoaded {
-                (self.displayNode as! ItemListControllerNode).contentOffsetChanged = self.contentOffsetChanged
+                self.controllerNode.contentOffsetChanged = self.contentOffsetChanged
             }
         }
     }
@@ -200,7 +206,7 @@ open class ItemListController: ViewController, KeyShortcutResponder, Presentable
     public var contentScrollingEnded: ((ListView) -> Bool)? {
         didSet {
             if self.isNodeLoaded {
-                (self.displayNode as! ItemListControllerNode).contentScrollingEnded = self.contentScrollingEnded
+                self.controllerNode.contentScrollingEnded = self.contentScrollingEnded
             }
         }
     }
@@ -208,7 +214,7 @@ open class ItemListController: ViewController, KeyShortcutResponder, Presentable
     public var searchActivated: ((Bool) -> Void)? {
         didSet {
             if self.isNodeLoaded {
-                (self.displayNode as! ItemListControllerNode).searchActivated = self.searchActivated
+                self.controllerNode.searchActivated = self.searchActivated
             }
         }
     }
@@ -216,7 +222,7 @@ open class ItemListController: ViewController, KeyShortcutResponder, Presentable
     public var didScrollWithOffset: ((CGFloat, ContainedViewLayoutTransition, ListViewItemNode?, Bool) -> Void)? {
         didSet {
             if self.isNodeLoaded {
-                (self.displayNode as! ItemListControllerNode).listNode.didScrollWithOffset = self.didScrollWithOffset
+                self.controllerNode.listNode.didScrollWithOffset = self.didScrollWithOffset
             }
         }
     }
@@ -231,7 +237,7 @@ open class ItemListController: ViewController, KeyShortcutResponder, Presentable
     private var reorderEntry: ((Int, Int, [ItemListNodeAnyEntry]) -> Signal<Bool, NoError>)? {
         didSet {
             if self.isNodeLoaded {
-                (self.displayNode as! ItemListControllerNode).reorderEntry = self.reorderEntry
+                self.controllerNode.reorderEntry = self.reorderEntry
             }
         }
     }
@@ -244,13 +250,20 @@ open class ItemListController: ViewController, KeyShortcutResponder, Presentable
     private var reorderCompleted: (([ItemListNodeAnyEntry]) -> Void)? {
         didSet {
             if self.isNodeLoaded {
-                (self.displayNode as! ItemListControllerNode).reorderCompleted = self.reorderCompleted
+                self.controllerNode.reorderCompleted = self.reorderCompleted
             }
         }
     }
     
     public var willDisappear: ((Bool) -> Void)?
     public var didDisappear: ((Bool) -> Void)?
+    public var afterTransactionCompleted: (() -> Void)? {
+        didSet {
+            if self.isNodeLoaded {
+                self.controllerNode.afterTransactionCompleted = self.afterTransactionCompleted
+            }
+        }
+    }
     
     public init<ItemGenerationArguments>(presentationData: ItemListPresentationData, updatedPresentationData: Signal<ItemListPresentationData, NoError>, state: Signal<(ItemListControllerState, (ItemListNodeState, ItemGenerationArguments)), NoError>, tabBarItem: Signal<ItemListControllerTabBarItem, NoError>?) {
         self.state = state
@@ -264,6 +277,7 @@ open class ItemListController: ViewController, KeyShortcutResponder, Presentable
         
         self.isOpaqueWhenInOverlay = true
         self.blocksBackgroundWhenInOverlay = true
+        self.automaticallyControlPresentationContextLayout = false
         
         self.statusBar.statusBarStyle = presentationData.theme.rootController.statusBarStyle.style
         
@@ -310,10 +324,18 @@ open class ItemListController: ViewController, KeyShortcutResponder, Presentable
                                 strongSelf.title = text
                                 strongSelf.navigationItem.titleView = nil
                                 strongSelf.segmentedTitleView = nil
+                                strongSelf.navigationBar?.setContentNode(nil, animated: false)
+                                if strongSelf.isNodeLoaded {
+                                    strongSelf.controllerNode.panRecognizer?.isEnabled = false
+                                }
                             case let .textWithSubtitle(title, subtitle):
                                 strongSelf.title = ""
                                 strongSelf.navigationItem.titleView = ItemListTextWithSubtitleTitleView(theme: controllerState.presentationData.theme, title: title, subtitle: subtitle)
                                 strongSelf.segmentedTitleView = nil
+                                strongSelf.navigationBar?.setContentNode(nil, animated: false)
+                                if strongSelf.isNodeLoaded {
+                                    strongSelf.controllerNode.panRecognizer?.isEnabled = false
+                                }
                             case let .sectionControl(sections, index):
                                 strongSelf.title = ""
                                 if let segmentedTitleView = strongSelf.segmentedTitleView, segmentedTitleView.segments == sections {
@@ -322,11 +344,50 @@ open class ItemListController: ViewController, KeyShortcutResponder, Presentable
                                     let segmentedTitleView = ItemListControllerSegmentedTitleView(theme: controllerState.presentationData.theme, segments: sections, selectedIndex: index)
                                     strongSelf.segmentedTitleView = segmentedTitleView
                                     strongSelf.navigationItem.titleView = strongSelf.segmentedTitleView
-                                    segmentedTitleView.indexUpdated = { index in
+                                    segmentedTitleView.indexUpdated = { [weak self] index in
                                         if let strongSelf = self {
                                             strongSelf.titleControlValueChanged?(index)
                                         }
                                     }
+                                }
+                                strongSelf.navigationBar?.setContentNode(nil, animated: false)
+                                if strongSelf.isNodeLoaded {
+                                    strongSelf.controllerNode.panRecognizer?.isEnabled = false
+                                }
+                            case let .textWithTabs(title, sections, index):
+                                strongSelf.title = title
+                                if let tabsNavigationContentNode = strongSelf.tabsNavigationContentNode, tabsNavigationContentNode.segments == sections {
+                                    tabsNavigationContentNode.index = index
+                                } else {
+                                    let tabsNavigationContentNode = ItemListControllerTabsContentNode(theme: controllerState.presentationData.theme, segments: sections, selectedIndex: index)
+                                    strongSelf.tabsNavigationContentNode = tabsNavigationContentNode
+                                    strongSelf.navigationBar?.setContentNode(tabsNavigationContentNode, animated: false)
+                                    tabsNavigationContentNode.indexUpdated = { [weak self] index in
+                                        if let strongSelf = self {
+                                            strongSelf.titleControlValueChanged?(index)
+                                        }
+                                    }
+                                    if let validLayout = strongSelf.validLayout {
+                                        strongSelf.updateNavigationBarLayout(validLayout, transition: .immediate)
+                                    }
+                                    strongSelf.navigationBar?.updateBackgroundAlpha(1.0, transition: .immediate)
+                                }
+                                if strongSelf.isNodeLoaded {
+                                    strongSelf.controllerNode.panTransitionFractionChanged = { [weak self] transitionFraction in
+                                        if let strongSelf = self {
+                                            strongSelf.tabsNavigationContentNode?.transitionFraction = transitionFraction
+                                        }
+                                    }
+                                    strongSelf.controllerNode.panGestureAllowedDirections = {
+                                        if index == 0 {
+                                            return [.leftCenter]
+                                        } else if index == sections.count - 1 {
+                                            return [.rightCenter]
+                                        } else {
+                                            return [.leftCenter, .rightCenter]
+                                        }
+                                    }
+                                    strongSelf.controllerNode.panRecognizer?.isEnabled = true
                                 }
                         }
                     }
@@ -485,6 +546,7 @@ open class ItemListController: ViewController, KeyShortcutResponder, Presentable
         displayNode.searchActivated = self.searchActivated
         displayNode.reorderEntry = self.reorderEntry
         displayNode.reorderCompleted = self.reorderCompleted
+        displayNode.afterTransactionCompleted = self.afterTransactionCompleted
         displayNode.listNode.experimentalSnapScrollToItem = self.experimentalSnapScrollToItem
         displayNode.listNode.didScrollWithOffset = self.didScrollWithOffset
         displayNode.requestLayout = { [weak self] transition in
@@ -492,7 +554,7 @@ open class ItemListController: ViewController, KeyShortcutResponder, Presentable
         }
         self.displayNode = displayNode
         super.displayNodeDidLoad()
-        self._ready.set((self.displayNode as! ItemListControllerNode).ready)
+        self._ready.set(self.controllerNode.ready)
     }
     
     override open func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
@@ -500,7 +562,7 @@ open class ItemListController: ViewController, KeyShortcutResponder, Presentable
         
         self.validLayout = layout
         
-        (self.displayNode as! ItemListControllerNode).containerLayoutUpdated(layout, navigationBarHeight: self.cleanNavigationHeight, transition: transition, additionalInsets: self.additionalInsets)
+        self.controllerNode.containerLayoutUpdated(layout, navigationBarHeight: self.cleanNavigationHeight, transition: transition, additionalInsets: self.additionalInsets)
     }
 
     @objc func leftNavigationButtonPressed() {
@@ -522,12 +584,12 @@ open class ItemListController: ViewController, KeyShortcutResponder, Presentable
     }
     
     public func viewDidAppear(completion: @escaping () -> Void) {
-        (self.displayNode as! ItemListControllerNode).listNode.preloadPages = true
+        self.controllerNode.listNode.preloadPages = true
         
         if let presentationArguments = self.presentationArguments as? ViewControllerPresentationArguments, !self.didPlayPresentationAnimation {
             self.didPlayPresentationAnimation = true
             if case .modalSheet = presentationArguments.presentationAnimation {
-                (self.displayNode as! ItemListControllerNode).animateIn(completion: {
+                self.controllerNode.animateIn(completion: {
                     presentationArguments.completion?()
                     completion()
                 })
@@ -557,12 +619,12 @@ open class ItemListController: ViewController, KeyShortcutResponder, Presentable
     }
     
     public var listInsets: UIEdgeInsets {
-        return (self.displayNode as! ItemListControllerNode).listNode.insets
+        return self.controllerNode.listNode.insets
     }
     
     public func frameForItemNode(_ predicate: (ListViewItemNode) -> Bool) -> CGRect? {
         var result: CGRect?
-        (self.displayNode as! ItemListControllerNode).listNode.forEachItemNode { itemNode in
+        self.controllerNode.listNode.forEachItemNode { itemNode in
             if let itemNode = itemNode as? ListViewItemNode {
                 if predicate(itemNode) {
                     result = itemNode.convert(itemNode.bounds, to: self.displayNode)
@@ -573,23 +635,23 @@ open class ItemListController: ViewController, KeyShortcutResponder, Presentable
     }
     
     public func forEachItemNode(_ f: (ListViewItemNode) -> Void) {
-        (self.displayNode as! ItemListControllerNode).listNode.forEachItemNode { itemNode in
+        self.controllerNode.listNode.forEachItemNode { itemNode in
             if let itemNode = itemNode as? ListViewItemNode {
                 f(itemNode)
             }
         }
     }
     
-    public func ensureItemNodeVisible(_ itemNode: ListViewItemNode, animated: Bool = true, curve: ListViewAnimationCurve = .Default(duration: 0.25)) {
-        (self.displayNode as! ItemListControllerNode).listNode.ensureItemNodeVisible(itemNode, animated: animated, curve: curve)
+    public func ensureItemNodeVisible(_ itemNode: ListViewItemNode, animated: Bool = true, overflow: CGFloat = 0.0, atTop: Bool = false, curve: ListViewAnimationCurve = .Default(duration: 0.25)) {
+        self.controllerNode.listNode.ensureItemNodeVisible(itemNode, animated: animated, overflow: overflow, atTop: atTop, curve: curve)
     }
     
     public func afterLayout(_ f: @escaping () -> Void) {
-        (self.displayNode as! ItemListControllerNode).afterLayout(f)
+        self.controllerNode.afterLayout(f)
     }
         
     public func clearItemNodesHighlight(animated: Bool = false) {
-        (self.displayNode as! ItemListControllerNode).listNode.clearHighlightAnimated(animated)
+        self.controllerNode.listNode.clearHighlightAnimated(animated)
     }
     
     public var keyShortcuts: [KeyShortcut] {
@@ -636,7 +698,7 @@ private final class ItemListTextWithSubtitleTitleView: UIView, NavigationBarTitl
         self.titleNode.attributedText = NSAttributedString(string: self.titleNode.attributedText?.string ?? "", font: Font.medium(17.0), textColor: theme.rootController.navigationBar.primaryTextColor)
         self.subtitleNode.attributedText = NSAttributedString(string: self.subtitleNode.attributedText?.string ?? "", font: Font.regular(13.0), textColor: theme.rootController.navigationBar.secondaryTextColor)
         if let (size, clearBounds) = self.validLayout {
-            self.updateLayout(size: size, clearBounds: clearBounds, transition: .immediate)
+            let _ = self.updateLayout(size: size, clearBounds: clearBounds, transition: .immediate)
         }
     }
     
@@ -644,11 +706,11 @@ private final class ItemListTextWithSubtitleTitleView: UIView, NavigationBarTitl
         super.layoutSubviews()
         
         if let (size, clearBounds) = self.validLayout {
-            self.updateLayout(size: size, clearBounds: clearBounds, transition: .immediate)
+            let _ = self.updateLayout(size: size, clearBounds: clearBounds, transition: .immediate)
         }
     }
     
-    func updateLayout(size: CGSize, clearBounds: CGRect, transition: ContainedViewLayoutTransition) {
+    func updateLayout(size: CGSize, clearBounds: CGRect, transition: ContainedViewLayoutTransition) -> CGRect {
         self.validLayout = (size, clearBounds)
         
         let titleSize = self.titleNode.updateLayout(size)
@@ -660,6 +722,8 @@ private final class ItemListTextWithSubtitleTitleView: UIView, NavigationBarTitl
             
         self.titleNode.frame = titleFrame
         self.subtitleNode.frame = subtitleFrame
+        
+        return titleFrame
     }
     
     func animateLayoutTransition() {

@@ -18,11 +18,11 @@ import PagerComponent
 import SoftwareVideo
 import AVFoundation
 import PhotoResources
-//import ContextUI
 import ShimmerEffect
 
 private class GifVideoLayer: AVSampleBufferDisplayLayer {
     private let context: AccountContext
+    private let userLocation: MediaResourceUserLocation
     private let file: TelegramMediaFile?
     
     private var frameManager: SoftwareVideoLayerFrameManager?
@@ -59,8 +59,9 @@ private class GifVideoLayer: AVSampleBufferDisplayLayer {
         }
     }
     
-    init(context: AccountContext, file: TelegramMediaFile?, synchronousLoad: Bool) {
+    init(context: AccountContext, userLocation: MediaResourceUserLocation, file: TelegramMediaFile?, synchronousLoad: Bool) {
         self.context = context
+        self.userLocation = userLocation
         self.file = file
         
         super.init()
@@ -69,7 +70,7 @@ private class GifVideoLayer: AVSampleBufferDisplayLayer {
         
         if let file = self.file {
             if let dimensions = file.dimensions {
-                self.thumbnailDisposable = (mediaGridMessageVideo(postbox: context.account.postbox, videoReference: .savedGif(media: file), synchronousLoad: synchronousLoad, nilForEmptyResult: true)
+                self.thumbnailDisposable = (mediaGridMessageVideo(postbox: context.account.postbox, userLocation: userLocation, videoReference: .savedGif(media: file), synchronousLoad: synchronousLoad, nilForEmptyResult: true)
                 |> deliverOnMainQueue).start(next: { [weak self] transform in
                     guard let strongSelf = self else {
                         return
@@ -96,7 +97,15 @@ private class GifVideoLayer: AVSampleBufferDisplayLayer {
     }
     
     override init(layer: Any) {
-        preconditionFailure()
+        guard let layer = layer as? GifVideoLayer else {
+            preconditionFailure()
+        }
+        
+        self.context = layer.context
+        self.userLocation = layer.userLocation
+        self.file = layer.file
+        
+        super.init(layer: layer)
     }
     
     required init?(coder: NSCoder) {
@@ -111,7 +120,7 @@ private class GifVideoLayer: AVSampleBufferDisplayLayer {
         guard let file = self.file else {
             return
         }
-        let frameManager = SoftwareVideoLayerFrameManager(account: self.context.account, fileReference: .savedGif(media: file), layerHolder: nil, layer: self)
+        let frameManager = SoftwareVideoLayerFrameManager(account: self.context.account, userLocation: self.userLocation, userContentType: .other, fileReference: .savedGif(media: file), layerHolder: nil, layer: self)
         self.frameManager = frameManager
         frameManager.started = { [weak self] in
             guard let strongSelf = self else {
@@ -129,22 +138,34 @@ public final class GifPagerContentComponent: Component {
     public enum Subject: Equatable {
         case recent
         case trending
-        case emojiSearch(String)
+        case emojiSearch([String])
     }
     
     public final class InputInteraction {
         public let performItemAction: (Item, UIView, CGRect) -> Void
         public let openGifContextMenu: (Item, UIView, CGRect, ContextGesture, Bool) -> Void
         public let loadMore: (String) -> Void
+        public let openSearch: () -> Void
+        public let updateSearchQuery: ([String]?) -> Void
+        public let hideBackground: Bool
+        public let hasSearch: Bool
         
         public init(
             performItemAction: @escaping (Item, UIView, CGRect) -> Void,
             openGifContextMenu: @escaping (Item, UIView, CGRect, ContextGesture, Bool) -> Void,
-            loadMore: @escaping (String) -> Void
+            loadMore: @escaping (String) -> Void,
+            openSearch: @escaping () -> Void,
+            updateSearchQuery: @escaping ([String]?) -> Void,
+            hideBackground: Bool,
+            hasSearch: Bool
         ) {
             self.performItemAction = performItemAction
             self.openGifContextMenu = openGifContextMenu
             self.loadMore = loadMore
+            self.openSearch = openSearch
+            self.updateSearchQuery = updateSearchQuery
+            self.hideBackground = hideBackground
+            self.hasSearch = hasSearch
         }
     }
     
@@ -178,6 +199,11 @@ public final class GifPagerContentComponent: Component {
     public let items: [Item]
     public let isLoading: Bool
     public let loadMoreToken: String?
+    public let displaySearchWithPlaceholder: String?
+    public let searchCategories: EmojiSearchCategories?
+    public let searchInitiallyHidden: Bool
+    public let searchState: EmojiPagerContentComponent.SearchState
+    public let hideBackground: Bool
     
     public init(
         context: AccountContext,
@@ -185,7 +211,12 @@ public final class GifPagerContentComponent: Component {
         subject: Subject,
         items: [Item],
         isLoading: Bool,
-        loadMoreToken: String?
+        loadMoreToken: String?,
+        displaySearchWithPlaceholder: String?,
+        searchCategories: EmojiSearchCategories?,
+        searchInitiallyHidden: Bool,
+        searchState: EmojiPagerContentComponent.SearchState,
+        hideBackground: Bool
     ) {
         self.context = context
         self.inputInteraction = inputInteraction
@@ -193,6 +224,11 @@ public final class GifPagerContentComponent: Component {
         self.items = items
         self.isLoading = isLoading
         self.loadMoreToken = loadMoreToken
+        self.displaySearchWithPlaceholder = displaySearchWithPlaceholder
+        self.searchCategories = searchCategories
+        self.searchInitiallyHidden = searchInitiallyHidden
+        self.searchState = searchState
+        self.hideBackground = hideBackground
     }
     
     public static func ==(lhs: GifPagerContentComponent, rhs: GifPagerContentComponent) -> Bool {
@@ -214,9 +250,24 @@ public final class GifPagerContentComponent: Component {
         if lhs.loadMoreToken != rhs.loadMoreToken {
             return false
         }
-        
+        if lhs.displaySearchWithPlaceholder != rhs.displaySearchWithPlaceholder {
+            return false
+        }
+        if lhs.searchCategories != rhs.searchCategories {
+            return false
+        }
+        if lhs.searchInitiallyHidden != rhs.searchInitiallyHidden {
+            return false
+        }
+        if lhs.searchState != rhs.searchState {
+            return false
+        }
+        if lhs.hideBackground != rhs.hideBackground {
+            return false
+        }
         return true
     }
+    
     
     public final class View: ContextControllerSourceView, PagerContentViewWithBackground, UIScrollViewDelegate {
         private struct ItemGroupDescription: Equatable {
@@ -240,12 +291,18 @@ public final class GifPagerContentComponent: Component {
             let itemsPerRow: Int
             let contentSize: CGSize
             
+            var searchInsets: UIEdgeInsets
+            var searchHeight: CGFloat
+            
             init(width: CGFloat, containerInsets: UIEdgeInsets, itemCount: Int) {
                 self.width = width
                 self.containerInsets = containerInsets
                 self.itemCount = itemCount
                 self.horizontalSpacing = 1.0
                 self.verticalSpacing = 1.0
+                
+                self.searchHeight = 54.0
+                self.searchInsets = UIEdgeInsets(top: max(0.0, containerInsets.top + 1.0), left: containerInsets.left, bottom: 0.0, right: containerInsets.right)
                 
                 let defaultItemSize: CGFloat = 120.0
                 
@@ -258,7 +315,7 @@ public final class GifPagerContentComponent: Component {
                 self.itemSize = floor((itemHorizontalSpace - self.horizontalSpacing * CGFloat(itemsPerRow - 1)) / CGFloat(itemsPerRow))
                 
                 let numRowsInGroup = (itemCount + (self.itemsPerRow - 1)) / self.itemsPerRow
-                self.contentSize = CGSize(width: width, height: self.containerInsets.top + self.containerInsets.bottom + CGFloat(numRowsInGroup) * self.itemSize + CGFloat(max(0, numRowsInGroup - 1)) * self.verticalSpacing)
+                self.contentSize = CGSize(width: width, height: self.searchInsets.top + self.searchHeight + self.containerInsets.top + self.containerInsets.bottom + CGFloat(numRowsInGroup) * self.itemSize + CGFloat(max(0, numRowsInGroup - 1)) * self.verticalSpacing)
             }
             
             func frame(at index: Int) -> CGRect {
@@ -285,7 +342,7 @@ public final class GifPagerContentComponent: Component {
             
             func visibleItems(for rect: CGRect) -> Range<Int>? {
                 let offsetRect = rect.offsetBy(dx: -self.containerInsets.left, dy: -containerInsets.top)
-                var minVisibleRow = Int(floor((offsetRect.minY - self.verticalSpacing) / (self.itemSize + self.verticalSpacing)))
+                var minVisibleRow = Int(floor((offsetRect.minY - self.searchHeight - self.verticalSpacing) / (self.itemSize + self.verticalSpacing)))
                 minVisibleRow = max(0, minVisibleRow)
                 let maxVisibleRow = Int(ceil((offsetRect.maxY - self.verticalSpacing) / (self.itemSize + self.verticalSpacing)))
                 
@@ -332,7 +389,7 @@ public final class GifPagerContentComponent: Component {
                 self.item = item
                 self.onUpdateDisplayPlaceholder = onUpdateDisplayPlaceholder
                 
-                super.init(context: context, file: item?.file.media, synchronousLoad: attemptSynchronousLoad)
+                super.init(context: context, userLocation: .other, file: item?.file.media, synchronousLoad: attemptSynchronousLoad)
                 
                 if item == nil {
                     self.updateDisplayPlaceholder(displayPlaceholder: true, duration: 0.0)
@@ -342,6 +399,13 @@ public final class GifPagerContentComponent: Component {
                     let _ = self
                     //self?.updateDisplayPlaceholder(displayPlaceholder: false, duration: 0.2)
                 }
+            }
+            
+            override init(layer: Any) {
+                self.item = nil
+                self.onUpdateDisplayPlaceholder = { _, _ in }
+                
+                super.init(layer: layer)
             }
             
             required init?(coder: NSCoder) {
@@ -408,17 +472,119 @@ public final class GifPagerContentComponent: Component {
             }
         }
         
-        private final class ContentScrollView: UIScrollView, PagerExpandableScrollView {
+        private final class SearchHeaderContainer: UIView {
+            override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+                var result: UIView?
+                for subview in self.subviews.reversed() {
+                    if let value = subview.hitTest(self.convert(point, to: subview), with: event) {
+                        result = value
+                        break
+                    }
+                }
+                return result
+            }
         }
         
-        private let backgroundView: BlurredBackgroundView
+        public final class ContentScrollLayer: CALayer {
+            public var mirrorLayer: CALayer?
+            
+            override public init() {
+                super.init()
+            }
+            
+            override public init(layer: Any) {
+                super.init(layer: layer)
+            }
+            
+            required public init?(coder: NSCoder) {
+                fatalError("init(coder:) has not been implemented")
+            }
+            
+            override public var position: CGPoint {
+                get {
+                    return super.position
+                } set(value) {
+                    if let mirrorLayer = self.mirrorLayer {
+                        mirrorLayer.position = value
+                    }
+                    super.position = value
+                }
+            }
+            
+            override public var bounds: CGRect {
+                get {
+                    return super.bounds
+                } set(value) {
+                    if let mirrorLayer = self.mirrorLayer {
+                        mirrorLayer.bounds = value
+                    }
+                    super.bounds = value
+                }
+            }
+            
+            override public func add(_ animation: CAAnimation, forKey key: String?) {
+                if let mirrorLayer = self.mirrorLayer {
+                    mirrorLayer.add(animation, forKey: key)
+                }
+                
+                super.add(animation, forKey: key)
+            }
+            
+            override public func removeAllAnimations() {
+                if let mirrorLayer = self.mirrorLayer {
+                    mirrorLayer.removeAllAnimations()
+                }
+                
+                super.removeAllAnimations()
+            }
+            
+            override public func removeAnimation(forKey: String) {
+                if let mirrorLayer = self.mirrorLayer {
+                    mirrorLayer.removeAnimation(forKey: forKey)
+                }
+                
+                super.removeAnimation(forKey: forKey)
+            }
+        }
+        
+        private final class ContentScrollView: UIScrollView, PagerExpandableScrollView {
+            override static var layerClass: AnyClass {
+                return ContentScrollLayer.self
+            }
+            
+            private let mirrorView: UIView
+            
+            init(mirrorView: UIView) {
+                self.mirrorView = mirrorView
+                
+                super.init(frame: CGRect())
+                
+                (self.layer as? ContentScrollLayer)?.mirrorLayer = mirrorView.layer
+                self.canCancelContentTouches = true
+            }
+            
+            required init?(coder: NSCoder) {
+                fatalError("init(coder:) has not been implemented")
+            }
+            
+            override func touchesShouldCancel(in view: UIView) -> Bool {
+                return true
+            }
+        }
         
         private let shimmerHostView: PortalSourceView
         private let standaloneShimmerEffect: StandaloneShimmerEffect
         
+        private let backgroundView: BlurredBackgroundView
+        private var vibrancyEffectView: UIVisualEffectView?
+        private let mirrorContentScrollView: UIView
         private let scrollView: ContentScrollView
+        private let scrollClippingView: UIView
         
         private let placeholdersContainerView: UIView
+        private var visibleSearchHeader: EmojiSearchHeaderView?
+        private let searchHeaderContainer: SearchHeaderContainer
+        private let mirrorSearchHeaderContainer: UIView
         private var visibleItemPlaceholderViews: [ItemKey: ItemPlaceholderView] = [:]
         private var visibleItemLayers: [ItemKey: ItemLayer] = [:]
         private var ignoreScrolling: Bool = false
@@ -438,7 +604,19 @@ public final class GifPagerContentComponent: Component {
             
             self.placeholdersContainerView = UIView()
             
-            self.scrollView = ContentScrollView()
+            self.mirrorContentScrollView = UIView()
+            self.mirrorContentScrollView.layer.anchorPoint = CGPoint()
+            self.mirrorContentScrollView.clipsToBounds = true
+            self.scrollView = ContentScrollView(mirrorView: self.mirrorContentScrollView)
+            self.scrollView.layer.anchorPoint = CGPoint()
+            
+            self.searchHeaderContainer = SearchHeaderContainer()
+            self.searchHeaderContainer.layer.anchorPoint = CGPoint()
+            self.mirrorSearchHeaderContainer = UIView()
+            self.mirrorSearchHeaderContainer.layer.anchorPoint = CGPoint()
+            
+            self.scrollClippingView = UIView()
+            self.scrollClippingView.clipsToBounds = true
             
             super.init(frame: frame)
             
@@ -458,9 +636,12 @@ public final class GifPagerContentComponent: Component {
             self.scrollView.showsHorizontalScrollIndicator = false
             self.scrollView.scrollsToTop = false
             self.scrollView.delegate = self
-            self.addSubview(self.scrollView)
+            
+            self.scrollClippingView.addSubview(self.scrollView)
+            self.addSubview(self.scrollClippingView)
             
             self.scrollView.addSubview(self.placeholdersContainerView)
+            self.addSubview(self.searchHeaderContainer)
             
             self.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(self.tapGesture(_:))))
             
@@ -553,7 +734,7 @@ public final class GifPagerContentComponent: Component {
                 return
             }
             
-            self.updateVisibleItems(attemptSynchronousLoads: false)
+            self.updateVisibleItems(attemptSynchronousLoads: false, transition: .immediate, fromScrolling: true)
             
             self.updateScrollingOffset(transition: .immediate)
             
@@ -581,14 +762,19 @@ public final class GifPagerContentComponent: Component {
             self.snapScrollingOffsetToInsets()
         }
         
-        private func updateScrollingOffset(transition: Transition) {
-            let isInteracting = scrollView.isDragging || scrollView.isDecelerating
+        private func updateScrollingOffset(transition: ComponentTransition) {
+            let isInteracting = self.scrollView.isDragging || self.scrollView.isDecelerating
             if let previousScrollingOffsetValue = self.previousScrollingOffset {
-                let currentBounds = scrollView.bounds
-                let offsetToTopEdge = max(0.0, currentBounds.minY - 0.0)
-                let offsetToBottomEdge = max(0.0, scrollView.contentSize.height - currentBounds.maxY)
+                let currentBounds = self.scrollView.bounds
+                var offsetToTopEdge = max(0.0, currentBounds.minY - 0.0)
+                var offsetToBottomEdge = max(0.0, self.scrollView.contentSize.height - currentBounds.maxY)
                 
-                let relativeOffset = scrollView.contentOffset.y - previousScrollingOffsetValue
+                if self.scrollView.contentSize.height < self.scrollView.bounds.height * 2.0 {
+                    offsetToTopEdge = 0.0
+                    offsetToBottomEdge = self.scrollView.contentSize.height
+                }
+                
+                let relativeOffset = self.scrollView.contentOffset.y - previousScrollingOffsetValue
                 self.pagerEnvironment?.onChildScrollingUpdate(PagerComponentChildEnvironment.ContentScrollingUpdate(
                     relativeOffset: relativeOffset,
                     absoluteOffsetToTopEdge: offsetToTopEdge,
@@ -597,19 +783,21 @@ public final class GifPagerContentComponent: Component {
                     isInteracting: isInteracting,
                     transition: transition
                 ))
-                self.previousScrollingOffset = scrollView.contentOffset.y
+                self.previousScrollingOffset = self.scrollView.contentOffset.y
             }
-            self.previousScrollingOffset = scrollView.contentOffset.y
+            self.previousScrollingOffset = self.scrollView.contentOffset.y
         }
         
         private func snappedContentOffset(proposedOffset: CGFloat) -> CGFloat {
-            guard let pagerEnvironment = self.pagerEnvironment else {
+            guard let pagerEnvironment = self.pagerEnvironment, let itemLayout = self.itemLayout else {
                 return proposedOffset
             }
             
             var proposedOffset = proposedOffset
             let bounds = self.bounds
-            if proposedOffset + bounds.height > self.scrollView.contentSize.height - pagerEnvironment.containerInsets.bottom {
+            if proposedOffset <= itemLayout.searchInsets.top + itemLayout.searchHeight * 0.5 {
+                proposedOffset = 0.0
+            } else if proposedOffset + bounds.height > self.scrollView.contentSize.height - pagerEnvironment.containerInsets.bottom {
                 proposedOffset = self.scrollView.contentSize.height - bounds.height
             }
             if proposedOffset < pagerEnvironment.containerInsets.top {
@@ -620,21 +808,27 @@ public final class GifPagerContentComponent: Component {
         }
         
         private func snapScrollingOffsetToInsets() {
-            let transition = Transition(animation: .curve(duration: 0.4, curve: .spring))
+            let transition = ComponentTransition(animation: .curve(duration: 0.4, curve: .spring))
             
             var currentBounds = self.scrollView.bounds
             currentBounds.origin.y = self.snappedContentOffset(proposedOffset: currentBounds.minY)
             transition.setBounds(view: self.scrollView, bounds: currentBounds)
             
             self.updateScrollingOffset(transition: transition)
+            self.updateVisibleItems(attemptSynchronousLoads: false, transition: transition, fromScrolling: true)
         }
         
-        private func updateVisibleItems(attemptSynchronousLoads: Bool) {
+        private func updateVisibleItems(attemptSynchronousLoads: Bool, transition: ComponentTransition, fromScrolling: Bool) {
             guard let component = self.component, let itemLayout = self.itemLayout else {
                 return
             }
             
             var validIds = Set<ItemKey>()
+            
+            var searchInset: CGFloat = 0.0
+            if let _ = component.displaySearchWithPlaceholder {
+                searchInset += itemLayout.searchHeight
+            }
             
             if let itemRange = itemLayout.visibleItems(for: self.scrollView.bounds) {
                 for index in itemRange.lowerBound ..< itemRange.upperBound {
@@ -657,9 +851,9 @@ public final class GifPagerContentComponent: Component {
                         
                     validIds.insert(itemId)
                     
-                    let itemFrame = itemLayout.frame(at: index)
+                    let itemFrame = itemLayout.frame(at: index).offsetBy(dx: 0.0, dy: searchInset)
                     
-                    let itemTransition: Transition = .immediate
+                    var itemTransition: ComponentTransition = transition
                     var updateItemLayerPlaceholder = false
                     
                     let itemLayer: ItemLayer
@@ -667,6 +861,7 @@ public final class GifPagerContentComponent: Component {
                         itemLayer = current
                     } else {
                         updateItemLayerPlaceholder = true
+                        itemTransition = .immediate
                         
                         itemLayer = ItemLayer(
                             item: item,
@@ -720,7 +915,10 @@ public final class GifPagerContentComponent: Component {
                     let itemPosition = CGPoint(x: itemFrame.midX, y: itemFrame.midY)
                     let itemBounds = CGRect(origin: CGPoint(), size: itemFrame.size)
                     
-                    itemTransition.setFrame(layer: itemLayer, frame: itemFrame)
+                    //itemTransition.setFrame(layer: itemLayer, frame: itemFrame)
+                    itemLayer.bounds = CGRect(origin: CGPoint(), size: itemFrame.size)
+                    itemTransition.setPosition(layer: itemLayer, position: itemFrame.center)
+                    
                     itemLayer.isVisibleForAnimations = true
                     
                     if let placeholderView = self.visibleItemPlaceholderViews[itemId] {
@@ -754,6 +952,16 @@ public final class GifPagerContentComponent: Component {
             for id in removedIds {
                 self.visibleItemLayers.removeValue(forKey: id)
             }
+            
+            transition.setPosition(view: self.searchHeaderContainer, position: self.scrollView.center)
+            var searchContainerBounds = self.scrollView.bounds
+            if case .emojiSearch = component.subject {
+                searchContainerBounds.origin.y = 0.0
+            }
+            transition.setBounds(view: self.searchHeaderContainer, bounds: searchContainerBounds)
+            
+            transition.setPosition(view: self.mirrorSearchHeaderContainer, position: self.scrollView.center)
+            transition.setBounds(view: self.mirrorSearchHeaderContainer, bounds: searchContainerBounds)
         }
         
         private func updateShimmerIfNeeded() {
@@ -764,16 +972,44 @@ public final class GifPagerContentComponent: Component {
             }
         }
         
-        public func pagerUpdateBackground(backgroundFrame: CGRect, transition: Transition) {
+        public func pagerUpdateBackground(backgroundFrame: CGRect, topPanelHeight: CGFloat, transition: ComponentTransition) {
             guard let theme = self.theme else {
                 return
             }
-            self.backgroundView.updateColor(color: theme.chat.inputMediaPanel.backgroundColor, enableBlur: true, forceKeepBlur: false, transition: transition.containedViewLayoutTransition)
+            if theme.overallDarkAppearance {
+                if let vibrancyEffectView = self.vibrancyEffectView {
+                    self.vibrancyEffectView = nil
+                    vibrancyEffectView.removeFromSuperview()
+                }
+            } else {
+                if self.vibrancyEffectView == nil {
+                    let style: UIBlurEffect.Style
+                    style = .extraLight
+                    let blurEffect = UIBlurEffect(style: style)
+                    let vibrancyEffect = UIVibrancyEffect(blurEffect: blurEffect)
+                    let vibrancyEffectView = UIVisualEffectView(effect: vibrancyEffect)
+                    self.vibrancyEffectView = vibrancyEffectView
+                    self.backgroundView.addSubview(vibrancyEffectView)
+                    vibrancyEffectView.contentView.addSubview(self.mirrorContentScrollView)
+                    vibrancyEffectView.contentView.addSubview(self.mirrorSearchHeaderContainer)
+                }
+            }
+            
+            let hideBackground = self.component?.hideBackground ?? false
+            var backgroundColor = theme.chat.inputMediaPanel.backgroundColor
+            if hideBackground {
+                backgroundColor = backgroundColor.withAlphaComponent(0.01)
+            }
+            self.backgroundView.updateColor(color: backgroundColor, enableBlur: true, forceKeepBlur: false, transition: transition.containedViewLayoutTransition)
             transition.setFrame(view: self.backgroundView, frame: backgroundFrame)
             self.backgroundView.update(size: backgroundFrame.size, transition: transition.containedViewLayoutTransition)
+            
+            if let vibrancyEffectView = self.vibrancyEffectView {
+                transition.setFrame(view: vibrancyEffectView, frame: CGRect(origin: CGPoint(x: 0.0, y: -backgroundFrame.minY), size: CGSize(width: backgroundFrame.width, height: backgroundFrame.height + backgroundFrame.minY)))
+            }
         }
         
-        func update(component: GifPagerContentComponent, availableSize: CGSize, state: EmptyComponentState, environment: Environment<EnvironmentType>, transition: Transition) -> CGSize {
+        func update(component: GifPagerContentComponent, availableSize: CGSize, state: EmptyComponentState, environment: Environment<EnvironmentType>, transition: ComponentTransition) -> CGSize {
             var contentReset = false
             if let previousComponent = self.component, previousComponent.subject != component.subject {
                 contentReset = true
@@ -802,7 +1038,12 @@ public final class GifPagerContentComponent: Component {
             self.itemLayout = itemLayout
             
             self.ignoreScrolling = true
-            transition.setFrame(view: self.scrollView, frame: CGRect(origin: CGPoint(), size: availableSize))
+            let scrollOriginY: CGFloat = 0.0
+            let scrollSize = CGSize(width: availableSize.width, height: availableSize.height)
+            
+            transition.setPosition(view: self.scrollView, position: CGPoint(x: 0.0, y: scrollOriginY))
+            self.scrollView.bounds = CGRect(origin: self.scrollView.bounds.origin, size: scrollSize)
+            
             if self.scrollView.contentSize != itemLayout.contentSize {
                 self.scrollView.contentSize = itemLayout.contentSize
             }
@@ -817,7 +1058,68 @@ public final class GifPagerContentComponent: Component {
             self.previousScrollingOffset = self.scrollView.contentOffset.y
             self.ignoreScrolling = false
             
-            self.updateVisibleItems(attemptSynchronousLoads: true)
+            if let displaySearchWithPlaceholder = component.displaySearchWithPlaceholder {
+                let visibleSearchHeader: EmojiSearchHeaderView
+                if let current = self.visibleSearchHeader {
+                    visibleSearchHeader = current
+                } else {
+                    visibleSearchHeader = EmojiSearchHeaderView(activated: { [weak self] isTextInput in
+                        guard let strongSelf = self else {
+                            return
+                        }
+                        if isTextInput {
+                            strongSelf.component?.inputInteraction.openSearch()
+                        }
+                    }, deactivated: { _ in
+                    }, updateQuery: { [weak self] query in
+                        guard let self, let component = self.component else {
+                            return
+                        }
+                        switch query {
+                        case .none:
+                            component.inputInteraction.updateSearchQuery(nil)
+                        case .text:
+                            break
+                        case let .category(value):
+                            component.inputInteraction.updateSearchQuery(value.identifiers)
+                        }
+                    })
+                    self.visibleSearchHeader = visibleSearchHeader
+                    self.searchHeaderContainer.addSubview(visibleSearchHeader)
+                    self.mirrorSearchHeaderContainer.addSubview(visibleSearchHeader.tintContainerView)
+                }
+                
+                let searchHeaderFrame = CGRect(origin: CGPoint(x: itemLayout.searchInsets.left, y: itemLayout.searchInsets.top), size: CGSize(width: itemLayout.width - itemLayout.searchInsets.left - itemLayout.searchInsets.right, height: itemLayout.searchHeight))
+                visibleSearchHeader.update(context: component.context, theme: keyboardChildEnvironment.theme, forceNeedsVibrancy: false, strings: keyboardChildEnvironment.strings, text: displaySearchWithPlaceholder, useOpaqueTheme: false, isActive: false, size: searchHeaderFrame.size, canFocus: false, searchCategories: component.searchCategories, searchState: component.searchState, transition: transition)
+                transition.setFrame(view: visibleSearchHeader, frame: searchHeaderFrame, completion: { [weak self] completed in
+                    let _ = self
+                    let _ = completed
+                    /*guard let strongSelf = self, completed, let visibleSearchHeader = strongSelf.visibleSearchHeader else {
+                        return
+                    }
+                    
+                    if visibleSearchHeader.superview != strongSelf.scrollView {
+                        strongSelf.scrollView.addSubview(visibleSearchHeader)
+                        strongSelf.mirrorSearchHeaderContainer.addSubview(visibleSearchHeader.tintContainerView)
+                    }*/
+                })
+            } else {
+                if let visibleSearchHeader = self.visibleSearchHeader {
+                    self.visibleSearchHeader = nil
+                    visibleSearchHeader.removeFromSuperview()
+                    visibleSearchHeader.tintContainerView.removeFromSuperview()
+                }
+            }
+            
+            self.updateVisibleItems(attemptSynchronousLoads: true, transition: transition, fromScrolling: false)
+            
+            var clippingInset: CGFloat = 0.0
+            if case .emojiSearch = component.subject {
+                clippingInset = itemLayout.searchInsets.top + itemLayout.searchHeight - 1.0
+            }
+            let clippingFrame = CGRect(origin: CGPoint(x: 0.0, y: clippingInset), size: CGSize(width: availableSize.width, height: availableSize.height - clippingInset))
+            transition.setPosition(view: self.scrollClippingView, position: clippingFrame.center)
+            transition.setBounds(view: self.scrollClippingView, bounds: clippingFrame)
             
             return availableSize
         }
@@ -827,7 +1129,7 @@ public final class GifPagerContentComponent: Component {
         return View(frame: CGRect())
     }
     
-    public func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<EnvironmentType>, transition: Transition) -> CGSize {
+    public func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<EnvironmentType>, transition: ComponentTransition) -> CGSize {
         return view.update(component: self, availableSize: availableSize, state: state, environment: environment, transition: transition)
     }
 }

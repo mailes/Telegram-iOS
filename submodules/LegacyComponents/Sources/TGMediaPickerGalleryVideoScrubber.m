@@ -99,6 +99,12 @@ typedef enum
         _currentTimeLabel.backgroundColor = [UIColor clearColor];
         _currentTimeLabel.text = @"0:00";
         _currentTimeLabel.textColor = [UIColor whiteColor];
+        _currentTimeLabel.layer.shadowOffset = CGSizeMake(0.0, 0.0);
+        _currentTimeLabel.layer.shadowRadius = 4.0;
+        _currentTimeLabel.layer.shadowColor = [UIColor blackColor].CGColor;
+        _currentTimeLabel.layer.shadowOpacity = 0.6;
+        _currentTimeLabel.layer.rasterizationScale = TGScreenScaling();
+        _currentTimeLabel.layer.shouldRasterize = true;
         [self addSubview:_currentTimeLabel];
         
         _inverseTimeLabel = [[UILabel alloc] initWithFrame:CGRectMake(frame.size.width - 108, 4, 100, 15)];
@@ -108,6 +114,12 @@ typedef enum
         _inverseTimeLabel.text = @"0:00";
         _inverseTimeLabel.textAlignment = NSTextAlignmentRight;
         _inverseTimeLabel.textColor = [UIColor whiteColor];
+        _inverseTimeLabel.layer.shadowOffset = CGSizeMake(0.0, 0.0);
+        _inverseTimeLabel.layer.shadowRadius = 4.0;
+        _inverseTimeLabel.layer.shadowColor = [UIColor blackColor].CGColor;
+        _inverseTimeLabel.layer.shadowOpacity = 0.6;
+        _inverseTimeLabel.layer.rasterizationScale = TGScreenScaling();
+        _inverseTimeLabel.layer.shouldRasterize = true;
         [self addSubview:_inverseTimeLabel];
         
         _wrapperView = [[UIControl alloc] initWithFrame:CGRectMake(8, 24, 0, 36)];
@@ -119,14 +131,19 @@ typedef enum
         
         _summaryThumbnailWrapperView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 0, 32)];
         _summaryThumbnailWrapperView.clipsToBounds = true;
+        _summaryThumbnailWrapperView.layer.cornerRadius = 5.0;
         [_wrapperView addSubview:_summaryThumbnailWrapperView];
         
         _leftCurtainView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 0, 0)];
         _leftCurtainView.backgroundColor = [[TGPhotoEditorInterfaceAssets toolbarBackgroundColor] colorWithAlphaComponent:0.8f];
+        _leftCurtainView.clipsToBounds = true;
+        _leftCurtainView.layer.cornerRadius = 5.0;
         [_wrapperView addSubview:_leftCurtainView];
 
         _rightCurtainView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 0, 0)];
         _rightCurtainView.backgroundColor = [[TGPhotoEditorInterfaceAssets toolbarBackgroundColor] colorWithAlphaComponent:0.8f];
+        _rightCurtainView.clipsToBounds = true;
+        _rightCurtainView.layer.cornerRadius = 5.0;
         [_wrapperView addSubview:_rightCurtainView];
 
         __weak TGMediaPickerGalleryVideoScrubber *weakSelf = self;
@@ -213,62 +230,8 @@ typedef enum
         _trimView.startHandleMoved = ^(CGPoint translation)
         {
             __strong TGMediaPickerGalleryVideoScrubber *strongSelf = weakSelf;
-            if (strongSelf == nil)
-                return;
-            
-            if (strongSelf->_animatingZoomIn)
-                return;
-            
-            UIView *trimView = strongSelf->_trimView;
-            
-            CGRect availableTrimRect = [strongSelf _scrubbingRect];
-            CGRect normalScrubbingRect = [strongSelf _scrubbingRectZoomedIn:false];
-            CGFloat originX = MAX(0, trimView.frame.origin.x + translation.x);
-            CGFloat delta = originX - trimView.frame.origin.x;
-            CGFloat maxWidth = availableTrimRect.size.width + normalScrubbingRect.origin.x * 2 - originX;
-            
-            CGRect trimViewRect = CGRectMake(originX, trimView.frame.origin.y, MIN(maxWidth, trimView.frame.size.width - delta), trimView.frame.size.height);
-            
-            NSTimeInterval trimStartPosition = 0.0;
-            NSTimeInterval trimEndPosition = 0.0;
-            [strongSelf _trimStartPosition:&trimStartPosition trimEndPosition:&trimEndPosition forTrimFrame:trimViewRect duration:strongSelf.duration];
-            
-            NSTimeInterval duration = trimEndPosition - trimStartPosition;
-            
-            if (trimEndPosition - trimStartPosition < self.minimumLength)
-                return;
-            
-            if (strongSelf.maximumLength > DBL_EPSILON && duration > strongSelf.maximumLength)
-            {
-                trimViewRect = CGRectMake(trimView.frame.origin.x + delta, trimView.frame.origin.y, trimView.frame.size.width, trimView.frame.size.height);
-                
-                [strongSelf _trimStartPosition:&trimStartPosition trimEndPosition:&trimEndPosition forTrimFrame:trimViewRect duration:strongSelf.duration];
-            }
-            
-            trimView.frame = trimViewRect;
-            
-            [strongSelf _layoutTrimCurtainViews];
-            
-            strongSelf->_trimStartValue = trimStartPosition;
-            strongSelf->_trimEndValue = trimEndPosition;
-            
-            [strongSelf setValue:trimStartPosition];
-            
-            UIView *handle = strongSelf->_scrubberHandle;
-            handle.center = CGPointMake(trimView.frame.origin.x + 12 + handle.frame.size.width / 2, handle.center.y);
-            
-            UIView *dotHandle = strongSelf->_dotHandle;
-            dotHandle.center = CGPointMake(trimView.frame.origin.x + 12 + dotHandle.frame.size.width / 2, dotHandle.center.y);
-            
-            id<TGMediaPickerGalleryVideoScrubberDelegate> delegate = strongSelf.delegate;
-            if ([delegate respondsToSelector:@selector(videoScrubber:editingStartValueDidChange:)])
-                [delegate videoScrubber:strongSelf editingStartValueDidChange:trimStartPosition];
-            
-            [strongSelf cancelZoomIn];
-            if ([strongSelf zoomAvailable])
-            {
-                strongSelf->_pivotSource = TGMediaPickerGalleryVideoScrubberPivotSourceTrimStart;
-                [strongSelf performSelector:@selector(zoomIn) withObject:nil afterDelay:TGVideoScrubberZoomActivationInterval];
+            if (strongSelf) {
+                [strongSelf startHandleMoved:translation];
             }
         };
         _trimView.endHandleMoved = ^(CGPoint translation)
@@ -416,6 +379,65 @@ typedef enum
         [_trimView addGestureRecognizer:_tapGestureRecognizer];
     }
     return self;
+}
+
+- (void)startHandleMoved:(CGPoint)translation {
+    TGMediaPickerGalleryVideoScrubber *strongSelf = self;
+    
+    if (strongSelf->_animatingZoomIn)
+        return;
+    
+    UIView *trimView = strongSelf->_trimView;
+    
+    CGRect availableTrimRect = [strongSelf _scrubbingRect];
+    CGRect normalScrubbingRect = [strongSelf _scrubbingRectZoomedIn:false];
+    CGFloat originX = MAX(0, trimView.frame.origin.x + translation.x);
+    CGFloat delta = originX - trimView.frame.origin.x;
+    CGFloat maxWidth = availableTrimRect.size.width + normalScrubbingRect.origin.x * 2 - originX;
+    
+    CGRect trimViewRect = CGRectMake(originX, trimView.frame.origin.y, MIN(maxWidth, trimView.frame.size.width - delta), trimView.frame.size.height);
+    
+    NSTimeInterval trimStartPosition = 0.0;
+    NSTimeInterval trimEndPosition = 0.0;
+    [strongSelf _trimStartPosition:&trimStartPosition trimEndPosition:&trimEndPosition forTrimFrame:trimViewRect duration:strongSelf.duration];
+    
+    NSTimeInterval duration = trimEndPosition - trimStartPosition;
+    
+    if (trimEndPosition - trimStartPosition < self.minimumLength)
+        return;
+    
+    if (strongSelf.maximumLength > DBL_EPSILON && duration > strongSelf.maximumLength)
+    {
+        trimViewRect = CGRectMake(trimView.frame.origin.x + delta, trimView.frame.origin.y, trimView.frame.size.width, trimView.frame.size.height);
+        
+        [strongSelf _trimStartPosition:&trimStartPosition trimEndPosition:&trimEndPosition forTrimFrame:trimViewRect duration:strongSelf.duration];
+    }
+    
+    trimView.frame = trimViewRect;
+    
+    [strongSelf _layoutTrimCurtainViews];
+    
+    strongSelf->_trimStartValue = trimStartPosition;
+    strongSelf->_trimEndValue = trimEndPosition;
+    
+    [strongSelf setValue:trimStartPosition];
+    
+    UIView *handle = strongSelf->_scrubberHandle;
+    handle.center = CGPointMake(trimView.frame.origin.x + 12 + handle.frame.size.width / 2, handle.center.y);
+    
+    UIView *dotHandle = strongSelf->_dotHandle;
+    dotHandle.center = CGPointMake(trimView.frame.origin.x + 12 + dotHandle.frame.size.width / 2, dotHandle.center.y);
+    
+    id<TGMediaPickerGalleryVideoScrubberDelegate> delegate = strongSelf.delegate;
+    if ([delegate respondsToSelector:@selector(videoScrubber:editingStartValueDidChange:)])
+        [delegate videoScrubber:strongSelf editingStartValueDidChange:trimStartPosition];
+    
+    [strongSelf cancelZoomIn];
+    if ([strongSelf zoomAvailable])
+    {
+        strongSelf->_pivotSource = TGMediaPickerGalleryVideoScrubberPivotSourceTrimStart;
+        [strongSelf performSelector:@selector(zoomIn) withObject:nil afterDelay:TGVideoScrubberZoomActivationInterval];
+    }
 }
 
 - (void)setHasDotPicker:(bool)hasDotPicker {

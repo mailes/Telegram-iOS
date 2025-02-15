@@ -2,18 +2,20 @@ import Foundation
 import Postbox
 
 public struct SynchronizeableChatInputState: Codable, Equatable {
-    public let replyToMessageId: MessageId?
+    public let replySubject: EngineMessageReplySubject?
     public let text: String
     public let entities: [MessageTextEntity]
     public let timestamp: Int32
     public let textSelection: Range<Int>?
+    public let messageEffectId: Int64?
     
-    public init(replyToMessageId: MessageId?, text: String, entities: [MessageTextEntity], timestamp: Int32, textSelection: Range<Int>?) {
-        self.replyToMessageId = replyToMessageId
+    public init(replySubject: EngineMessageReplySubject?, text: String, entities: [MessageTextEntity], timestamp: Int32, textSelection: Range<Int>?, messageEffectId: Int64?) {
+        self.replySubject = replySubject
         self.text = text
         self.entities = entities
         self.timestamp = timestamp
         self.textSelection = textSelection
+        self.messageEffectId = messageEffectId
     }
     
     public init(from decoder: Decoder) throws {
@@ -22,12 +24,17 @@ public struct SynchronizeableChatInputState: Codable, Equatable {
         self.entities = (try? container.decode([MessageTextEntity].self, forKey: "e")) ?? []
         self.timestamp = (try? container.decode(Int32.self, forKey: "s")) ?? 0
 
-        if let messageIdPeerId = try? container.decodeIfPresent(Int64.self, forKey: "m.p"), let messageIdNamespace = try? container.decodeIfPresent(Int32.self, forKey: "m.n"), let messageIdId = try? container.decodeIfPresent(Int32.self, forKey: "m.i") {
-            self.replyToMessageId = MessageId(peerId: PeerId(messageIdPeerId), namespace: messageIdNamespace, id: messageIdId)
+        if let replySubject = try? container.decodeIfPresent(EngineMessageReplySubject.self, forKey: "rep") {
+            self.replySubject = replySubject
         } else {
-            self.replyToMessageId = nil
+            if let messageIdPeerId = try? container.decodeIfPresent(Int64.self, forKey: "m.p"), let messageIdNamespace = try? container.decodeIfPresent(Int32.self, forKey: "m.n"), let messageIdId = try? container.decodeIfPresent(Int32.self, forKey: "m.i") {
+                self.replySubject = EngineMessageReplySubject(messageId: MessageId(peerId: PeerId(messageIdPeerId), namespace: messageIdNamespace, id: messageIdId), quote: nil)
+            } else {
+                self.replySubject = nil
+            }
         }
         self.textSelection = nil
+        self.messageEffectId = try container.decodeIfPresent(Int64.self, forKey: "messageEffectId")
     }
     
     public func encode(to encoder: Encoder) throws {
@@ -36,19 +43,12 @@ public struct SynchronizeableChatInputState: Codable, Equatable {
         try container.encode(self.text, forKey: "t")
         try container.encode(self.entities, forKey: "e")
         try container.encode(self.timestamp, forKey: "s")
-        if let replyToMessageId = self.replyToMessageId {
-            try container.encode(replyToMessageId.peerId.toInt64(), forKey: "m.p")
-            try container.encode(replyToMessageId.namespace, forKey: "m.n")
-            try container.encode(replyToMessageId.id, forKey: "m.i")
-        } else {
-            try container.encodeNil(forKey: "m.p")
-            try container.encodeNil(forKey: "m.n")
-            try container.encodeNil(forKey: "m.i")
-        }
+        try container.encodeIfPresent(self.replySubject, forKey: "rep")
+        try container.encodeIfPresent(self.messageEffectId, forKey: "messageEffectId")
     }
     
     public static func ==(lhs: SynchronizeableChatInputState, rhs: SynchronizeableChatInputState) -> Bool {
-        if lhs.replyToMessageId != rhs.replyToMessageId {
+        if lhs.replySubject != rhs.replySubject {
             return false
         }
         if lhs.text != rhs.text {
@@ -63,6 +63,9 @@ public struct SynchronizeableChatInputState: Codable, Equatable {
         if lhs.textSelection != rhs.textSelection {
             return false
         }
+        if lhs.messageEffectId != rhs.messageEffectId {
+            return false
+        }
         return true
     }
 }
@@ -70,16 +73,53 @@ public struct SynchronizeableChatInputState: Codable, Equatable {
 class InternalChatInterfaceState: Codable {
     let synchronizeableInputState: SynchronizeableChatInputState?
     let historyScrollMessageIndex: MessageIndex?
+    let mediaDraftState: MediaDraftState?
     let opaqueData: Data?
 
     init(
         synchronizeableInputState: SynchronizeableChatInputState?,
         historyScrollMessageIndex: MessageIndex?,
+        mediaDraftState: MediaDraftState?,
         opaqueData: Data?
     ) {
         self.synchronizeableInputState = synchronizeableInputState
         self.historyScrollMessageIndex = historyScrollMessageIndex
+        self.mediaDraftState = mediaDraftState
         self.opaqueData = opaqueData
+    }
+}
+
+public struct MediaDraftState: Codable, Equatable {
+    public let contentType: EngineChatList.MediaDraftContentType
+    public let timestamp: Int32
+    
+    public init(contentType: EngineChatList.MediaDraftContentType, timestamp: Int32) {
+        self.contentType = contentType
+        self.timestamp = timestamp
+    }
+    
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: StringCodingKey.self)
+        
+        self.contentType = EngineChatList.MediaDraftContentType(rawValue: try container.decode(Int32.self, forKey: "t")) ?? .audio
+        self.timestamp = (try? container.decode(Int32.self, forKey: "s")) ?? 0
+    }
+    
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: StringCodingKey.self)
+
+        try container.encode(self.contentType.rawValue, forKey: "t")
+        try container.encode(self.timestamp, forKey: "s")
+    }
+    
+    public static func ==(lhs: MediaDraftState, rhs: MediaDraftState) -> Bool {
+        if lhs.contentType != rhs.contentType {
+            return false
+        }
+        if lhs.timestamp != rhs.timestamp {
+            return false
+        }
+        return true
     }
 }
 
@@ -94,16 +134,29 @@ func _internal_updateChatInputState(transaction: Transaction, peerId: PeerId, th
             previousState = (try? AdaptedPostboxDecoder().decode(InternalChatInterfaceState.self, from: data))
         }
     }
+    
+    var overrideChatTimestamp: Int32?
+    if let inputState = inputState {
+        overrideChatTimestamp = inputState.timestamp
+    }
+    
+    if let mediaDraftState = previousState?.mediaDraftState {
+        if let current = overrideChatTimestamp, mediaDraftState.timestamp < current {
+        } else {
+            overrideChatTimestamp = mediaDraftState.timestamp
+        }
+    }
 
     if let updatedStateData = try? AdaptedPostboxEncoder().encode(InternalChatInterfaceState(
         synchronizeableInputState: inputState,
         historyScrollMessageIndex: previousState?.historyScrollMessageIndex,
+        mediaDraftState: previousState?.mediaDraftState,
         opaqueData: previousState?.opaqueData
     )) {
         let storedState = StoredPeerChatInterfaceState(
-            overrideChatTimestamp: inputState?.timestamp,
+            overrideChatTimestamp: overrideChatTimestamp,
             historyScrollMessageIndex: previousState?.historyScrollMessageIndex,
-            associatedMessageIds: (inputState?.replyToMessageId).flatMap({ [$0] }) ?? [],
+            associatedMessageIds: (inputState?.replySubject?.messageId).flatMap({ [$0] }) ?? [],
             data: updatedStateData
         )
         if let threadId = threadId {

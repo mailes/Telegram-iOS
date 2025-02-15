@@ -247,11 +247,18 @@ private final class AdditionalPreloadPeerIdsContext {
     }
 }
 
-public struct ChatHistoryPreloadItem : Equatable {
+public struct ChatHistoryPreloadItem : Equatable, Hashable {
     public let index: ChatListIndex
     public let threadId: Int64?
     public let isMuted: Bool
     public let hasUnread: Bool
+    
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(index.hashValue)
+        if let threadId = threadId {
+            hasher.combine(threadId)
+        }
+    }
     
     public init(index: ChatListIndex, threadId: Int64?, isMuted: Bool, hasUnread: Bool) {
         self.index = index
@@ -314,12 +321,6 @@ final class ChatHistoryPreloadManager {
                 return
             }
             
-            #if DEBUG
-            if "".isEmpty {
-                return
-            }
-            #endif
-            
             strongSelf.canPreloadHistoryValue = value
             if value {
                 for i in 0 ..< min(3, strongSelf.entries.count) {
@@ -353,30 +354,17 @@ final class ChatHistoryPreloadManager {
             return disposable
         }
         
-        /*let signal = self.postbox.tailChatListView(groupId: .root, count: 20, summaryComponents: ChatListEntrySummaryComponents())
-        |> map { view -> [ChatHistoryPreloadItem] in
-            var result: [ChatHistoryPreloadItem] = []
-            for entry in view.0.entries {
-                if case let .MessageEntry(index, _, readState, isMuted, _, _, _, _, _, _) = entry {
-                    var hasUnread = false
-                    if let readState = readState {
-                        hasUnread = readState.count != 0
-                    }
-                    result.append(ChatHistoryPreloadItem(index: index, isMuted: isMuted, hasUnread: hasUnread))
-                }
-            }
-            return result
-        }*/
-        
         self.automaticChatListDisposable.set((combineLatest(queue: .mainQueue(), self.preloadItemsSignal, additionalPeerIds)
         |> delay(1.0, queue: .mainQueue())
         |> deliverOnMainQueue).start(next: { [weak self] loadItems, additionalPeerIds in
             guard let strongSelf = self else {
                 return
             }
-            #if DEBUG
-            //return
-            #endif
+            /*#if DEBUG
+            if "".isEmpty {
+                return
+            }
+            #endif*/
             
             var indices: [(ChatHistoryPreloadIndex, Bool, Bool)] = []
             for item in loadItems {
@@ -388,6 +376,11 @@ final class ChatHistoryPreloadManager {
     }
     
     private func update(indices: [(ChatHistoryPreloadIndex, Bool, Bool)], additionalPeerIds: Set<PeerId>) {
+        /*#if DEBUG
+        var indices = indices
+        indices.removeAll()
+        #endif*/
+        
         self.queue.async {
             var validEntityIds = Set(indices.map { $0.0.entity })
             for peerId in additionalPeerIds {
@@ -443,7 +436,7 @@ final class ChatHistoryPreloadManager {
                     let key: PostboxViewKey
                     switch index.entity {
                     case let .peer(peerId, threadId):
-                        key = .messageOfInterestHole(location: .peer(peerId: peerId, threadId: threadId), namespace: Namespaces.Message.Cloud, count: 70)
+                        key = .messageOfInterestHole(location: .peer(peerId: peerId, threadId: threadId), namespace: Namespaces.Message.Cloud, count: 50)
                     }
                     view.disposable.set((self.postbox.combinedView(keys: [key])
                     |> deliverOn(self.queue)).start(next: { [weak self] next in

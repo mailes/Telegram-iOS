@@ -26,6 +26,13 @@ import MapResourceToAvatarSizes
 import ItemListAddressItem
 import ItemListVenueItem
 import LegacyMediaPickerUI
+import ContextUI
+import ChatTimerScreen
+import AsyncDisplayKit
+import TextFormat
+import AvatarEditorScreen
+import SendInviteLinkScreen
+import OldChannelsController
 
 private struct CreateGroupArguments {
     let context: AccountContext
@@ -35,10 +42,16 @@ private struct CreateGroupArguments {
     let changeProfilePhoto: () -> Void
     let changeLocation: () -> Void
     let updateWithVenue: (TelegramMediaMap) -> Void
+    let updateAutoDelete: () -> Void
+    let updatePublicLinkText: (String) -> Void
+    let openAuction: (String) -> Void
 }
 
 private enum CreateGroupSection: Int32 {
     case info
+    case username
+    case topics
+    case autoDelete
     case members
     case location
     case venues
@@ -46,17 +59,11 @@ private enum CreateGroupSection: Int32 {
 
 private enum CreateGroupEntryTag: ItemListItemTag {
     case info
+    case autoDelete
     
     func isEqual(to other: ItemListItemTag) -> Bool {
         if let other = other as? CreateGroupEntryTag {
-            switch self {
-                case .info:
-                    if case .info = other {
-                        return true
-                    } else {
-                        return false
-                    }
-            }
+            return self == other
         } else {
             return false
         }
@@ -66,6 +73,14 @@ private enum CreateGroupEntryTag: ItemListItemTag {
 private enum CreateGroupEntry: ItemListNodeEntry {
     case groupInfo(PresentationTheme, PresentationStrings, PresentationDateTimeFormat, Peer?, ItemListAvatarAndNameInfoItemState, ItemListAvatarAndNameInfoItemUpdatingAvatar?)
     case setProfilePhoto(PresentationTheme, String)
+    case usernameHeader(PresentationTheme, String)
+    case username(PresentationTheme, String, String)
+    case usernameStatus(PresentationTheme, String, AddressNameValidationStatus, String, String)
+    case usernameInfo(PresentationTheme, String)
+    case topics(PresentationTheme, String)
+    case topicsInfo(PresentationTheme, String)
+    case autoDelete(title: String, value: String)
+    case autoDeleteInfo(String)
     case member(Int32, PresentationTheme, PresentationStrings, PresentationDateTimeFormat, PresentationPersonNameOrder, Peer, PeerPresence?)
     case locationHeader(PresentationTheme, String)
     case location(PresentationTheme, PeerGeoLocation)
@@ -78,6 +93,12 @@ private enum CreateGroupEntry: ItemListNodeEntry {
         switch self {
             case .groupInfo, .setProfilePhoto:
                 return CreateGroupSection.info.rawValue
+            case .usernameHeader, .username, .usernameStatus, .usernameInfo:
+                return CreateGroupSection.username.rawValue
+            case .topics, .topicsInfo:
+                return CreateGroupSection.topics.rawValue
+            case .autoDelete, .autoDeleteInfo:
+                return CreateGroupSection.autoDelete.rawValue
             case .member:
                 return CreateGroupSection.members.rawValue
             case .locationHeader, .location, .changeLocation, .locationInfo:
@@ -93,8 +114,24 @@ private enum CreateGroupEntry: ItemListNodeEntry {
                 return 0
             case .setProfilePhoto:
                 return 1
+            case .usernameHeader:
+                return 2
+            case .username:
+                return 3
+            case .usernameStatus:
+                return 4
+            case .usernameInfo:
+                return 5
+            case .topics:
+                return 6
+            case .topicsInfo:
+                return 7
+            case .autoDelete:
+                return 8
+            case .autoDeleteInfo:
+                return 9
             case let .member(index, _, _, _, _, _, _):
-                return 2 + index
+                return 10 + index
             case .locationHeader:
                 return 10000
             case .location:
@@ -142,6 +179,55 @@ private enum CreateGroupEntry: ItemListNodeEntry {
                 }
             case let .setProfilePhoto(lhsTheme, lhsText):
                 if case let .setProfilePhoto(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
+                    return true
+                } else {
+                    return false
+                }
+            
+            case let .usernameHeader(lhsTheme, lhsText):
+                if case let .usernameHeader(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
+                    return true
+                } else {
+                    return false
+                }
+            case let .username(lhsTheme, lhsText, lhsValue):
+                if case let .username(rhsTheme, rhsText, rhsValue) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsValue == rhsValue {
+                    return true
+                } else {
+                    return false
+                }
+            case let .usernameStatus(lhsTheme, lhsAddressName, lhsStatus, lhsText, lhsUsername):
+                if case let .usernameStatus(rhsTheme, rhsAddressName, rhsStatus, rhsText, rhsUsername) = rhs, lhsTheme === rhsTheme, lhsAddressName == rhsAddressName, lhsStatus == rhsStatus, lhsText == rhsText, lhsUsername == rhsUsername {
+                    return true
+                } else {
+                    return false
+                }
+            case let .usernameInfo(lhsTheme, lhsText):
+                if case let .usernameInfo(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
+                    return true
+                } else {
+                    return false
+                }
+            case let .topics(lhsTheme, lhsText):
+                if case let .topics(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
+                    return true
+                } else {
+                    return false
+                }
+            case let .topicsInfo(lhsTheme, lhsText):
+                if case let .topicsInfo(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
+                    return true
+                } else {
+                    return false
+                }
+            case let .autoDelete(title, value):
+                if case .autoDelete(title, value) = rhs {
+                    return true
+                } else {
+                    return false
+                }
+            case let .autoDeleteInfo(text):
+                if case .autoDeleteInfo(text) = rhs {
                     return true
                 } else {
                     return false
@@ -233,7 +319,7 @@ private enum CreateGroupEntry: ItemListNodeEntry {
         let arguments = arguments as! CreateGroupArguments
         switch self {
             case let .groupInfo(_, _, dateTimeFormat, peer, state, avatar):
-                return ItemListAvatarAndNameInfoItem(accountContext: arguments.context, presentationData: presentationData, dateTimeFormat: dateTimeFormat, mode: .editSettings, peer: peer.flatMap(EnginePeer.init), presence: nil, memberCount: nil, state: state, sectionId: ItemListSectionId(self.section), style: .blocks(withTopInset: false, withExtendedBottomInset: false), editingNameUpdated: { editingName in
+                return ItemListAvatarAndNameInfoItem(itemContext: .accountContext(arguments.context), presentationData: presentationData, dateTimeFormat: dateTimeFormat, mode: .editSettings, peer: peer.flatMap(EnginePeer.init), presence: nil, memberCount: nil, state: state, sectionId: ItemListSectionId(self.section), style: .blocks(withTopInset: false, withExtendedBottomInset: false), editingNameUpdated: { editingName in
                     arguments.updateEditingName(editingName)
                 }, editingNameCompleted: {
                     arguments.done()
@@ -244,6 +330,47 @@ private enum CreateGroupEntry: ItemListNodeEntry {
                 return ItemListActionItem(presentationData: presentationData, title: text, kind: .generic, alignment: .natural, sectionId: ItemListSectionId(self.section), style: .blocks, action: {
                     arguments.changeProfilePhoto()
                 })
+            case let .usernameHeader(_, title):
+                return ItemListSectionHeaderItem(presentationData: presentationData, text: title, sectionId: self.section)
+            case let .username(theme, placeholder, text):
+                return ItemListSingleLineInputItem(presentationData: presentationData, title: NSAttributedString(string: "t.me/", textColor: theme.list.itemPrimaryTextColor), text: text, placeholder: placeholder, type: .username, clearType: .always, tag: nil, sectionId: self.section, textUpdated: { updatedText in
+                    arguments.updatePublicLinkText(updatedText)
+                }, action: {
+                })
+            case let .usernameStatus(_, _, status, text, username):
+                var displayActivity = false
+                let textColor: ItemListActivityTextItem.TextColor
+                switch status {
+                case .invalidFormat:
+                    textColor = .destructive
+                case let .availability(availability):
+                    switch availability {
+                    case .available:
+                        textColor = .constructive
+                    case .purchaseAvailable:
+                        textColor = .generic
+                    case .invalid, .taken:
+                        textColor = .destructive
+                    }
+                case .checking:
+                    textColor = .generic
+                    displayActivity = true
+                }
+                return ItemListActivityTextItem(displayActivity: displayActivity, presentationData: presentationData, text: text, color: textColor, linkAction: { _ in
+                    arguments.openAuction(username)
+                }, sectionId: self.section)
+            case let .usernameInfo(_, text):
+                return ItemListTextItem(presentationData: presentationData, text: .markdown(text), sectionId: self.section)
+            case let .topics(_, text):
+                return ItemListSwitchItem(presentationData: presentationData, icon: UIImage(bundleImageName: "Settings/Menu/Topics")?.precomposed(), title: text, value: true, enabled: false, sectionId: self.section, style: .blocks, updated: { _ in })
+            case let .topicsInfo(_, text):
+                return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
+            case let .autoDelete(text, value):
+                return ItemListDisclosureItem(presentationData: presentationData, title: text, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .optionArrows, action: {
+                    arguments.updateAutoDelete()
+                }, tag: CreateGroupEntryTag.autoDelete)
+            case let .autoDeleteInfo(text):
+                return ItemListTextItem(presentationData: presentationData, text: .markdown(text), sectionId: self.section)
             case let .member(_, _, _, dateTimeFormat, nameDisplayOrder, peer, presence):
                 return ItemListPeerItem(presentationData: presentationData, dateTimeFormat: dateTimeFormat, nameDisplayOrder: nameDisplayOrder, context: arguments.context, peer: EnginePeer(peer), presence: presence.flatMap(EnginePeer.Presence.init), text: .presence, label: .none, editing: ItemListPeerItemEditing(editable: false, editing: false, revealed: false), switchValue: nil, enabled: true, selectable: true, sectionId: self.section, action: nil, setPeerIdWithRevealedOptions: { _, _ in }, removePeer: { _ in })
             case let .locationHeader(_, title):
@@ -273,28 +400,12 @@ private struct CreateGroupState: Equatable {
     var nameSetFromVenue: Bool
     var avatar: ItemListAvatarAndNameInfoItemUpdatingAvatar?
     var location: PeerGeoLocation?
-    
-    static func ==(lhs: CreateGroupState, rhs: CreateGroupState) -> Bool {
-        if lhs.creating != rhs.creating {
-            return false
-        }
-        if lhs.editingName != rhs.editingName {
-            return false
-        }
-        if lhs.nameSetFromVenue != rhs.nameSetFromVenue {
-            return false
-        }
-        if lhs.avatar != rhs.avatar {
-            return false
-        }
-        if lhs.location != rhs.location {
-            return false
-        }
-        return true
-    }
+    var autoremoveTimeout: Int32?
+    var editingPublicLinkText: String?
+    var addressNameValidationStatus: AddressNameValidationStatus?
 }
 
-private func createGroupEntries(presentationData: PresentationData, state: CreateGroupState, peerIds: [PeerId], view: MultiplePeersView, venues: [TelegramMediaMap]?) -> [CreateGroupEntry] {
+private func createGroupEntries(presentationData: PresentationData, state: CreateGroupState, peerIds: [PeerId], view: MultiplePeersView, venues: [TelegramMediaMap]?, globalAutoremoveTimeout: Int32, requestPeer: ReplyMarkupButtonRequestPeerType.Group?) -> [CreateGroupEntry] {
     var entries: [CreateGroupEntry] = []
     
     let groupInfoState = ItemListAvatarAndNameInfoItemState(editingName: state.editingName, updatingName: nil)
@@ -302,6 +413,69 @@ private func createGroupEntries(presentationData: PresentationData, state: Creat
     let peer = TelegramGroup(id: PeerId(namespace: .max, id: PeerId.Id._internalFromInt64Value(0)), title: state.editingName.composedTitle, photo: [], participantCount: 0, role: .creator(rank: nil), membership: .Member, flags: [], defaultBannedRights: nil, migrationReference: nil, creationDate: 0, version: 0)
     
     entries.append(.groupInfo(presentationData.theme, presentationData.strings, presentationData.dateTimeFormat, peer, groupInfoState, state.avatar))
+    
+    if let requestPeer {
+        if let hasUsername = requestPeer.hasUsername, hasUsername {
+            let currentUsername = state.editingPublicLinkText ?? ""
+            entries.append(.usernameHeader(presentationData.theme, presentationData.strings.CreateGroup_PublicLinkTitle.uppercased()))
+            entries.append(.username(presentationData.theme, presentationData.strings.Group_PublicLink_Placeholder, currentUsername))
+            
+            if let status = state.addressNameValidationStatus {
+                let statusText: String
+                switch status {
+                    case let .invalidFormat(error):
+                        switch error {
+                            case .startsWithDigit:
+                                statusText = presentationData.strings.Username_InvalidStartsWithNumber
+                            case .startsWithUnderscore:
+                                statusText = presentationData.strings.Username_InvalidStartsWithUnderscore
+                            case .endsWithUnderscore:
+                                statusText = presentationData.strings.Username_InvalidEndsWithUnderscore
+                            case .invalidCharacters:
+                                statusText = presentationData.strings.Username_InvalidCharacters
+                            case .tooShort:
+                                statusText = presentationData.strings.Username_InvalidTooShort
+                        }
+                    case let .availability(availability):
+                        switch availability {
+                            case .available:
+                            statusText = presentationData.strings.Username_UsernameIsAvailable(currentUsername).string
+                            case .invalid:
+                                statusText = presentationData.strings.Username_InvalidCharacters
+                            case .taken:
+                                statusText = presentationData.strings.Username_InvalidTaken
+                            case .purchaseAvailable:
+                                var markdownString = presentationData.strings.Username_UsernamePurchaseAvailable
+                                let entities = generateTextEntities(markdownString, enabledTypes: [.mention])
+                                if let entity = entities.first {
+                                    markdownString.insert(contentsOf: "]()", at: markdownString.index(markdownString.startIndex, offsetBy: entity.range.upperBound))
+                                    markdownString.insert(contentsOf: "[", at: markdownString.index(markdownString.startIndex, offsetBy: entity.range.lowerBound))
+                                }
+                                statusText = markdownString
+                        }
+                    case .checking:
+                        statusText = presentationData.strings.Username_CheckingUsername
+                }
+                entries.append(.usernameStatus(presentationData.theme, currentUsername, status, statusText, currentUsername))
+            }
+            
+            entries.append(.usernameInfo(presentationData.theme, presentationData.strings.CreateGroup_PublicLinkInfo))
+        }
+        if let isForum = requestPeer.isForum, isForum {
+            entries.append(.topics(presentationData.theme, presentationData.strings.PeerInfo_OptionTopics))
+            entries.append(.topicsInfo(presentationData.theme, presentationData.strings.PeerInfo_OptionTopicsText))
+        }
+    } else {
+        let autoremoveTimeout = state.autoremoveTimeout ?? globalAutoremoveTimeout
+        let autoRemoveText: String
+        if autoremoveTimeout == 0 {
+            autoRemoveText = presentationData.strings.Autoremove_OptionOff
+        } else {
+            autoRemoveText = timeIntervalString(strings: presentationData.strings, value: autoremoveTimeout)
+        }
+        entries.append(.autoDelete(title: presentationData.strings.CreateGroup_AutoDeleteTitle, value: autoRemoveText))
+        entries.append(.autoDeleteInfo(presentationData.strings.CreateGroup_AutoDeleteText))
+    }
     
     var peers: [Peer] = []
     for peerId in peerIds {
@@ -359,13 +533,13 @@ private func createGroupEntries(presentationData: PresentationData, state: Creat
     return entries
 }
 
-public func createGroupControllerImpl(context: AccountContext, peerIds: [PeerId], initialTitle: String? = nil, mode: CreateGroupMode = .generic, completion: ((PeerId, @escaping () -> Void) -> Void)? = nil) -> ViewController {
+public func createGroupControllerImpl(context: AccountContext, peerIds: [PeerId], initialTitle: String? = nil, mode: CreateGroupMode = .generic, willComplete: @escaping (String, @escaping () -> Void) -> Void = { _, complete in complete() }, completion: ((PeerId, @escaping () -> Void) -> Void)? = nil) -> ViewController {
     var location: PeerGeoLocation?
     if case let .locatedGroup(latitude, longitude, address) = mode {
         location = PeerGeoLocation(latitude: latitude, longitude: longitude, address: address ?? "")
     }
     
-    let initialState = CreateGroupState(creating: false, editingName: .title(title: initialTitle ?? "", type: .group), nameSetFromVenue: false, avatar: nil, location: location)
+    let initialState = CreateGroupState(creating: false, editingName: .title(title: initialTitle ?? "", type: .group), nameSetFromVenue: false, avatar: nil, location: location, autoremoveTimeout: nil, editingPublicLinkText: nil, addressNameValidationStatus: nil)
     let statePromise = ValuePromise(initialState, ignoreRepeated: true)
     let stateValue = Atomic(value: initialState)
     let updateState: ((CreateGroupState) -> CreateGroupState) -> Void = { f in
@@ -375,16 +549,66 @@ public func createGroupControllerImpl(context: AccountContext, peerIds: [PeerId]
     var replaceControllerImpl: ((ViewController) -> Void)?
     var dismissImpl: (() -> Void)?
     var presentControllerImpl: ((ViewController, Any?) -> Void)?
+    var presentInGlobalOverlay: ((ViewController) -> Void)?
     var pushImpl: ((ViewController) -> Void)?
     var endEditingImpl: (() -> Void)?
     var ensureItemVisibleImpl: ((CreateGroupEntryTag, Bool) -> Void)?
+    var findAutoremoveReferenceNode: (() -> ItemListDisclosureItemNode?)?
+    var selectTitleImpl: (() -> Void)?
     
     let actionsDisposable = DisposableSet()
+    
+    let checkAddressNameDisposable = MetaDisposable()
+    actionsDisposable.add(checkAddressNameDisposable)
     
     let currentAvatarMixin = Atomic<TGMediaAvatarMenuMixin?>(value: nil)
     
     let uploadedAvatar = Promise<UploadedPeerPhotoData>()
     var uploadedVideoAvatar: (Promise<UploadedPeerPhotoData?>, Double?)? = nil
+    
+    if initialTitle == nil && peerIds.count > 0 && peerIds.count < 5 {
+        let _ = (context.engine.data.get(
+            TelegramEngine.EngineData.Item.Peer.Peer(id: context.account.peerId),
+            EngineDataList(
+                peerIds.map(TelegramEngine.EngineData.Item.Peer.Peer.init)
+            )
+        )
+        |> deliverOnMainQueue).start(next: { accountPeer, peers in
+            var allNames: [String] = []
+            if case let .user(user) = accountPeer, let firstName = user.firstName, !firstName.isEmpty {
+                allNames.append(firstName)
+            }
+            for peer in peers {
+                if case let .user(user) = peer, let firstName = user.firstName, !firstName.isEmpty {
+                    allNames.append(firstName)
+                }
+            }
+            
+            if allNames.count > 1 {
+                let presentationData = context.sharedContext.currentPresentationData.with { $0 }
+                var title: String = ""
+                for i in 0 ..< allNames.count {
+                    if i == 0 {
+                    } else if i < allNames.count - 1 {
+                        title.append(presentationData.strings.CreateGroup_PeersTitleDelimeter)
+                    } else {
+                        title.append(presentationData.strings.CreateGroup_PeersTitleLastDelimeter)
+                    }
+                    title.append(allNames[i])
+                }
+                
+                updateState { current in
+                    var current = current
+                    current.editingName = .title(title: title, type: .group)
+                    return current
+                }
+                
+                Queue.mainQueue().after(0.3) {
+                    selectTitleImpl?()
+                }
+            }
+        })
+    }
     
     let addressPromise = Promise<String?>(nil)
     let venuesPromise = Promise<[TelegramMediaMap]?>(nil)
@@ -399,7 +623,24 @@ public func createGroupControllerImpl(context: AccountContext, peerIds: [PeerId]
         }
         
         venuesPromise.set(nearbyVenues(context: context, latitude: latitude, longitude: longitude)
-        |> map(Optional.init))
+        |> map { contextResult -> [TelegramMediaMap]? in
+            if let contextResult {
+                var resultVenues: [TelegramMediaMap] = []
+                for result in contextResult.results {
+                    switch result.message {
+                        case let .mapLocation(mapMedia, _):
+                            if let _ = mapMedia.venue {
+                                resultVenues.append(mapMedia)
+                            }
+                        default:
+                            break
+                    }
+                }
+                return resultVenues
+            } else {
+                return nil
+            }
+        })
     }
     
     let arguments = CreateGroupArguments(context: context, updateEditingName: { editingName in
@@ -410,46 +651,36 @@ public func createGroupControllerImpl(context: AccountContext, peerIds: [PeerId]
             return current
         }
     }, done: {
-        let (creating, title, location) = stateValue.with { state -> (Bool, String, PeerGeoLocation?) in
-            return (state.creating, state.editingName.composedTitle, state.location)
+        let (creating, title, location, publicLink) = stateValue.with { state -> (Bool, String, PeerGeoLocation?, String?) in
+            return (state.creating, state.editingName.composedTitle, state.location, state.editingPublicLinkText)
         }
         
         if !creating && !title.isEmpty {
-            updateState { current in
-                var current = current
-                current.creating = true
-                return current
-            }
-            endEditingImpl?()
-            
-            let createSignal: Signal<PeerId?, CreateGroupError>
-            switch mode {
-                case .generic:
-                    if title.contains("*forum") {
+            willComplete(title, {
+                let _ = (context.engine.data.get(TelegramEngine.EngineData.Item.Configuration.GlobalAutoremoveTimeout())
+                |> deliverOnMainQueue).start(next: { maybeGlobalAutoremoveTimeout in
+                    updateState { current in
+                        var current = current
+                        current.creating = true
+                        return current
+                    }
+                    endEditingImpl?()
+                    
+                    let globalAutoremoveTimeout: Int32 = maybeGlobalAutoremoveTimeout ?? 0
+                    let autoremoveTimeout = stateValue.with({ $0 }).autoremoveTimeout ?? globalAutoremoveTimeout
+                    let ttlPeriod: Int32? = autoremoveTimeout == 0 ? nil : autoremoveTimeout
+                    
+                    var createSignal: Signal<CreateGroupResult?, CreateGroupError>
+                    switch mode {
+                    case .generic:
+                        createSignal = context.engine.peers.createGroup(title: title, peerIds: peerIds, ttlPeriod: ttlPeriod)
+                    case .supergroup:
                         createSignal = context.engine.peers.createSupergroup(title: title, description: nil)
-                        |> map(Optional.init)
+                        |> map { peerId -> CreateGroupResult? in
+                            return CreateGroupResult(peerId: peerId, result: TelegramInvitePeersResult(forbiddenPeers: []))
+                        }
                         |> mapError { error -> CreateGroupError in
                             switch error {
-                                case .generic:
-                                    return .generic
-                                case .restricted:
-                                    return .restricted
-                                case .tooMuchJoined:
-                                    return .tooMuchJoined
-                                case .tooMuchLocationBasedGroups:
-                                    return .tooMuchLocationBasedGroups
-                                case let .serverProvided(error):
-                                    return .serverProvided(error)
-                            }
-                        }
-                    } else {
-                        createSignal = context.engine.peers.createGroup(title: title, peerIds: peerIds)
-                    }
-                case .supergroup:
-                    createSignal = context.engine.peers.createSupergroup(title: title, description: nil)
-                    |> map(Optional.init)
-                    |> mapError { error -> CreateGroupError in
-                        switch error {
                             case .generic:
                                 return .generic
                             case .restricted:
@@ -460,23 +691,25 @@ public func createGroupControllerImpl(context: AccountContext, peerIds: [PeerId]
                                 return .tooMuchLocationBasedGroups
                             case let .serverProvided(error):
                                 return .serverProvided(error)
+                            }
                         }
-                    }
-                case .locatedGroup:
-                    guard let location = location else {
-                        return
-                    }
-                    
-                    createSignal = addressPromise.get()
-                    |> castError(CreateGroupError.self)
-                    |> mapToSignal { address -> Signal<PeerId?, CreateGroupError> in
-                        guard let address = address else {
-                            return .complete()
+                    case .locatedGroup:
+                        guard let location = location else {
+                            return
                         }
-                        return context.engine.peers.createSupergroup(title: title, description: nil, location: (location.latitude, location.longitude, address))
-                        |> map(Optional.init)
-                        |> mapError { error -> CreateGroupError in
-                            switch error {
+                        
+                        createSignal = addressPromise.get()
+                        |> castError(CreateGroupError.self)
+                        |> mapToSignal { address -> Signal<CreateGroupResult?, CreateGroupError> in
+                            guard let address = address else {
+                                return .complete()
+                            }
+                            return context.engine.peers.createSupergroup(title: title, description: nil, location: (location.latitude, location.longitude, address))
+                            |> map { peerId -> CreateGroupResult? in
+                                return CreateGroupResult(peerId: peerId, result: TelegramInvitePeersResult(forbiddenPeers: []))
+                            }
+                            |> mapError { error -> CreateGroupError in
+                                switch error {
                                 case .generic:
                                     return .generic
                                 case .restricted:
@@ -487,81 +720,173 @@ public func createGroupControllerImpl(context: AccountContext, peerIds: [PeerId]
                                     return .tooMuchLocationBasedGroups
                                 case let .serverProvided(error):
                                     return .serverProvided(error)
+                                }
+                            }
+                        }
+                    case let .requestPeer(group):
+                        var isForum = false
+                        if let isForumRequested = group.isForum, isForumRequested {
+                            isForum = true
+                        }
+                        
+                        let createGroupSignal: (Bool) -> Signal<CreateGroupResult?, CreateGroupError> = { isForum in
+                            return context.engine.peers.createSupergroup(title: title, description: nil, isForum: isForum)
+                            |> map { peerId -> CreateGroupResult? in
+                                return CreateGroupResult(peerId: peerId, result: TelegramInvitePeersResult(forbiddenPeers: []))
+                            }
+                            |> mapError { error -> CreateGroupError in
+                                switch error {
+                                case .generic:
+                                    return .generic
+                                case .restricted:
+                                    return .restricted
+                                case .tooMuchJoined:
+                                    return .tooMuchJoined
+                                case .tooMuchLocationBasedGroups:
+                                    return .tooMuchLocationBasedGroups
+                                case let .serverProvided(error):
+                                    return .serverProvided(error)
+                                }
+                            }
+                        }
+                        if let publicLink, !publicLink.isEmpty {
+                            createSignal = createGroupSignal(isForum)
+                            |> mapToSignal { result in
+                                if let result = result {
+                                    return context.engine.peers.updateAddressName(domain: .peer(result.peerId), name: publicLink)
+                                    |> mapError { _ in
+                                        return .generic
+                                    }
+                                    |> map { _ -> CreateGroupResult? in
+                                        return result
+                                    }
+                                } else {
+                                    return .fail(.generic)
+                                }
+                            }
+                        } else if isForum || group.userAdminRights != nil {
+                            createSignal = createGroupSignal(isForum)
+                        } else {
+                            createSignal = context.engine.peers.createGroup(title: title, peerIds: peerIds, ttlPeriod: nil)
+                        }
+
+                        if group.userAdminRights?.rights.contains(.canBeAnonymous) == true {
+                            createSignal = createSignal
+                            |> mapToSignal { result in
+                                if let result = result {
+                                    return context.engine.peers.updateChannelAdminRights(peerId: result.peerId, adminId: context.account.peerId, rights: TelegramChatAdminRights(rights: .canBeAnonymous), rank: nil)
+                                    |> mapError { _ in
+                                        return .generic
+                                    }
+                                    |> map { _ in
+                                        return result
+                                    }
+                                } else {
+                                    return .fail(.generic)
+                                }
                             }
                         }
                     }
-            }
-            
-            actionsDisposable.add((createSignal
-            |> mapToSignal { peerId -> Signal<PeerId?, CreateGroupError> in
-                guard let peerId = peerId else {
-                    return .single(nil)
-                }
-                let updatingAvatar = stateValue.with {
-                    return $0.avatar
-                }
-                if let _ = updatingAvatar {
-                    return context.engine.peers.updatePeerPhoto(peerId: peerId, photo: uploadedAvatar.get(), video: uploadedVideoAvatar?.0.get(), videoStartTimestamp: uploadedVideoAvatar?.1, mapResourceToAvatarSizes: { resource, representations in
-                        return mapResourceToAvatarSizes(postbox: context.account.postbox, resource: resource, representations: representations)
-                    })
-                    |> ignoreValues
-                    |> `catch` { _ -> Signal<Never, CreateGroupError> in
-                        return .complete()
+                    
+                    let _ = createSignal
+                    let _ = replaceControllerImpl
+                    let _ = dismissImpl
+                    let _ = uploadedVideoAvatar
+                    
+                    actionsDisposable.add((createSignal
+                    |> mapToSignal { result -> Signal<CreateGroupResult?, CreateGroupError> in
+                        guard let result = result else {
+                            return .single(nil)
+                        }
+                        let updatingAvatar = stateValue.with {
+                            return $0.avatar
+                        }
+                        if let _ = updatingAvatar {
+                            return context.engine.peers.updatePeerPhoto(peerId: result.peerId, photo: uploadedAvatar.get(), video: uploadedVideoAvatar?.0.get(), videoStartTimestamp: uploadedVideoAvatar?.1, mapResourceToAvatarSizes: { resource, representations in
+                                return mapResourceToAvatarSizes(postbox: context.account.postbox, resource: resource, representations: representations)
+                            })
+                            |> ignoreValues
+                            |> `catch` { _ -> Signal<Never, CreateGroupError> in
+                                return .complete()
+                            }
+                            |> mapToSignal { _ -> Signal<CreateGroupResult?, CreateGroupError> in
+                            }
+                            |> then(.single(result))
+                        } else {
+                            return .single(result)
+                        }
                     }
-                    |> mapToSignal { _ -> Signal<PeerId?, CreateGroupError> in
-                    }
-                    |> then(.single(peerId))
-                } else {
-                    return .single(peerId)
-                }
-            }
-            |> deliverOnMainQueue
-            |> afterDisposed {
-                Queue.mainQueue().async {
-                    updateState { current in
-                        var current = current
-                        current.creating = false
-                        return current
-                    }
-                }
-            }).start(next: { peerId in
-                if let peerId = peerId {
-                    if let completion = completion {
-                        completion(peerId, {
-                            dismissImpl?()
-                        })
-                    } else {
-                        let controller = ChatControllerImpl(context: context, chatLocation: .peer(id: peerId))
-                        replaceControllerImpl?(controller)
-                    }
-                }
-            }, error: { error in
-                if case .serverProvided = error {
-                    return
-                }
-
-                let presentationData = context.sharedContext.currentPresentationData.with { $0 }
-                let text: String?
-                switch error {
-                    case .privacy:
-                        text = presentationData.strings.Privacy_GroupsAndChannels_InviteToChannelMultipleError
-                    case .generic:
-                        text = presentationData.strings.Login_UnknownError
-                    case .restricted:
-                        text = presentationData.strings.Common_ActionNotAllowedError
-                    case .tooMuchJoined:
-                        pushImpl?(oldChannelsController(context: context, intent: .create))
-                        return
-                    case .tooMuchLocationBasedGroups:
-                        text = presentationData.strings.CreateGroup_ErrorLocatedGroupsTooMuch
-                    default:
-                        text = nil
-                }
-                
-                if let text = text {
-                    presentControllerImpl?(textAlertController(context: context, title: nil, text: text, actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]), nil)
-                }
-            }))
+                    |> deliverOnMainQueue
+                    |> afterDisposed {
+                        Queue.mainQueue().async {
+                            updateState { current in
+                                var current = current
+                                current.creating = false
+                                return current
+                            }
+                        }
+                    }).start(next: { result in
+                        if let result = result {
+                            if let completion = completion {
+                                completion(result.peerId, {
+                                    dismissImpl?()
+                                })
+                            } else {
+                                let controller = ChatControllerImpl(context: context, chatLocation: .peer(id: result.peerId))
+                                replaceControllerImpl?(controller)
+                                
+                                if !result.result.forbiddenPeers.isEmpty {
+                                    context.account.viewTracker.forceUpdateCachedPeerData(peerId: result.peerId)
+                                    let _ = (context.engine.data.subscribe(
+                                        TelegramEngine.EngineData.Item.Peer.ExportedInvitation(id: result.peerId)
+                                    )
+                                    |> filter { $0 != nil }
+                                    |> take(1)
+                                    |> timeout(1.0, queue: .mainQueue(), alternate: .single(nil))
+                                    |> deliverOnMainQueue).start(next: { [weak controller] exportedInvitation in
+                                        let _ = (context.engine.data.get(
+                                            TelegramEngine.EngineData.Item.Peer.Peer(id: result.peerId)
+                                        )
+                                        |> deliverOnMainQueue).start(next: { peer in
+                                            if let peer, let exportedInvitation, let link = exportedInvitation.link {
+                                                
+                                                let inviteScreen = SendInviteLinkScreen(context: context, peer: peer, link: link, peers: result.result.forbiddenPeers)
+                                                controller?.push(inviteScreen)
+                                            }
+                                        })
+                                    })
+                                }
+                            }
+                        }
+                    }, error: { error in
+                        if case .serverProvided = error {
+                            return
+                        }
+                        
+                        let presentationData = context.sharedContext.currentPresentationData.with { $0 }
+                        let text: String?
+                        switch error {
+                        case .privacy:
+                            text = presentationData.strings.Privacy_GroupsAndChannels_InviteToChannelMultipleError
+                        case .generic:
+                            text = presentationData.strings.Login_UnknownError
+                        case .restricted:
+                            text = presentationData.strings.Common_ActionNotAllowedError
+                        case .tooMuchJoined:
+                            pushImpl?(oldChannelsController(context: context, intent: .create))
+                            return
+                        case .tooMuchLocationBasedGroups:
+                            text = presentationData.strings.CreateGroup_ErrorLocatedGroupsTooMuch
+                        default:
+                            text = nil
+                        }
+                        
+                        if let text = text {
+                            presentControllerImpl?(textAlertController(context: context, title: nil, text: text, actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]), nil)
+                        }
+                    }))
+                })
+            })
         }
     }, changeProfilePhoto: {
         endEditingImpl?()
@@ -594,7 +919,7 @@ public func createGroupControllerImpl(context: AccountContext, peerIds: [PeerId]
                 if let data = image.jpegData(compressionQuality: 0.6) {
                     let resource = LocalFileMediaResource(fileId: Int64.random(in: Int64.min ... Int64.max))
                     context.account.postbox.mediaBox.storeResourceData(resource.id, data: data)
-                    let representation = TelegramMediaImageRepresentation(dimensions: PixelDimensions(width: 640, height: 640), resource: resource, progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false)
+                    let representation = TelegramMediaImageRepresentation(dimensions: PixelDimensions(width: 640, height: 640), resource: resource, progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false, isPersonal: false)
                     uploadedAvatar.set(context.engine.peers.uploadedPeerPhoto(resource: resource))
                     uploadedVideoAvatar = nil
                     updateState { current in
@@ -609,7 +934,7 @@ public func createGroupControllerImpl(context: AccountContext, peerIds: [PeerId]
                 if let data = image.jpegData(compressionQuality: 0.6) {
                     let photoResource = LocalFileMediaResource(fileId: Int64.random(in: Int64.min ... Int64.max))
                     context.account.postbox.mediaBox.storeResourceData(photoResource.id, data: data)
-                    let representation = TelegramMediaImageRepresentation(dimensions: PixelDimensions(width: 640, height: 640), resource: photoResource, progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false)
+                    let representation = TelegramMediaImageRepresentation(dimensions: PixelDimensions(width: 640, height: 640), resource: photoResource, progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false, isPersonal: false)
                     updateState { state in
                         var state = state
                         state.avatar = .image(representation, true)
@@ -622,19 +947,18 @@ public func createGroupControllerImpl(context: AccountContext, peerIds: [PeerId]
                     }
                     
                     let signal = Signal<TelegramMediaResource?, UploadPeerPhotoError> { subscriber in
-                        
                         let entityRenderer: LegacyPaintEntityRenderer? = adjustments.flatMap { adjustments in
                             if let paintingData = adjustments.paintingData, paintingData.hasAnimation {
-                                return LegacyPaintEntityRenderer(account: context.account, adjustments: adjustments)
+                                return LegacyPaintEntityRenderer(postbox: context.account.postbox, adjustments: adjustments)
                             } else {
                                 return nil
                             }
                         }
+                        
+                        let tempFile = EngineTempBox.shared.tempFile(fileName: "video.mp4")
                         let uploadInterface = LegacyLiveUploadInterface(context: context)
                         let signal: SSignal
-                        if let asset = asset as? AVAsset {
-                            signal = TGMediaVideoConverter.convert(asset, adjustments: adjustments, watcher: uploadInterface, entityRenderer: entityRenderer)!
-                        } else if let url = asset as? URL, let data = try? Data(contentsOf: url, options: [.mappedRead]), let image = UIImage(data: data), let entityRenderer = entityRenderer {
+                        if let url = asset as? URL, url.absoluteString.hasSuffix(".jpg"), let data = try? Data(contentsOf: url, options: [.mappedRead]), let image = UIImage(data: data), let entityRenderer = entityRenderer {
                             let durationSignal: SSignal = SSignal(generator: { subscriber in
                                 let disposable = (entityRenderer.duration()).start(next: { duration in
                                     subscriber.putNext(duration)
@@ -647,12 +971,14 @@ public func createGroupControllerImpl(context: AccountContext, peerIds: [PeerId]
                             })
                             signal = durationSignal.map(toSignal: { duration -> SSignal in
                                 if let duration = duration as? Double {
-                                    return TGMediaVideoConverter.renderUIImage(image, duration: duration, adjustments: adjustments, watcher: nil, entityRenderer: entityRenderer)!
+                                    return TGMediaVideoConverter.renderUIImage(image, duration: duration, adjustments: adjustments, path: tempFile.path, watcher: nil, entityRenderer: entityRenderer)!
                                 } else {
                                     return SSignal.single(nil)
                                 }
                             })
                            
+                        } else if let asset = asset as? AVAsset {
+                            signal = TGMediaVideoConverter.convert(asset, adjustments: adjustments, path: tempFile.path, watcher: uploadInterface, entityRenderer: entityRenderer)!
                         } else {
                             signal = SSignal.complete()
                         }
@@ -678,6 +1004,8 @@ public func createGroupControllerImpl(context: AccountContext, peerIds: [PeerId]
                                         }
                                         context.account.postbox.mediaBox.storeResourceData(resource.id, data: data, synchronous: true)
                                         subscriber.putNext(resource)
+                                        
+                                        EngineTempBox.shared.dispose(tempFile)
                                     }
                                 }
                                 subscriber.putCompletion()
@@ -720,7 +1048,11 @@ public func createGroupControllerImpl(context: AccountContext, peerIds: [PeerId]
                 }
             }
             
-            let mixin = TGMediaAvatarMenuMixin(context: legacyController.context, parentController: emptyController, hasSearchButton: true, hasDeleteButton: stateValue.with({ $0.avatar }) != nil, hasViewButton: false, personalPhoto: false, isVideo: false, saveEditedPhotos: false, saveCapturedMedia: false, signup: false)!
+            let keyboardInputData = Promise<AvatarKeyboardInputData>()
+            keyboardInputData.set(AvatarEditorScreen.inputData(context: context, isGroup: true))
+            
+            let mixin = TGMediaAvatarMenuMixin(context: legacyController.context, parentController: emptyController, hasSearchButton: true, hasDeleteButton: stateValue.with({ $0.avatar }) != nil, hasViewButton: false, personalPhoto: false, isVideo: false, saveEditedPhotos: false, saveCapturedMedia: false, signup: false, forum: false, title: nil, isSuggesting: false)!
+            mixin.stickersContext = LegacyPaintStickersContext(context: context)
             let _ = currentAvatarMixin.swap(mixin)
             mixin.requestSearchController = { assetsController in
                 let controller = WebSearchController(context: context, peer: peer, chatLocation: nil, configuration: searchBotsConfiguration, mode: .avatar(initialQuery: title, completion: { result in
@@ -728,6 +1060,15 @@ public func createGroupControllerImpl(context: AccountContext, peerIds: [PeerId]
                     completedGroupPhotoImpl(result)
                 }))
                 presentControllerImpl?(controller, ViewControllerPresentationArguments(presentationAnimation: .modalSheet))
+            }
+            mixin.requestAvatarEditor = { imageCompletion, videoCompletion in
+                guard let imageCompletion, let videoCompletion else {
+                    return
+                }
+                let controller = AvatarEditorScreen(context: context, inputData: keyboardInputData.get(), peerType: .group, markup: nil)
+                controller.imageCompletion = imageCompletion
+                controller.videoCompletion = videoCompletion
+                pushImpl?(controller)
             }
             mixin.didFinishWithImage = { image in
                 if let image = image {
@@ -763,7 +1104,7 @@ public func createGroupControllerImpl(context: AccountContext, peerIds: [PeerId]
     }, changeLocation: {
         endEditingImpl?()
                  
-         let controller = LocationPickerController(context: context, mode: .pick, completion: { location, address in
+         let controller = LocationPickerController(context: context, mode: .pick, completion: { location, _, _, address, _ in
              let addressSignal: Signal<String, NoError>
              if let address = address {
                  addressSignal = .single(address)
@@ -821,22 +1162,150 @@ public func createGroupControllerImpl(context: AccountContext, peerIds: [PeerId]
             }
         })
         ensureItemVisibleImpl?(.info, true)
+    }, updateAutoDelete: {
+        let _ = (context.engine.data.get(TelegramEngine.EngineData.Item.Configuration.GlobalAutoremoveTimeout())
+        |> deliverOnMainQueue).start(next: { maybeGlobalAutoremoveTimeout in
+            var subItems: [ContextMenuItem] = []
+            
+            let globalAutoremoveTimeout: Int32 = maybeGlobalAutoremoveTimeout ?? 0
+            let currentValue: Int32 = stateValue.with({ $0 }).autoremoveTimeout ?? globalAutoremoveTimeout
+            
+            let applyValue: (Int32) -> Void = { value in
+                updateState { state in
+                    var state = state
+                    state.autoremoveTimeout = value
+                    return state
+                }
+            }
+            
+            let presentationData = context.sharedContext.currentPresentationData.with { $0 }
+            subItems.append(.action(ContextMenuActionItem(text: presentationData.strings.Autoremove_OptionOff, icon: { theme in
+                if currentValue == 0 {
+                    return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Check"), color: theme.contextMenu.primaryColor)
+                } else {
+                    return nil
+                }
+            }, action: { _, f in
+                applyValue(0)
+                f(.default)
+            })))
+            subItems.append(.separator)
+            
+            var presetValues: [Int32] = [
+                1 * 24 * 60 * 60,
+                7 * 24 * 60 * 60,
+                31 * 24 * 60 * 60
+            ]
+            if currentValue != 0 && !presetValues.contains(currentValue) {
+                presetValues.append(currentValue)
+                presetValues.sort()
+            }
+            
+            for value in presetValues {
+                subItems.append(.action(ContextMenuActionItem(text: timeIntervalString(strings: presentationData.strings, value: value), icon: { theme in
+                    if currentValue == value {
+                        return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Check"), color: theme.contextMenu.primaryColor)
+                    } else {
+                        return nil
+                    }
+                }, action: { _, f in
+                    applyValue(value)
+                    f(.default)
+                })))
+            }
+            
+            subItems.append(.action(ContextMenuActionItem(text: presentationData.strings.Autoremove_SetCustomTime, icon: { _ in
+                return nil
+            }, action: { _, f in
+                f(.default)
+                
+                let controller = ChatTimerScreen(context: context, updatedPresentationData: nil, style: .default, mode: .autoremove, currentTime: currentValue == 0 ? nil : currentValue, dismissByTapOutside: true, completion: { value in
+                    applyValue(value)
+                })
+                endEditingImpl?()
+                presentControllerImpl?(controller, nil)
+            })))
+            
+            if let sourceNode = findAutoremoveReferenceNode?() {
+                let items: Signal<ContextController.Items, NoError> = .single(ContextController.Items(content: .list(subItems)))
+                let source: ContextContentSource = .reference(CreateGroupContextReferenceContentSource(sourceView: sourceNode.labelNode.view))
+                
+                let contextController = ContextController(
+                    presentationData: presentationData,
+                    source: source,
+                    items: items,
+                    gesture: nil
+                )
+                sourceNode.updateHasContextMenu(hasContextMenu: true)
+                contextController.dismissed = { [weak sourceNode] in
+                    sourceNode?.updateHasContextMenu(hasContextMenu: false)
+                }
+                presentInGlobalOverlay?(contextController)
+            }
+        })
+    }, updatePublicLinkText: { text in
+        if text.isEmpty {
+            checkAddressNameDisposable.set(nil)
+            updateState { state in
+                var updated = state
+                updated.editingPublicLinkText = text
+                updated.addressNameValidationStatus = nil
+                return updated
+            }
+        } else {
+            updateState { state in
+                var updated = state
+                updated.editingPublicLinkText = text
+                return updated
+            }
+            
+            checkAddressNameDisposable.set((context.engine.peers.validateAddressNameInteractive(domain: .peer(PeerId(namespace: Namespaces.Peer.CloudGroup, id: PeerId.Id._internalFromInt64Value(0))), name: text)
+            |> deliverOnMainQueue).start(next: { result in
+                updateState { state in
+                    var updated = state
+                    updated.addressNameValidationStatus = result
+                    return updated
+                }
+            }))
+        }
+    }, openAuction: { username in
+        endEditingImpl?()
+        
+        context.sharedContext.openExternalUrl(context: context, urlContext: .generic, url: "https://fragment.com/username/\(username)", forceExternal: true, presentationData: context.sharedContext.currentPresentationData.with { $0 }, navigationController: nil, dismissInput: {})
     })
     
-    let signal = combineLatest(context.sharedContext.presentationData, statePromise.get(), context.account.postbox.multiplePeersView(peerIds), .single(nil) |> then(addressPromise.get()), .single(nil) |> then(venuesPromise.get()))
-    |> map { presentationData, state, view, address, venues -> (ItemListControllerState, (ItemListNodeState, Any)) in
-        
+    var requestPeer: ReplyMarkupButtonRequestPeerType.Group?
+    if case let .requestPeer(peerType) = mode {
+        requestPeer = peerType
+    }
+    
+    let signal = combineLatest(queue: .mainQueue(),
+        context.sharedContext.presentationData,
+        statePromise.get(),
+        context.account.postbox.multiplePeersView(peerIds),
+        .single(nil) |> then(addressPromise.get()),
+        .single(nil) |> then(venuesPromise.get()),
+        context.engine.data.subscribe(TelegramEngine.EngineData.Item.Configuration.GlobalAutoremoveTimeout())
+    )
+    |> map { presentationData, state, view, address, venues, globalAutoremoveTimeout -> (ItemListControllerState, (ItemListNodeState, Any)) in
         let rightNavigationButton: ItemListNavigationButton
         if state.creating {
             rightNavigationButton = ItemListNavigationButton(content: .none, style: .activity, enabled: true, action: {})
         } else {
-            rightNavigationButton = ItemListNavigationButton(content: .text(presentationData.strings.Compose_Create), style: .bold, enabled: !state.editingName.composedTitle.isEmpty, action: {
+            var isEnabled = true
+            if state.editingName.composedTitle.isEmpty {
+                isEnabled = false
+            }
+            if case let .requestPeer(peerType) = mode, let hasUsername = peerType.hasUsername, hasUsername, (state.editingPublicLinkText ?? "").isEmpty {
+                isEnabled = false
+            }
+            rightNavigationButton = ItemListNavigationButton(content: .text(presentationData.strings.Compose_Create), style: .bold, enabled: isEnabled, action: {
                 arguments.done()
             })
         }
         
         let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(presentationData.strings.Compose_NewGroupTitle), leftNavigationButton: nil, rightNavigationButton: rightNavigationButton, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
-        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: createGroupEntries(presentationData: presentationData, state: state, peerIds: peerIds, view: view, venues: venues), style: .blocks, focusItemTag: CreateGroupEntryTag.info)
+        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: createGroupEntries(presentationData: presentationData, state: state, peerIds: peerIds, view: view, venues: venues, globalAutoremoveTimeout: globalAutoremoveTimeout ?? 0, requestPeer: requestPeer), style: .blocks, focusItemTag: CreateGroupEntryTag.info)
         
         return (controllerState, (listState, arguments))
     }
@@ -845,6 +1314,9 @@ public func createGroupControllerImpl(context: AccountContext, peerIds: [PeerId]
     }
     
     let controller = ItemListController(context: context, state: signal)
+    controller.beganInteractiveDragging = {
+        endEditingImpl?()
+    }
     replaceControllerImpl = { [weak controller] value in
         (controller?.navigationController as? NavigationController)?.replaceAllButRootController(value, animated: true)
     }
@@ -855,6 +1327,9 @@ public func createGroupControllerImpl(context: AccountContext, peerIds: [PeerId]
     }
     presentControllerImpl = { [weak controller] c, a in
         controller?.present(c, in: .window(.root), with: a)
+    }
+    presentInGlobalOverlay = { [weak controller] c in
+        controller?.presentInGlobalOverlay(c, with: nil)
     }
     pushImpl = { [weak controller] c in
         controller?.push(c)
@@ -888,5 +1363,49 @@ public func createGroupControllerImpl(context: AccountContext, peerIds: [PeerId]
             }
         })
     }
+    
+    findAutoremoveReferenceNode = { [weak controller] in
+        guard let controller else {
+            return nil
+        }
+        
+        let targetTag: CreateGroupEntryTag = .autoDelete
+        var resultItemNode: ItemListItemNode?
+        controller.forEachItemNode { itemNode in
+            if let itemNode = itemNode as? ItemListItemNode {
+                if let tag = itemNode.tag, tag.isEqual(to: targetTag) {
+                    resultItemNode = itemNode
+                    return
+                }
+            }
+        }
+        
+        if let resultItemNode = resultItemNode as? ItemListDisclosureItemNode {
+            return resultItemNode
+        } else {
+            return nil
+        }
+    }
+    
+    selectTitleImpl = { [weak controller] in
+        controller?.forEachItemNode({ itemNode in
+            if let itemNode = itemNode as? ItemListAvatarAndNameInfoItemNode {
+                itemNode.selectAll()
+            }
+        })
+    }
+    
     return controller
+}
+
+private final class CreateGroupContextReferenceContentSource: ContextReferenceContentSource {
+    private let sourceView: UIView
+    
+    init(sourceView: UIView) {
+        self.sourceView = sourceView
+    }
+    
+    func transitionInfo() -> ContextControllerReferenceViewInfo? {
+        return ContextControllerReferenceViewInfo(referenceView: self.sourceView, contentAreaInScreenSpace: UIScreen.main.bounds, insets: UIEdgeInsets(top: -4.0, left: 0.0, bottom: -4.0, right: 0.0))
+    }
 }

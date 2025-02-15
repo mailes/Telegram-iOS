@@ -101,7 +101,7 @@
 @synthesize cancelPressed;
 @synthesize actionHandle = _actionHandle;
 
-- (instancetype)initWithFrame:(CGRect)frame avatar:(bool)avatar hasUltrawideCamera:(bool)hasUltrawideCamera hasTelephotoCamera:(bool)hasTelephotoCamera
+- (instancetype)initWithFrame:(CGRect)frame avatar:(bool)avatar videoModeByDefault:(bool)videoModeByDefault hasUltrawideCamera:(bool)hasUltrawideCamera hasTelephotoCamera:(bool)hasTelephotoCamera camera:(PGCamera *)camera
 {
     self = [super initWithFrame:frame];
     if (self != nil)
@@ -113,7 +113,18 @@
         CGFloat shutterButtonWidth = 66.0f;
         CGSize screenSize = TGScreenSize();
         CGFloat widescreenWidth = MAX(screenSize.width, screenSize.height);
-        if (widescreenWidth == 932.0f)
+        if (widescreenWidth == 956.0f)
+        {
+            _topPanelOffset = 48.0f;
+            _topPanelHeight = 48.0f;
+            _bottomPanelOffset = 83.0f;
+            _bottomPanelHeight = 140.0f;
+            _modeControlOffset = -1.0f;
+            _modeControlHeight = 66.0f;
+            _counterOffset = 7.0f;
+            shutterButtonWidth = 72.0f;
+        }
+        else if (widescreenWidth == 932.0f)
         {
             _topPanelOffset = 48.0f;
             _topPanelHeight = 48.0f;
@@ -314,7 +325,7 @@
         [_shutterButton addGestureRecognizer:shutterPanGestureRecognizer];
         [_bottomPanelView addSubview:_shutterButton];
         
-        _modeControl = [[TGCameraModeControl alloc] initWithFrame:CGRectMake(0, 0, frame.size.width, _modeControlHeight) avatar:avatar];
+        _modeControl = [[TGCameraModeControl alloc] initWithFrame:CGRectMake(0, 0, frame.size.width, _modeControlHeight) avatar:avatar videoModeByDefault:videoModeByDefault];
         [_bottomPanelView addSubview:_modeControl];
         
         _flipButton = [[TGCameraFlipButton alloc] initWithFrame:CGRectMake(0, 0, 48, 48)];
@@ -414,6 +425,12 @@
         [_photoCounterButton addTarget:self action:@selector(photoCounterButtonPressed) forControlEvents:UIControlEventTouchUpInside];
         _photoCounterButton.userInteractionEnabled = false;
         [_bottomPanelView addSubview:_photoCounterButton];
+        
+        if (videoModeByDefault) {
+            [UIView performWithoutAnimation:^{
+                [self updateForCameraModeChangeWithPreviousMode:PGCameraModePhoto];
+            }];
+        }
     }
     return self;
 }

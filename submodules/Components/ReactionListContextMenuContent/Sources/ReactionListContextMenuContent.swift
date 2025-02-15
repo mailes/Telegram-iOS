@@ -3,7 +3,6 @@ import AsyncDisplayKit
 import Display
 import ComponentFlow
 import SwiftSignalKit
-import Postbox
 import TelegramCore
 import AccountContext
 import TelegramPresentationData
@@ -17,6 +16,7 @@ import MultiAnimationRenderer
 import EmojiTextAttachmentView
 import TextFormat
 import EmojiStatusComponent
+import TelegramStringFormatting
 
 private let avatarFont = avatarPlaceholderFont(size: 16.0)
 
@@ -93,13 +93,14 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
             
             self.highlightBackgroundNode.frame = CGRect(origin: CGPoint(), size: size)
             
-            self.titleLabelNode.attributedText = NSAttributedString(string: presentationData.strings.Common_Back, font: Font.regular(17.0), textColor: presentationData.theme.contextMenu.primaryColor)
+            let titleFontSize = presentationData.listsFontSize.baseDisplaySize * 17.0 / 17.0
+            
+            self.titleLabelNode.attributedText = NSAttributedString(string: presentationData.strings.Common_Back, font: Font.regular(titleFontSize), textColor: presentationData.theme.contextMenu.primaryColor)
             let titleSize = self.titleLabelNode.updateLayout(CGSize(width: size.width - sideInset - standardIconWidth, height: 100.0))
-            self.titleLabelNode.frame = CGRect(origin: CGPoint(x: sideInset, y: floor((size.height - titleSize.height) / 2.0)), size: titleSize)
+            self.titleLabelNode.frame = CGRect(origin: CGPoint(x: sideInset + 36.0, y: floor((size.height - titleSize.height) / 2.0)), size: titleSize)
             
             if let iconImage = self.iconNode.image {
-                let iconWidth = max(standardIconWidth, iconImage.size.width)
-                let iconFrame = CGRect(origin: CGPoint(x: size.width - iconSideInset - iconWidth + floor((iconWidth - iconImage.size.width) / 2.0), y: floor((size.height - iconImage.size.height) / 2.0)), size: iconImage.size)
+                let iconFrame = CGRect(origin: CGPoint(x: iconSideInset, y: floor((size.height - iconImage.size.height) / 2.0)), size: iconImage.size)
                 self.iconNode.frame = iconFrame
             }
             
@@ -162,7 +163,17 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
                             }
                             strongSelf.file = file
                             strongSelf.updateReactionLayer()
-                        })
+                        }).strict()
+                    case .stars:
+                        if let availableReactions = availableReactions {
+                            for availableReaction in availableReactions.reactions {
+                                if availableReaction.value == reaction {
+                                    self.file = availableReaction.centerAnimation
+                                    self.updateReactionLayer()
+                                    break
+                                }
+                            }
+                        }
                     }
                 } else {
                     let iconNode = ASImageNode()
@@ -195,6 +206,7 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
                 
                 let reactionLayer = InlineStickerItemLayer(
                     context: context,
+                    userLocation: .other,
                     attemptSynchronousLoad: false,
                     emoji: ChatTextInputTextCustomEmojiAttribute(interactivelySelectedFromPackId: nil, fileId: file.fileId.id, file: file),
                     file: file,
@@ -216,6 +228,37 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
                     }
                     reactionLayer.frame = iconFrame
                 }
+                
+                self.updateReactionAccentColor()
+            }
+            
+            func updateReactionAccentColor() {
+                guard let file = self.file, let reactionLayer = self.reactionLayer, let theme = self.theme else {
+                    return
+                }
+                var accentTint = false
+                if file.isCustomTemplateEmoji {
+                    accentTint = true
+                }
+                for attribute in file.attributes {
+                    if case let .CustomEmoji(_, _, _, packReference) = attribute {
+                        switch packReference {
+                        case let .id(id, _):
+                            if id == 773947703670341676 || id == 2964141614563343 {
+                                accentTint = true
+                            }
+                        default:
+                            break
+                        }
+                    }
+                }
+                if accentTint {
+                    reactionLayer.contentTintColor = theme.contextMenu.badgeFillColor
+                    reactionLayer.dynamicColor = theme.contextMenu.badgeFillColor
+                } else {
+                    reactionLayer.contentTintColor = nil
+                    reactionLayer.dynamicColor = nil
+                }
             }
             
             func update(presentationData: PresentationData, constrainedSize: CGSize, isSelected: Bool) -> CGSize {
@@ -225,6 +268,8 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
                     if let iconNode = self.iconNode {
                         iconNode.image = generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Reactions"), color: presentationData.theme.contextMenu.primaryColor)
                     }
+                    
+                    self.updateReactionLayer()
                 }
                 
                 let sideInset: CGFloat = 12.0
@@ -349,15 +394,22 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
         }
     }
     
-    private final class ReactionsTabNode: ASDisplayNode, UIScrollViewDelegate {
+    private static let readIconImage: UIImage? = generateTintedImage(image: UIImage(bundleImageName: "Chat/Message/MenuReadIcon"), color: .white)?.withRenderingMode(.alwaysTemplate)
+    private static let reactionIconImage: UIImage? = generateTintedImage(image: UIImage(bundleImageName: "Chat/Message/MenuReactionIcon"), color: .white)?.withRenderingMode(.alwaysTemplate)
+    
+    private final class ReactionsTabNode: ASDisplayNode, ASScrollViewDelegate {
         private final class ItemNode: HighlightTrackingButtonNode {
             let context: AccountContext
+            let displayReadTimestamps: Bool
+            let displayReactionIcon: Bool
             let availableReactions: AvailableReactions?
             let animationCache: AnimationCache
             let animationRenderer: MultiAnimationRenderer
             let highlightBackgroundNode: ASDisplayNode
             let avatarNode: AvatarNode
             let titleLabelNode: ImmediateTextNode
+            let textLabelNode: ImmediateTextNode
+            let readIconView: UIImageView
             var credibilityIconView: ComponentView<Empty>?
             let separatorNode: ASDisplayNode
             
@@ -370,9 +422,11 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
             
             private var item: EngineMessageReactionListContext.Item?
             
-            init(context: AccountContext, availableReactions: AvailableReactions?, animationCache: AnimationCache, animationRenderer: MultiAnimationRenderer, action: @escaping () -> Void) {
+            init(context: AccountContext, displayReadTimestamps: Bool, displayReactionIcon: Bool, availableReactions: AvailableReactions?, animationCache: AnimationCache, animationRenderer: MultiAnimationRenderer, action: @escaping () -> Void) {
                 self.action = action
                 self.context = context
+                self.displayReadTimestamps = displayReadTimestamps
+                self.displayReactionIcon = displayReactionIcon
                 self.availableReactions = availableReactions
                 self.animationCache = animationCache
                 self.animationRenderer = animationRenderer
@@ -389,6 +443,13 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
                 self.titleLabelNode.maximumNumberOfLines = 1
                 self.titleLabelNode.isUserInteractionEnabled = false
                 
+                self.textLabelNode = ImmediateTextNode()
+                self.textLabelNode.isAccessibilityElement = false
+                self.textLabelNode.maximumNumberOfLines = 1
+                self.textLabelNode.isUserInteractionEnabled = false
+                
+                self.readIconView = UIImageView(image: readIconImage)
+                
                 self.separatorNode = ASDisplayNode()
                 self.separatorNode.isAccessibilityElement = false
                 
@@ -400,6 +461,8 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
                 self.addSubnode(self.highlightBackgroundNode)
                 self.addSubnode(self.avatarNode)
                 self.addSubnode(self.titleLabelNode)
+                self.addSubnode(self.textLabelNode)
+                self.view.addSubview(self.readIconView)
                 
                 self.highligthedChanged = { [weak self] highlighted in
                     guard let strongSelf = self else {
@@ -437,6 +500,7 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
                 
                 let reactionLayer = InlineStickerItemLayer(
                     context: context,
+                    userLocation: .other,
                     attemptSynchronousLoad: false,
                     emoji: ChatTextInputTextCustomEmojiAttribute(interactivelySelectedFromPackId: nil, fileId: file.fileId.id, file: file),
                     file: file,
@@ -459,6 +523,35 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
                 }
             }
             
+            func updateReactionAccentColor(theme: PresentationTheme) {
+                guard let file = self.file, let reactionLayer = self.reactionLayer else {
+                    return
+                }
+                var accentTint = false
+                if file.isCustomTemplateEmoji {
+                    accentTint = true
+                }
+                for attribute in file.attributes {
+                    if case let .CustomEmoji(_, _, _, packReference) = attribute {
+                        switch packReference {
+                        case let .id(id, _):
+                            if id == 773947703670341676 || id == 2964141614563343 {
+                                accentTint = true
+                            }
+                        default:
+                            break
+                        }
+                    }
+                }
+                if accentTint {
+                    reactionLayer.contentTintColor = theme.contextMenu.badgeFillColor
+                    reactionLayer.dynamicColor = theme.contextMenu.badgeFillColor
+                } else {
+                    reactionLayer.contentTintColor = nil
+                    reactionLayer.dynamicColor = nil
+                }
+            }
+            
             func update(size: CGSize, presentationData: PresentationData, item: EngineMessageReactionListContext.Item, isLast: Bool, syncronousLoad: Bool) {
                 let avatarInset: CGFloat = 12.0
                 let avatarSpacing: CGFloat = 8.0
@@ -467,7 +560,7 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
                 
                 let reaction: MessageReaction.Reaction? = item.reaction
                 
-                if reaction != self.item?.reaction {
+                if self.displayReactionIcon, reaction != self.item?.reaction {
                     if let reaction = reaction {
                         switch reaction {
                         case .builtin:
@@ -476,6 +569,7 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
                                     if availableReaction.value == reaction {
                                         self.file = availableReaction.centerAnimation
                                         self.updateReactionLayer()
+                                        self.updateReactionAccentColor(theme: presentationData.theme)
                                         break
                                     }
                                 }
@@ -488,7 +582,19 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
                                 }
                                 strongSelf.file = file
                                 strongSelf.updateReactionLayer()
-                            })
+                                strongSelf.updateReactionAccentColor(theme: presentationData.theme)
+                            }).strict()
+                        case .stars:
+                            if let availableReactions = self.availableReactions {
+                                for availableReaction in availableReactions.reactions {
+                                    if availableReaction.value == reaction {
+                                        self.file = availableReaction.centerAnimation
+                                        self.updateReactionLayer()
+                                        self.updateReactionAccentColor(theme: presentationData.theme)
+                                        break
+                                    }
+                                }
+                            }
                         }
                     } else {
                         self.file = nil
@@ -501,6 +607,7 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
                         }
                     }
                 }
+                self.updateReactionAccentColor(theme: presentationData.theme)
                 
                 if self.item != item {
                     self.item = item
@@ -512,6 +619,8 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
                             reactionStringValue = value
                         case .custom:
                             reactionStringValue = ""
+                        case .stars:
+                            reactionStringValue = "Star"
                         }
                     } else {
                         reactionStringValue = ""
@@ -525,7 +634,7 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
                     currentCredibilityIcon = .text(color: presentationData.theme.chat.message.incoming.scamColor, string: presentationData.strings.Message_ScamAccount.uppercased())
                 } else if item.peer.isFake {
                     currentCredibilityIcon = .text(color: presentationData.theme.chat.message.incoming.scamColor, string: presentationData.strings.Message_FakeAccount.uppercased())
-                } else if case let .user(user) = item.peer, let emojiStatus = user.emojiStatus {
+                } else if let emojiStatus = item.peer.emojiStatus {
                     currentCredibilityIcon = .animation(content: .customEmoji(fileId: emojiStatus.fileId), size: CGSize(width: 32.0, height: 32.0), placeholderColor: UIColor(white: 0.0, alpha: 0.1), themeColor: presentationData.theme.list.itemAccentColor, loopMode: .count(2))
                 } else if item.peer.isVerified {
                     currentCredibilityIcon = .verified(fillColor: presentationData.theme.list.itemCheckColors.fillColor, foregroundColor: presentationData.theme.list.itemCheckColors.foregroundColor, sizeType: .compact)
@@ -570,14 +679,70 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
                 self.avatarNode.frame = CGRect(origin: CGPoint(x: avatarInset, y: floor((size.height - avatarSize) / 2.0)), size: CGSize(width: avatarSize, height: avatarSize))
                 self.avatarNode.setPeer(context: self.context, theme: presentationData.theme, peer: item.peer, synchronousLoad: true)
                 
-                self.titleLabelNode.attributedText = NSAttributedString(string: item.peer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder), font: Font.regular(17.0), textColor: presentationData.theme.contextMenu.primaryColor)
+                let titleFontSize = presentationData.listsFontSize.baseDisplaySize * 17.0 / 17.0
+                
+                self.titleLabelNode.attributedText = NSAttributedString(string: item.peer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder), font: Font.regular(titleFontSize), textColor: presentationData.theme.contextMenu.primaryColor)
                 var maxTextWidth: CGFloat = size.width - avatarInset - avatarSize - avatarSpacing - sideInset - additionalTitleInset
                 if reaction != nil {
                     maxTextWidth -= 32.0
                 }
                 let titleSize = self.titleLabelNode.updateLayout(CGSize(width: maxTextWidth, height: 100.0))
-                let titleFrame = CGRect(origin: CGPoint(x: avatarInset + avatarSize + avatarSpacing, y: floor((size.height - titleSize.height) / 2.0)), size: titleSize)
+                
+                var text = ""
+                if let timestamp = item.timestamp {
+                    let dateText = humanReadableStringForTimestamp(strings: presentationData.strings, dateTimeFormat: presentationData.dateTimeFormat, timestamp: timestamp, alwaysShowTime: true, allowYesterday: true, format: HumanReadableStringFormat(
+                        dateFormatString: { value in
+                            return PresentationStrings.FormattedString(string: presentationData.strings.Chat_MessageSeenTimestamp_Date(value).string, ranges: [])
+                        },
+                        tomorrowFormatString: { value in
+                            return PresentationStrings.FormattedString(string: presentationData.strings.Chat_MessageSeenTimestamp_TodayAt(value).string, ranges: [])
+                        },
+                        todayFormatString: { value in
+                            return PresentationStrings.FormattedString(string: presentationData.strings.Chat_MessageSeenTimestamp_TodayAt(value).string, ranges: [])
+                        },
+                        yesterdayFormatString: { value in
+                            return PresentationStrings.FormattedString(string: presentationData.strings.Chat_MessageSeenTimestamp_YesterdayAt(value).string, ranges: [])
+                        }
+                    )).string
+                    text = dateText
+                }
+                
+                /*#if DEBUG
+                text = "yesterday at 12:00 PM"
+                #endif*/
+                
+                let textFontFraction = presentationData.listsFontSize.baseDisplaySize / 17.0
+                let textFontSize = floor(textFontFraction * 15.0)
+                
+                self.textLabelNode.attributedText = NSAttributedString(string: text, font: Font.regular(textFontSize), textColor: presentationData.theme.contextMenu.secondaryColor)
+                let textSize = self.textLabelNode.updateLayout(CGSize(width: maxTextWidth + 16.0, height: 100.0))
+                self.textLabelNode.isHidden = !self.displayReadTimestamps || text.isEmpty
+                
+                let textSpacing: CGFloat = floor(textFontFraction * 2.0)
+                let contentHeight: CGFloat
+                
+                if self.displayReadTimestamps && !text.isEmpty {
+                    contentHeight = titleSize.height + textSpacing + textSize.height
+                } else {
+                    contentHeight = titleSize.height
+                }
+                let contentY = floor((size.height - contentHeight) / 2.0)
+                
+                let titleFrame = CGRect(origin: CGPoint(x: avatarInset + avatarSize + avatarSpacing, y: contentY), size: titleSize)
                 self.titleLabelNode.frame = titleFrame
+                
+                let textFrame = CGRect(origin: CGPoint(x: titleFrame.minX + floor(textFontFraction * 18.0), y: titleFrame.maxY + textSpacing), size: textSize)
+                self.textLabelNode.frame = textFrame
+                
+                self.readIconView.image = item.timestampIsReaction ? ReactionListContextMenuContent.reactionIconImage : ReactionListContextMenuContent.readIconImage
+                
+                if let readImage = self.readIconView.image {
+                    self.readIconView.tintColor = presentationData.theme.contextMenu.secondaryColor
+                    let fraction: CGFloat = textFontFraction
+                    let iconSize = CGSize(width: floor(readImage.size.width * fraction), height: floor(readImage.size.height * fraction))
+                    self.readIconView.frame = CGRect(origin: CGPoint(x: titleFrame.minX, y: textFrame.minY + floor(textFontFraction * 4.0) - UIScreenPixel + (item.timestampIsReaction ? -2.0 - UIScreenPixel : 0.0)), size: iconSize)
+                }
+                self.readIconView.isHidden = !self.displayReadTimestamps || text.isEmpty
                 
                 if let credibilityIconView = self.credibilityIconView, let credibilityIconSize = credibilityIconSize {
                     if let credibilityIconComponentView = credibilityIconView.view {
@@ -591,7 +756,7 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
                     credibilityIconView.view?.removeFromSuperview()
                 }
                 
-                let reactionSize = CGSize(width: 22.0, height: 22.0)
+                let reactionSize = CGSize(width: floor(textFontFraction * 22.0), height: floor(textFontFraction * 22.0))
                 self.iconFrame = CGRect(origin: CGPoint(x: size.width - 32.0 - floor((32.0 - reactionSize.width) / 2.0), y: floor((size.height - reactionSize.height) / 2.0)), size: reactionSize)
                 
                 if let reactionLayer = self.reactionLayer, var iconFrame = self.iconFrame {
@@ -622,7 +787,7 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
                     for peer in readStats.peers {
                         if !existingPeers.contains(peer.id) {
                             existingPeers.insert(peer.id)
-                            mergedItems.append(EngineMessageReactionListContext.Item(peer: peer, reaction: nil))
+                            mergedItems.append(EngineMessageReactionListContext.Item(peer: peer, reaction: nil, timestamp: readStats.readTimestamps[peer.id], timestampIsReaction: false))
                         }
                     }
                 }
@@ -661,13 +826,15 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
         }
         
         private let context: AccountContext
+        private let displayReadTimestamps: Bool
+        private let displayReactionIcons: Bool
         private let availableReactions: AvailableReactions?
         private let animationCache: AnimationCache
         private let animationRenderer: MultiAnimationRenderer
         let reaction: MessageReaction.Reaction?
         private let requestUpdate: (ReactionsTabNode, ContainedViewLayoutTransition) -> Void
         private let requestUpdateApparentHeight: (ReactionsTabNode, ContainedViewLayoutTransition) -> Void
-        private let openPeer: (EnginePeer) -> Void
+        private let openPeer: (EnginePeer, Bool) -> Void
         
         private var hasMore: Bool = false
         
@@ -691,6 +858,8 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
         
         init(
             context: AccountContext,
+            displayReadTimestamps: Bool,
+            displayReactionIcons: Bool,
             availableReactions: AvailableReactions?,
             animationCache: AnimationCache,
             animationRenderer: MultiAnimationRenderer,
@@ -699,9 +868,11 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
             readStats: MessageReadStats?,
             requestUpdate: @escaping (ReactionsTabNode, ContainedViewLayoutTransition) -> Void,
             requestUpdateApparentHeight: @escaping (ReactionsTabNode, ContainedViewLayoutTransition) -> Void,
-            openPeer: @escaping (EnginePeer) -> Void
+            openPeer: @escaping (EnginePeer, Bool) -> Void
         ) {
             self.context = context
+            self.displayReadTimestamps = displayReadTimestamps
+            self.displayReactionIcons = displayReactionIcons
             self.availableReactions = availableReactions
             self.animationCache = animationCache
             self.animationRenderer = animationRenderer
@@ -710,8 +881,8 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
             self.requestUpdateApparentHeight = requestUpdateApparentHeight
             self.openPeer = openPeer
             
-            self.listContext = context.engine.messages.messageReactionList(message: message, reaction: reaction)
-            self.state = ItemsState(listState: EngineMessageReactionListContext.State(message: message, reaction: reaction), readStats: readStats)
+            self.listContext = context.engine.messages.messageReactionList(message: message, readStats: readStats, reaction: reaction)
+            self.state = ItemsState(listState: EngineMessageReactionListContext.State(message: message, readStats: readStats, reaction: reaction), readStats: readStats)
             
             self.scrollNode = ASScrollNode()
             self.scrollNode.canCancelAllTouchesInViews = true
@@ -725,7 +896,7 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
             super.init()
             
             self.addSubnode(self.scrollNode)
-            self.scrollNode.view.delegate = self
+            self.scrollNode.view.delegate = self.wrappedScrollViewDelegate
             
             self.clipsToBounds = true
             
@@ -747,7 +918,7 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
                         itemNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.2)
                     }
                 }
-            })
+            }).strict()
         }
         
         deinit {
@@ -762,7 +933,15 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
             
             if let size = self.currentSize {
                 var apparentHeight = -self.scrollNode.view.contentOffset.y + self.scrollNode.view.contentSize.height
-                apparentHeight = max(apparentHeight, 44.0)
+                
+                let heightFraction: CGFloat
+                if let presentationData = self.presentationData {
+                    heightFraction = presentationData.listsFontSize.baseDisplaySize / 17.0
+                } else {
+                    heightFraction = 1.0
+                }
+                
+                apparentHeight = max(apparentHeight, (self.displayReadTimestamps ? 56.0 : 44.0) * heightFraction)
                 apparentHeight = min(apparentHeight, size.height + 100.0)
                 if self.apparentHeight != apparentHeight {
                     self.apparentHeight = apparentHeight
@@ -779,7 +958,10 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
             guard let presentationData = self.presentationData else {
                 return
             }
-            let itemHeight: CGFloat = 44.0
+            
+            let heightFraction: CGFloat = presentationData.listsFontSize.baseDisplaySize / 17.0
+            
+            let itemHeight: CGFloat = (self.displayReadTimestamps ? 56.0 : 44.0) * heightFraction
             let visibleBounds = self.scrollNode.bounds.insetBy(dx: 0.0, dy: -180.0)
             
             var validIds = Set<Int>()
@@ -801,8 +983,8 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
                         } else {
                             let openPeer = self.openPeer
                             let peer = item.peer
-                            itemNode = ItemNode(context: self.context, availableReactions: self.availableReactions, animationCache: self.animationCache, animationRenderer: self.animationRenderer, action: {
-                                openPeer(peer)
+                            itemNode = ItemNode(context: self.context, displayReadTimestamps: self.displayReadTimestamps, displayReactionIcon: self.displayReactionIcons, availableReactions: self.availableReactions, animationCache: self.animationCache, animationRenderer: self.animationRenderer, action: {
+                                openPeer(peer, item.reaction != nil)
                             })
                             self.itemNodes[index] = itemNode
                             self.scrollNode.addSubnode(itemNode)
@@ -875,7 +1057,8 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
         }
         
         func update(presentationData: PresentationData, constrainedSize: CGSize, bottomInset: CGFloat, transition: ContainedViewLayoutTransition) -> (height: CGFloat, apparentHeight: CGFloat) {
-            let itemHeight: CGFloat = 44.0
+            let heightFraction: CGFloat = presentationData.listsFontSize.baseDisplaySize / 17.0
+            let itemHeight: CGFloat = (self.displayReadTimestamps ? 56.0 : 44.0) * heightFraction
             
             if self.presentationData?.theme !== presentationData.theme {
                 let sideInset: CGFloat = 40.0
@@ -946,8 +1129,10 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
         }
     }
     
-    final class ItemsNode: ASDisplayNode, ContextControllerItemsNode, UIGestureRecognizerDelegate {
+    final class ItemsNode: ASDisplayNode, ContextControllerItemsNode, ASGestureRecognizerDelegate {
         private let context: AccountContext
+        private let displayReadTimestamps: Bool
+        private let displayReactionIcons: Bool
         private let availableReactions: AvailableReactions?
         private let animationCache: AnimationCache
         private let animationRenderer: MultiAnimationRenderer
@@ -972,12 +1157,13 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
         }
         private var interactiveTransitionState: InteractiveTransitionState?
         
-        private let openPeer: (EnginePeer) -> Void
+        private let openPeer: (EnginePeer, Bool) -> Void
         
         private(set) var apparentHeight: CGFloat = 0.0
         
         init(
             context: AccountContext,
+            displayReadTimestamps: Bool,
             availableReactions: AvailableReactions?,
             animationCache: AnimationCache,
             animationRenderer: MultiAnimationRenderer,
@@ -987,9 +1173,11 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
             requestUpdate: @escaping (ContainedViewLayoutTransition) -> Void,
             requestUpdateApparentHeight: @escaping (ContainedViewLayoutTransition) -> Void,
             back: (() -> Void)?,
-            openPeer: @escaping (EnginePeer) -> Void
+            openPeer: @escaping (EnginePeer, Bool) -> Void
         ) {
             self.context = context
+            self.displayReadTimestamps = displayReadTimestamps
+            self.displayReactionIcons = reaction == nil
             self.availableReactions = availableReactions
             self.animationCache = animationCache
             self.animationRenderer = animationRenderer
@@ -1000,9 +1188,6 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
             
             self.requestUpdate = requestUpdate
             self.requestUpdateApparentHeight = requestUpdateApparentHeight
-            
-            //var requestUpdateTab: ((ReactionsTabNode, ContainedViewLayoutTransition) -> Void)?
-            //var requestUpdateTabApparentHeight: ((ReactionsTabNode, ContainedViewLayoutTransition) -> Void)?
             
             if let back = back {
                 self.backButtonNode = BackButtonNode()
@@ -1060,44 +1245,8 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
                 strongSelf.tabListNode?.scrollToTabReaction = ReactionTabListNode.ScrollToTabReaction(value: reaction)
                 strongSelf.currentTabIndex = tabIndex
                 
-                /*let currentTabNode = ReactionsTabNode(
-                    context: context,
-                    availableReactions: availableReactions,
-                    message: message,
-                    reaction: reaction,
-                    readStats: nil,
-                    requestUpdate: { tab, transition in
-                        requestUpdateTab?(tab, transition)
-                    },
-                    requestUpdateApparentHeight: { tab, transition in
-                        requestUpdateTabApparentHeight?(tab, transition)
-                    },
-                    openPeer: { id in
-                        openPeer(id)
-                    }
-                )
-                strongSelf.currentTabNode = currentTabNode
-                strongSelf.addSubnode(currentTabNode)*/
                 strongSelf.requestUpdate(.animated(duration: 0.45, curve: .spring))
             }
-            
-            /*requestUpdateTab = { [weak self] tab, transition in
-                guard let strongSelf = self else {
-                    return
-                }
-                if strongSelf.visibleTabNodes.contains(where: { $0.value === tab }) {
-                    strongSelf.requestUpdate(transition)
-                }
-            }
-            
-            requestUpdateTabApparentHeight = { [weak self] tab, transition in
-                guard let strongSelf = self else {
-                    return
-                }
-                if strongSelf.visibleTabNodes.contains(where: { $0.value === tab }) {
-                    strongSelf.requestUpdateApparentHeight(transition)
-                }
-            }*/
             
             let panRecognizer = InteractiveTransitionGestureRecognizer(target: self, action: #selector(self.panGesture(_:)), allowedDirections: { [weak self] point in
                 guard let strongSelf = self else {
@@ -1108,7 +1257,7 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
                 }
                 return [.left, .right]
             })
-            panRecognizer.delegate = self
+            panRecognizer.delegate = self.wrappedGestureRecognizerDelegate
             self.view.addGestureRecognizer(panRecognizer)
         }
         
@@ -1159,7 +1308,7 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
         }
         
         func update(presentationData: PresentationData, constrainedWidth: CGFloat, maxHeight: CGFloat, bottomInset: CGFloat, transition: ContainedViewLayoutTransition) -> (cleanSize: CGSize, apparentHeight: CGFloat) {
-            let constrainedSize = CGSize(width: min(260.0, constrainedWidth), height: maxHeight)
+            let constrainedSize = CGSize(width: min(self.displayReadTimestamps ? 280.0 : 260.0, constrainedWidth), height: maxHeight)
             
             var topContentHeight: CGFloat = 0.0
             if let backButtonNode = self.backButtonNode {
@@ -1212,6 +1361,8 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
                     
                     tabNode = ReactionsTabNode(
                         context: self.context,
+                        displayReadTimestamps: self.displayReadTimestamps,
+                        displayReactionIcons: self.displayReactionIcons,
                         availableReactions: self.availableReactions,
                         animationCache: self.animationCache,
                         animationRenderer: self.animationRenderer,
@@ -1312,10 +1463,10 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
             var apparentHeight = topContentHeight
             
             if let interactiveTransitionState = self.interactiveTransitionState, let fromTabLayout = tabLayouts[self.currentTabIndex], let toTabLayout = tabLayouts[interactiveTransitionState.toIndex] {
-                let megedTabLayoutHeight = fromTabLayout.height * (1.0 - interactiveTransitionState.progress) + toTabLayout.height * interactiveTransitionState.progress
+                let mergedTabLayoutHeight = fromTabLayout.height * (1.0 - interactiveTransitionState.progress) + toTabLayout.height * interactiveTransitionState.progress
                 let megedTabLayoutApparentHeight = fromTabLayout.apparentHeight * (1.0 - interactiveTransitionState.progress) + toTabLayout.apparentHeight * interactiveTransitionState.progress
                 
-                contentSize.height += megedTabLayoutHeight
+                contentSize.height += mergedTabLayoutHeight
                 apparentHeight += megedTabLayoutApparentHeight
             } else if let tabLayout = tabLayouts[self.currentTabIndex] {
                 contentSize.height += tabLayout.height
@@ -1327,6 +1478,7 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
     }
     
     let context: AccountContext
+    let displayReadTimestamps: Bool
     let availableReactions: AvailableReactions?
     let animationCache: AnimationCache
     let animationRenderer: MultiAnimationRenderer
@@ -1334,10 +1486,11 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
     let reaction: MessageReaction.Reaction?
     let readStats: MessageReadStats?
     let back: (() -> Void)?
-    let openPeer: (EnginePeer) -> Void
+    let openPeer: (EnginePeer, Bool) -> Void
     
     public init(
         context: AccountContext,
+        displayReadTimestamps: Bool,
         availableReactions: AvailableReactions?,
         animationCache: AnimationCache,
         animationRenderer: MultiAnimationRenderer,
@@ -1345,9 +1498,10 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
         reaction: MessageReaction.Reaction?,
         readStats: MessageReadStats?,
         back: (() -> Void)?,
-        openPeer: @escaping (EnginePeer) -> Void
+        openPeer: @escaping (EnginePeer, Bool) -> Void
     ) {
         self.context = context
+        self.displayReadTimestamps = displayReadTimestamps
         self.availableReactions = availableReactions
         self.animationCache = animationCache
         self.animationRenderer = animationRenderer
@@ -1364,6 +1518,7 @@ public final class ReactionListContextMenuContent: ContextControllerItemsContent
     ) -> ContextControllerItemsNode {
         return ItemsNode(
             context: self.context,
+            displayReadTimestamps: self.displayReadTimestamps,
             availableReactions: self.availableReactions,
             animationCache: self.animationCache,
             animationRenderer: self.animationRenderer,

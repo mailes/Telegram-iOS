@@ -1,7 +1,6 @@
 import Foundation
 import UIKit
 import Display
-import Postbox
 import TelegramCore
 import TelegramUIPreferences
 import AppBundle
@@ -186,6 +185,8 @@ public final class PrincipalThemeEssentialGraphics {
     public let radialIndicatorFileIconIncoming: UIImage
     public let radialIndicatorFileIconOutgoing: UIImage
     
+    public let radialIndicatorViewOnceIcon: UIImage
+    
     public let incomingBubbleGradientImage: UIImage?
     public let outgoingBubbleGradientImage: UIImage?
     
@@ -251,11 +252,7 @@ public final class PrincipalThemeEssentialGraphics {
         let outgoingKnockout = self.outgoingBubbleGradientImage != nil
         
         let highlightKnockout: Bool
-        if case .color = wallpaper {
-            highlightKnockout = true
-        } else {
-            highlightKnockout = false
-        }
+        highlightKnockout = false
         
         let serviceColor = serviceMessageColorComponents(chatTheme: theme, wallpaper: wallpaper)
         
@@ -346,8 +343,8 @@ public final class PrincipalThemeEssentialGraphics {
             self.clockMediaMinImage = emptyImage
             self.clockFreeFrameImage = emptyImage
             self.clockFreeMinImage = emptyImage
-            self.dateAndStatusMediaBackground = emptyImage
-            self.dateAndStatusFreeBackground = emptyImage
+            self.dateAndStatusMediaBackground = generateStretchableFilledCircleImage(diameter: 18.0, color: theme.message.mediaDateAndStatusFillColor)!
+            self.dateAndStatusFreeBackground = generateStretchableFilledCircleImage(diameter: 18.0, color: serviceColor.dateFillStatic)!
                 
             let impressionCountImage = UIImage(bundleImageName: "Chat/Message/ImpressionCount")!
             self.incomingDateAndStatusImpressionIcon = generateTintedImage(image: impressionCountImage, color: theme.message.incoming.secondaryTextColor)!
@@ -373,8 +370,10 @@ public final class PrincipalThemeEssentialGraphics {
             self.mediaSelfExpiringIcon = generateTintedImage(image: selfExpiringImage, color: .white)!
             self.freeSelfExpiringIcon = generateTintedImage(image: selfExpiringImage, color: serviceColor.primaryText)!
             
-            self.radialIndicatorFileIconIncoming = emptyImage
-            self.radialIndicatorFileIconOutgoing = emptyImage
+            self.radialIndicatorFileIconIncoming = generateTintedImage(image: UIImage(bundleImageName: "Chat/Message/RadialProgressIconDocument"), color: .black)!
+            self.radialIndicatorFileIconOutgoing = generateTintedImage(image: UIImage(bundleImageName: "Chat/Message/RadialProgressIconDocument"), color: .black)!
+            
+            self.radialIndicatorViewOnceIcon = generateTintedImage(image: UIImage(bundleImageName: "Chat/Message/ViewOnce"), color: .black)!
         } else {
             self.chatMessageBackgroundIncomingMaskImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: .black, strokeColor: .clear, neighbors: .none, theme: theme, wallpaper: .color(0xffffff), knockout: true, mask: true, extendedEdges: true)
             self.chatMessageBackgroundIncomingExtractedMaskImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: .black, strokeColor: .clear, neighbors: .extracted, theme: theme, wallpaper: .color(0xffffff), knockout: true, mask: true, extendedEdges: true)
@@ -383,27 +382,27 @@ public final class PrincipalThemeEssentialGraphics {
             self.chatMessageBackgroundIncomingOutlineImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: incoming.fill[0], strokeColor: incoming.stroke, neighbors: .none, theme: theme, wallpaper: wallpaper, knockout: incomingKnockout, extendedEdges: true, onlyOutline: true)
             self.chatMessageBackgroundIncomingExtractedOutlineImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: incoming.fill[0], strokeColor: incoming.stroke, neighbors: .extracted, theme: theme, wallpaper: wallpaper, knockout: incomingKnockout, extendedEdges: true, onlyOutline: true)
             self.chatMessageBackgroundIncomingShadowImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: incoming.fill[0], strokeColor: incoming.stroke, neighbors: .none, theme: theme, wallpaper: wallpaper, knockout: incomingKnockout, extendedEdges: true, onlyShadow: true)
-            self.chatMessageBackgroundIncomingHighlightedImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: incoming.highlightedFill, strokeColor: incoming.stroke, neighbors: .none, theme: theme, wallpaper: wallpaper, knockout: highlightKnockout, extendedEdges: true, alwaysFillColor: true)
+            self.chatMessageBackgroundIncomingHighlightedImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: .white, strokeColor: .clear, neighbors: .none, theme: theme, wallpaper: wallpaper, knockout: highlightKnockout, extendedEdges: true, alwaysFillColor: true).withRenderingMode(.alwaysTemplate)
             self.chatMessageBackgroundIncomingMergedTopMaskImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: .black, strokeColor: .clear, neighbors: .top(side: false), theme: theme, wallpaper: .color(0xffffff), knockout: true, mask: true, extendedEdges: true)
             self.chatMessageBackgroundIncomingMergedTopImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: incoming.fill[0], strokeColor: incoming.stroke, neighbors: .top(side: false), theme: theme, wallpaper: wallpaper, knockout: incomingKnockout, extendedEdges: true)
             self.chatMessageBackgroundIncomingMergedTopOutlineImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: incoming.fill[0], strokeColor: incoming.stroke, neighbors: .top(side: false), theme: theme, wallpaper: wallpaper, knockout: incomingKnockout, extendedEdges: true, onlyOutline: true)
             self.chatMessageBackgroundIncomingMergedTopShadowImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: incoming.fill[0], strokeColor: incoming.stroke, neighbors: .top(side: false), theme: theme, wallpaper: wallpaper, knockout: incomingKnockout, extendedEdges: true, onlyShadow: true)
-            self.chatMessageBackgroundIncomingMergedTopHighlightedImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: incoming.highlightedFill, strokeColor: incoming.stroke, neighbors: .top(side: false), theme: theme, wallpaper: wallpaper, knockout: highlightKnockout, extendedEdges: true, alwaysFillColor: true)
+            self.chatMessageBackgroundIncomingMergedTopHighlightedImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: .white, strokeColor: .clear, neighbors: .top(side: false), theme: theme, wallpaper: wallpaper, knockout: highlightKnockout, extendedEdges: true, alwaysFillColor: true).withRenderingMode(.alwaysTemplate)
             self.chatMessageBackgroundIncomingMergedTopSideMaskImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: .black, strokeColor: .clear, neighbors: .top(side: true), theme: theme, wallpaper: .color(0xffffff), knockout: true, mask: true, extendedEdges: true)
             self.chatMessageBackgroundIncomingMergedTopSideImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: incoming.fill[0], strokeColor: incoming.stroke, neighbors: .top(side: true), theme: theme, wallpaper: wallpaper, knockout: incomingKnockout, extendedEdges: true)
             self.chatMessageBackgroundIncomingMergedTopSideOutlineImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: incoming.fill[0], strokeColor: incoming.stroke, neighbors: .top(side: true), theme: theme, wallpaper: wallpaper, knockout: incomingKnockout, extendedEdges: true, onlyOutline: true)
             self.chatMessageBackgroundIncomingMergedTopSideShadowImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: incoming.fill[0], strokeColor: incoming.stroke, neighbors: .top(side: true), theme: theme, wallpaper: wallpaper, knockout: incomingKnockout, extendedEdges: true, onlyShadow: true)
-            self.chatMessageBackgroundIncomingMergedTopSideHighlightedImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: incoming.highlightedFill, strokeColor: incoming.stroke, neighbors: .top(side: true), theme: theme, wallpaper: wallpaper, knockout: highlightKnockout, extendedEdges: true, alwaysFillColor: true)
+            self.chatMessageBackgroundIncomingMergedTopSideHighlightedImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: .white, strokeColor: .clear, neighbors: .top(side: true), theme: theme, wallpaper: wallpaper, knockout: highlightKnockout, extendedEdges: true, alwaysFillColor: true).withRenderingMode(.alwaysTemplate)
             self.chatMessageBackgroundIncomingMergedBottomMaskImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: .black, strokeColor: .clear, neighbors: .bottom, theme: theme, wallpaper: .color(0xffffff), knockout: true, mask: true, extendedEdges: true)
             self.chatMessageBackgroundIncomingMergedBottomImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: incoming.fill[0], strokeColor: incoming.stroke, neighbors: .bottom, theme: theme, wallpaper: wallpaper, knockout: incomingKnockout, extendedEdges: true)
             self.chatMessageBackgroundIncomingMergedBottomOutlineImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: incoming.fill[0], strokeColor: incoming.stroke, neighbors: .bottom, theme: theme, wallpaper: wallpaper, knockout: incomingKnockout, extendedEdges: true, onlyOutline: true)
             self.chatMessageBackgroundIncomingMergedBottomShadowImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: incoming.fill[0], strokeColor: incoming.stroke, neighbors: .bottom, theme: theme, wallpaper: wallpaper, knockout: incomingKnockout, extendedEdges: true, onlyShadow: true)
-            self.chatMessageBackgroundIncomingMergedBottomHighlightedImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: incoming.highlightedFill, strokeColor: incoming.stroke, neighbors: .bottom, theme: theme, wallpaper: wallpaper, knockout: highlightKnockout, extendedEdges: true, alwaysFillColor: true)
+            self.chatMessageBackgroundIncomingMergedBottomHighlightedImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: .white, strokeColor: .clear, neighbors: .bottom, theme: theme, wallpaper: wallpaper, knockout: highlightKnockout, extendedEdges: true, alwaysFillColor: true).withRenderingMode(.alwaysTemplate)
             self.chatMessageBackgroundIncomingMergedBothMaskImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: .black, strokeColor: .clear, neighbors: .both, theme: theme, wallpaper: .color(0xffffff), knockout: true, mask: true, extendedEdges: true)
             self.chatMessageBackgroundIncomingMergedBothImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: incoming.fill[0], strokeColor: incoming.stroke, neighbors: .both, theme: theme, wallpaper: wallpaper, knockout: incomingKnockout, extendedEdges: true)
             self.chatMessageBackgroundIncomingMergedBothOutlineImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: incoming.fill[0], strokeColor: incoming.stroke, neighbors: .both, theme: theme, wallpaper: wallpaper, knockout: incomingKnockout, extendedEdges: true, onlyOutline: true)
             self.chatMessageBackgroundIncomingMergedBothShadowImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: incoming.fill[0], strokeColor: incoming.stroke, neighbors: .both, theme: theme, wallpaper: wallpaper, knockout: incomingKnockout, extendedEdges: true, onlyShadow: true)
-            self.chatMessageBackgroundIncomingMergedBothHighlightedImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: incoming.highlightedFill, strokeColor: incoming.stroke, neighbors: .both, theme: theme, wallpaper: wallpaper, knockout: highlightKnockout, extendedEdges: true, alwaysFillColor: true)
+            self.chatMessageBackgroundIncomingMergedBothHighlightedImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: .white, strokeColor: .clear, neighbors: .both, theme: theme, wallpaper: wallpaper, knockout: highlightKnockout, extendedEdges: true, alwaysFillColor: true).withRenderingMode(.alwaysTemplate)
             
             self.chatMessageBackgroundOutgoingMaskImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: .black, strokeColor: .clear, neighbors: .none, theme: theme, wallpaper: .color(0xffffff), knockout: true, mask: true, extendedEdges: true)
             self.chatMessageBackgroundOutgoingExtractedMaskImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: .black, strokeColor: .clear, neighbors: .extracted, theme: theme, wallpaper: .color(0xffffff), knockout: true, mask: true, extendedEdges: true)
@@ -412,38 +411,38 @@ public final class PrincipalThemeEssentialGraphics {
             self.chatMessageBackgroundOutgoingOutlineImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: outgoing.fill[0], strokeColor: outgoing.stroke, neighbors: .none, theme: theme, wallpaper: wallpaper, knockout: outgoingKnockout, extendedEdges: true, onlyOutline: true)
             self.chatMessageBackgroundOutgoingExtractedOutlineImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: outgoing.fill[0], strokeColor: outgoing.stroke, neighbors: .extracted, theme: theme, wallpaper: wallpaper, knockout: outgoingKnockout, extendedEdges: true, onlyOutline: true)
             self.chatMessageBackgroundOutgoingShadowImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: outgoing.fill[0], strokeColor: outgoing.stroke, neighbors: .none, theme: theme, wallpaper: wallpaper, knockout: outgoingKnockout, extendedEdges: true, onlyShadow: true)
-            self.chatMessageBackgroundOutgoingHighlightedImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: outgoing.highlightedFill, strokeColor: outgoing.stroke, neighbors: .none, theme: theme, wallpaper: wallpaper, knockout: highlightKnockout, extendedEdges: true, alwaysFillColor: true)
+            self.chatMessageBackgroundOutgoingHighlightedImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: .white, strokeColor: .clear, neighbors: .none, theme: theme, wallpaper: wallpaper, knockout: highlightKnockout, extendedEdges: true, alwaysFillColor: true).withRenderingMode(.alwaysTemplate)
             self.chatMessageBackgroundOutgoingMergedTopMaskImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: .black, strokeColor: .clear, neighbors: .top(side: false), theme: theme, wallpaper: .color(0xffffff), knockout: true, mask: true, extendedEdges: true)
             self.chatMessageBackgroundOutgoingMergedTopImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: outgoing.fill[0], strokeColor: outgoing.stroke, neighbors: .top(side: false), theme: theme, wallpaper: wallpaper, knockout: outgoingKnockout, extendedEdges: true)
             self.chatMessageBackgroundOutgoingMergedTopOutlineImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: outgoing.fill[0], strokeColor: outgoing.stroke, neighbors: .top(side: false), theme: theme, wallpaper: wallpaper, knockout: outgoingKnockout, extendedEdges: true, onlyOutline: true)
             self.chatMessageBackgroundOutgoingMergedTopShadowImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: outgoing.fill[0], strokeColor: outgoing.stroke, neighbors: .top(side: false), theme: theme, wallpaper: wallpaper, knockout: outgoingKnockout, extendedEdges: true, onlyShadow: true)
-            self.chatMessageBackgroundOutgoingMergedTopHighlightedImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: outgoing.highlightedFill, strokeColor: outgoing.stroke, neighbors: .top(side: false), theme: theme, wallpaper: wallpaper, knockout: highlightKnockout, extendedEdges: true, alwaysFillColor: true)
+            self.chatMessageBackgroundOutgoingMergedTopHighlightedImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: .white, strokeColor: .clear, neighbors: .top(side: false), theme: theme, wallpaper: wallpaper, knockout: highlightKnockout, extendedEdges: true, alwaysFillColor: true).withRenderingMode(.alwaysTemplate)
             self.chatMessageBackgroundOutgoingMergedTopSideMaskImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: .black, strokeColor: .clear, neighbors: .top(side: true), theme: theme, wallpaper: .color(0xffffff), knockout: true, mask: true, extendedEdges: true)
             self.chatMessageBackgroundOutgoingMergedTopSideImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: outgoing.fill[0], strokeColor: outgoing.stroke, neighbors: .top(side: true), theme: theme, wallpaper: wallpaper, knockout: outgoingKnockout, extendedEdges: true)
             self.chatMessageBackgroundOutgoingMergedTopSideOutlineImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: outgoing.fill[0], strokeColor: outgoing.stroke, neighbors: .top(side: true), theme: theme, wallpaper: wallpaper, knockout: outgoingKnockout, extendedEdges: true, onlyOutline: true)
             self.chatMessageBackgroundOutgoingMergedTopSideShadowImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: outgoing.fill[0], strokeColor: outgoing.stroke, neighbors: .top(side: true), theme: theme, wallpaper: wallpaper, knockout: outgoingKnockout, extendedEdges: true, onlyShadow: true)
-            self.chatMessageBackgroundOutgoingMergedTopSideHighlightedImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: outgoing.highlightedFill, strokeColor: outgoing.stroke, neighbors: .top(side: true), theme: theme, wallpaper: wallpaper, knockout: highlightKnockout, extendedEdges: true, alwaysFillColor: true)
+            self.chatMessageBackgroundOutgoingMergedTopSideHighlightedImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: .white, strokeColor: .clear, neighbors: .top(side: true), theme: theme, wallpaper: wallpaper, knockout: highlightKnockout, extendedEdges: true, alwaysFillColor: true).withRenderingMode(.alwaysTemplate)
             self.chatMessageBackgroundOutgoingMergedBottomMaskImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: .black, strokeColor: .clear, neighbors: .bottom, theme: theme, wallpaper: .color(0xffffff), knockout: true, mask: true, extendedEdges: true)
             self.chatMessageBackgroundOutgoingMergedBottomImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: outgoing.fill[0], strokeColor: outgoing.stroke, neighbors: .bottom, theme: theme, wallpaper: wallpaper, knockout: outgoingKnockout, extendedEdges: true)
             self.chatMessageBackgroundOutgoingMergedBottomOutlineImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: outgoing.fill[0], strokeColor: outgoing.stroke, neighbors: .bottom, theme: theme, wallpaper: wallpaper, knockout: outgoingKnockout, extendedEdges: true, onlyOutline: true)
             self.chatMessageBackgroundOutgoingMergedBottomShadowImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: outgoing.fill[0], strokeColor: outgoing.stroke, neighbors: .bottom, theme: theme, wallpaper: wallpaper, knockout: outgoingKnockout, extendedEdges: true, onlyShadow: true)
-            self.chatMessageBackgroundOutgoingMergedBottomHighlightedImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: outgoing.highlightedFill, strokeColor: outgoing.stroke, neighbors: .bottom, theme: theme, wallpaper: wallpaper, knockout: highlightKnockout, extendedEdges: true, alwaysFillColor: true)
+            self.chatMessageBackgroundOutgoingMergedBottomHighlightedImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: .white, strokeColor: .clear, neighbors: .bottom, theme: theme, wallpaper: wallpaper, knockout: highlightKnockout, extendedEdges: true, alwaysFillColor: true).withRenderingMode(.alwaysTemplate)
             self.chatMessageBackgroundOutgoingMergedBothMaskImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: .black, strokeColor: .clear, neighbors: .both, theme: theme, wallpaper: .color(0xffffff), knockout: true, mask: true, extendedEdges: true)
             self.chatMessageBackgroundOutgoingMergedBothImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: outgoing.fill[0], strokeColor: outgoing.stroke, neighbors: .both, theme: theme, wallpaper: wallpaper, knockout: outgoingKnockout, extendedEdges: true)
             self.chatMessageBackgroundOutgoingMergedBothOutlineImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: outgoing.fill[0], strokeColor: outgoing.stroke, neighbors: .both, theme: theme, wallpaper: wallpaper, knockout: outgoingKnockout, extendedEdges: true, onlyOutline: true)
             self.chatMessageBackgroundOutgoingMergedBothShadowImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: outgoing.fill[0], strokeColor: outgoing.stroke, neighbors: .both, theme: theme, wallpaper: wallpaper, knockout: outgoingKnockout, extendedEdges: true, onlyShadow: true)
-            self.chatMessageBackgroundOutgoingMergedBothHighlightedImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: outgoing.highlightedFill, strokeColor: outgoing.stroke, neighbors: .both, theme: theme, wallpaper: wallpaper, knockout: highlightKnockout, extendedEdges: true, alwaysFillColor: true)
+            self.chatMessageBackgroundOutgoingMergedBothHighlightedImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: .white, strokeColor: .clear, neighbors: .both, theme: theme, wallpaper: wallpaper, knockout: highlightKnockout, extendedEdges: true, alwaysFillColor: true).withRenderingMode(.alwaysTemplate)
 
             self.chatMessageBackgroundIncomingMergedSideMaskImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: .black, strokeColor: .clear, neighbors: .side, theme: theme, wallpaper: .color(0xffffff), knockout: true, mask: true, extendedEdges: true)
-            self.chatMessageBackgroundIncomingMergedSideImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: incoming.fill[0], strokeColor: incoming.stroke, neighbors: .side, theme: theme, wallpaper: wallpaper, knockout: outgoingKnockout, extendedEdges: true)
-            self.chatMessageBackgroundIncomingMergedSideOutlineImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: incoming.fill[0], strokeColor: incoming.stroke, neighbors: .side, theme: theme, wallpaper: wallpaper, knockout: outgoingKnockout, extendedEdges: true, onlyOutline: true)
-            self.chatMessageBackgroundIncomingMergedSideShadowImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: incoming.fill[0], strokeColor: incoming.stroke, neighbors: .side, theme: theme, wallpaper: wallpaper, knockout: outgoingKnockout, extendedEdges: true, onlyShadow: true)
+            self.chatMessageBackgroundIncomingMergedSideImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: incoming.fill[0], strokeColor: incoming.stroke, neighbors: .side, theme: theme, wallpaper: wallpaper, knockout: incomingKnockout, extendedEdges: true)
+            self.chatMessageBackgroundIncomingMergedSideOutlineImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: incoming.fill[0], strokeColor: incoming.stroke, neighbors: .side, theme: theme, wallpaper: wallpaper, knockout: incomingKnockout, extendedEdges: true, onlyOutline: true)
+            self.chatMessageBackgroundIncomingMergedSideShadowImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: incoming.fill[0], strokeColor: incoming.stroke, neighbors: .side, theme: theme, wallpaper: wallpaper, knockout: incomingKnockout, extendedEdges: true, onlyShadow: true)
             self.chatMessageBackgroundOutgoingMergedSideMaskImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: .black, strokeColor: .clear, neighbors: .side, theme: theme, wallpaper: .color(0xffffff), knockout: true, mask: true, extendedEdges: true)
             self.chatMessageBackgroundOutgoingMergedSideImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: outgoing.fill[0], strokeColor: outgoing.stroke, neighbors: .side, theme: theme, wallpaper: wallpaper, knockout: outgoingKnockout, extendedEdges: true)
             self.chatMessageBackgroundOutgoingMergedSideOutlineImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: outgoing.fill[0], strokeColor: outgoing.stroke, neighbors: .side, theme: theme, wallpaper: wallpaper, knockout: outgoingKnockout, extendedEdges: true, onlyOutline: true)
             self.chatMessageBackgroundOutgoingMergedSideShadowImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: outgoing.fill[0], strokeColor: outgoing.stroke, neighbors: .side, theme: theme, wallpaper: wallpaper, knockout: outgoingKnockout, extendedEdges: true, onlyShadow: true)
-            self.chatMessageBackgroundIncomingMergedSideHighlightedImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: incoming.highlightedFill, strokeColor: incoming.stroke, neighbors: .side, theme: theme, wallpaper: wallpaper, knockout: highlightKnockout, extendedEdges: true, alwaysFillColor: true)
-            self.chatMessageBackgroundOutgoingMergedSideHighlightedImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: outgoing.highlightedFill, strokeColor: outgoing.stroke, neighbors: .side, theme: theme, wallpaper: wallpaper, knockout: highlightKnockout, extendedEdges: true, alwaysFillColor: true)
+            self.chatMessageBackgroundIncomingMergedSideHighlightedImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: true, fillColor: .white, strokeColor: .clear, neighbors: .side, theme: theme, wallpaper: wallpaper, knockout: highlightKnockout, extendedEdges: true, alwaysFillColor: true).withRenderingMode(.alwaysTemplate)
+            self.chatMessageBackgroundOutgoingMergedSideHighlightedImage = messageBubbleImage(maxCornerRadius: maxCornerRadius, minCornerRadius: minCornerRadius, incoming: false, fillColor: .white, strokeColor: .clear, neighbors: .side, theme: theme, wallpaper: wallpaper, knockout: highlightKnockout, extendedEdges: true, alwaysFillColor: true).withRenderingMode(.alwaysTemplate)
             
             self.checkBubbleFullImage = generateCheckImage(partial: false, color: theme.message.outgoingCheckColor, width: 11.0)!
             self.checkBubblePartialImage = generateCheckImage(partial: true, color: theme.message.outgoingCheckColor, width: 11.0)!
@@ -494,6 +493,8 @@ public final class PrincipalThemeEssentialGraphics {
             
             self.radialIndicatorFileIconIncoming = generateTintedImage(image: UIImage(bundleImageName: "Chat/Message/RadialProgressIconDocument"), color: .black)!
             self.radialIndicatorFileIconOutgoing = generateTintedImage(image: UIImage(bundleImageName: "Chat/Message/RadialProgressIconDocument"), color: .black)!
+            
+            self.radialIndicatorViewOnceIcon = generateTintedImage(image: UIImage(bundleImageName: "Chat/Message/ViewOnce"), color: .black)!
         }
         
         let chatDateSize: CGFloat = 20.0
@@ -542,6 +543,7 @@ public final class PrincipalThemeAdditionalGraphics {
     public let chatBubbleActionButtonIncomingProfileIconImage: UIImage
     public let chatBubbleActionButtonIncomingAddToChatIconImage: UIImage
     public let chatBubbleActionButtonIncomingWebAppIconImage: UIImage
+    public let chatBubbleActionButtonIncomingCopyIconImage: UIImage
     
     public let chatBubbleActionButtonOutgoingMessageIconImage: UIImage
     public let chatBubbleActionButtonOutgoingLinkIconImage: UIImage
@@ -552,6 +554,7 @@ public final class PrincipalThemeAdditionalGraphics {
     public let chatBubbleActionButtonOutgoingProfileIconImage: UIImage
     public let chatBubbleActionButtonOutgoingAddToChatIconImage: UIImage
     public let chatBubbleActionButtonOutgoingWebAppIconImage: UIImage
+    public let chatBubbleActionButtonOutgoingCopyIconImage: UIImage
         
     public let chatEmptyItemLockIcon: UIImage
     public let emptyChatListCheckIcon: UIImage
@@ -597,6 +600,8 @@ public final class PrincipalThemeAdditionalGraphics {
         self.chatBubbleActionButtonIncomingProfileIconImage = generateTintedImage(image: UIImage(bundleImageName: "Chat/Message/BotProfile"), color: bubbleVariableColor(variableColor: theme.message.incoming.actionButtonsTextColor, wallpaper: wallpaper))!
         self.chatBubbleActionButtonIncomingAddToChatIconImage = generateTintedImage(image: UIImage(bundleImageName: "Chat/Message/BotAddToChat"), color: bubbleVariableColor(variableColor: theme.message.incoming.actionButtonsTextColor, wallpaper: wallpaper))!
         self.chatBubbleActionButtonIncomingWebAppIconImage = generateTintedImage(image: UIImage(bundleImageName: "Chat/Message/BotWebApp"), color: bubbleVariableColor(variableColor: theme.message.incoming.actionButtonsTextColor, wallpaper: wallpaper))!
+        self.chatBubbleActionButtonIncomingCopyIconImage = generateTintedImage(image: UIImage(bundleImageName: "Chat/Message/BotCopy"), color: bubbleVariableColor(variableColor: theme.message.incoming.actionButtonsTextColor, wallpaper: wallpaper))!
+        
         self.chatBubbleActionButtonOutgoingMessageIconImage = generateTintedImage(image: UIImage(bundleImageName: "Chat/Message/BotMessage"), color: bubbleVariableColor(variableColor: theme.message.outgoing.actionButtonsTextColor, wallpaper: wallpaper))!
         self.chatBubbleActionButtonOutgoingLinkIconImage = generateTintedImage(image: UIImage(bundleImageName: "Chat/Message/BotLink"), color: bubbleVariableColor(variableColor: theme.message.outgoing.actionButtonsTextColor, wallpaper: wallpaper))!
         self.chatBubbleActionButtonOutgoingShareIconImage = generateTintedImage(image: UIImage(bundleImageName: "Chat/Message/BotShare"), color: bubbleVariableColor(variableColor: theme.message.outgoing.actionButtonsTextColor, wallpaper: wallpaper))!
@@ -606,6 +611,7 @@ public final class PrincipalThemeAdditionalGraphics {
         self.chatBubbleActionButtonOutgoingProfileIconImage = generateTintedImage(image: UIImage(bundleImageName: "Chat/Message/BotProfile"), color: bubbleVariableColor(variableColor: theme.message.outgoing.actionButtonsTextColor, wallpaper: wallpaper))!
         self.chatBubbleActionButtonOutgoingAddToChatIconImage = generateTintedImage(image: UIImage(bundleImageName: "Chat/Message/BotAddToChat"), color: bubbleVariableColor(variableColor: theme.message.outgoing.actionButtonsTextColor, wallpaper: wallpaper))!
         self.chatBubbleActionButtonOutgoingWebAppIconImage = generateTintedImage(image: UIImage(bundleImageName: "Chat/Message/BotWebApp"), color: bubbleVariableColor(variableColor: theme.message.outgoing.actionButtonsTextColor, wallpaper: wallpaper))!
+        self.chatBubbleActionButtonOutgoingCopyIconImage = generateTintedImage(image: UIImage(bundleImageName: "Chat/Message/BotCopy"), color: bubbleVariableColor(variableColor: theme.message.outgoing.actionButtonsTextColor, wallpaper: wallpaper))!
         
         self.chatEmptyItemLockIcon = generateImage(CGSize(width: 9.0, height: 13.0), rotatedContext: { size, context in
             context.clear(CGRect(origin: CGPoint(), size: size))

@@ -3,7 +3,7 @@ import UIKit
 import Display
 import AsyncDisplayKit
 
-open class ZoomableContentGalleryItemNode: GalleryItemNode, UIScrollViewDelegate {
+open class ZoomableContentGalleryItemNode: GalleryItemNode, ASScrollViewDelegate {
     public let scrollNode: ASScrollNode
     
     private var containerLayout: ContainerViewLayout?
@@ -34,7 +34,7 @@ open class ZoomableContentGalleryItemNode: GalleryItemNode, UIScrollViewDelegate
     
         super.init()
         
-        self.scrollNode.view.delegate = self
+        self.scrollNode.view.delegate = self.wrappedScrollViewDelegate
         self.scrollNode.view.showsVerticalScrollIndicator = false
         self.scrollNode.view.showsHorizontalScrollIndicator = false
         self.scrollNode.view.clipsToBounds = false
@@ -59,12 +59,19 @@ open class ZoomableContentGalleryItemNode: GalleryItemNode, UIScrollViewDelegate
         self.addSubnode(self.scrollNode)
     }
     
+    open func contentTapAction() -> Bool {
+        return false
+    }
+    
     @objc open func contentTap(_ recognizer: TapLongTapOrDoubleTapGestureRecognizer) {
         if recognizer.state == .ended {
             if let (gesture, location) = recognizer.lastRecognizedGestureAndLocation {
                 let pointInNode = self.scrollNode.view.convert(location, to: self.view)
                 if pointInNode.x < 44.0 || pointInNode.x > self.frame.width - 44.0 {
                 } else {
+                    if self.contentTapAction() {
+                        return 
+                    }
                     switch gesture {
                         case .tap:
                             self.toggleControlsVisibility()

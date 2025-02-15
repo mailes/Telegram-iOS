@@ -52,6 +52,9 @@ func _internal_requestStickerSet(postbox: Postbox, network: Network, reference: 
     case .iconStatusEmoji:
         collectionId = nil
         input = .inputStickerSetEmojiDefaultStatuses
+    case .iconChannelStatusEmoji:
+        collectionId = nil
+        input = .inputStickerSetEmojiChannelDefaultStatuses
     case .iconTopicEmoji:
         collectionId = nil
         input = .inputStickerSetEmojiDefaultTopicIcons
@@ -114,7 +117,7 @@ func _internal_requestStickerSet(postbox: Postbox, network: Network, reference: 
                 }
                 
                 for apiDocument in documents {
-                    if let file = telegramMediaFileFromApiDocument(apiDocument), let id = file.id {
+                    if let file = telegramMediaFileFromApiDocument(apiDocument, altDocuments: []), let id = file.id {
                         let fileIndexKeys: [MemoryBuffer]
                         if let indexKeys = indexKeysByFile[id] {
                             fileIndexKeys = indexKeys
@@ -168,12 +171,12 @@ func _internal_installStickerSetInteractively(account: Account, info: StickerPac
         return .generic
     }
     |> mapToSignal { result -> Signal<InstallStickerSetResult, InstallStickerSetError> in
-        let addResult:InstallStickerSetResult
+        let addResult: InstallStickerSetResult
         switch result {
         case .stickerSetInstallResultSuccess:
             addResult = .successful
         case let .stickerSetInstallResultArchive(sets: archived):
-            var coveredSets:[CoveredStickerSet] = []
+            var coveredSets: [CoveredStickerSet] = []
             for archived in archived {
                 let apiDocuments:[Api.Document]
                 let apiSet:Api.StickerSet
@@ -187,13 +190,16 @@ func _internal_installStickerSetInteractively(account: Account, info: StickerPac
                 case let .stickerSetFullCovered(set, _, _, documents):
                     apiSet = set
                     apiDocuments = documents
+                case let .stickerSetNoCovered(set):
+                    apiSet = set
+                    apiDocuments = []
                 }
                 
                 let info = StickerPackCollectionInfo(apiSet: apiSet, namespace: Namespaces.ItemCollection.CloudStickerPacks)
                 
                 var items:[StickerPackItem] = []
                 for apiDocument in apiDocuments {
-                    if let file = telegramMediaFileFromApiDocument(apiDocument), let id = file.id {
+                    if let file = telegramMediaFileFromApiDocument(apiDocument, altDocuments: []), let id = file.id {
                         items.append(StickerPackItem(index: ItemCollectionItemIndex(index: Int32(items.count), id: id.id), file: file, indexKeys: []))
                     }
                 }

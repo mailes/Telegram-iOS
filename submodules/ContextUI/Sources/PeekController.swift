@@ -38,16 +38,18 @@ public final class PeekController: ViewController, ContextControllerProtocol {
         return nil
     }
     
-    public func setItems(_ items: Signal<ContextController.Items, NoError>, minHeight: ContextController.ActionsHeight?) {
+    public func setItems(_ items: Signal<ContextController.Items, NoError>, minHeight: ContextController.ActionsHeight?, animated: Bool) {
     }
 
     public func setItems(_ items: Signal<ContextController.Items, NoError>, minHeight: ContextController.ActionsHeight?, previousActionsTransition: ContextController.PreviousActionsTransition) {
     }
     
     public func pushItems(items: Signal<ContextController.Items, NoError>) {
+        self.controllerNode.pushItems(items: items)
     }
     
     public func popItems() {
+        self.controllerNode.popItems()
     }
     
     private var controllerNode: PeekControllerNode {
@@ -61,10 +63,14 @@ public final class PeekController: ViewController, ContextControllerProtocol {
     private let presentationData: PresentationData
     private let content: PeekControllerContent
     var sourceView: () -> (UIView, CGRect)?
+    private let activateImmediately: Bool
     
     public var visibilityUpdated: ((Bool) -> Void)?
     
     public var getOverlayViews: (() -> [UIView])?
+    
+    public var appeared: (() -> Void)?
+    public var disappeared: (() -> Void)?
     
     private var animatedIn = false
     
@@ -73,10 +79,11 @@ public final class PeekController: ViewController, ContextControllerProtocol {
         return self._ready
     }
     
-    public init(presentationData: PresentationData, content: PeekControllerContent, sourceView: @escaping () -> (UIView, CGRect)?) {
+    public init(presentationData: PresentationData, content: PeekControllerContent, sourceView: @escaping () -> (UIView, CGRect)?, activateImmediately: Bool = false) {
         self.presentationData = presentationData
         self.content = content
         self.sourceView = sourceView
+        self.activateImmediately = activateImmediately
         
         super.init(navigationBarPresentationData: nil)
         
@@ -111,6 +118,10 @@ public final class PeekController: ViewController, ContextControllerProtocol {
             self.controllerNode.animateIn(from: self.getSourceRect())
             
             self.visibilityUpdated?(true)
+            
+            if self.activateImmediately {
+                self.controllerNode.activateMenu(immediately: true)
+            }
         }
     }
     
@@ -125,5 +136,9 @@ public final class PeekController: ViewController, ContextControllerProtocol {
         self.controllerNode.animateOut(to: self.getSourceRect(), completion: { [weak self] in
             self?.presentingViewController?.dismiss(animated: false, completion: nil)
         })
+    }
+    
+    public func dismiss(result: ContextMenuActionResult, completion: (() -> Void)?) {
+        self.dismiss(completion: completion)
     }
 }

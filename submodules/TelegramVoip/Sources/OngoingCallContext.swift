@@ -1,9 +1,8 @@
 import Foundation
-import UIKit
 import SwiftSignalKit
 import TelegramCore
-import TelegramUIPreferences
 import Network
+import TelegramUIPreferences
 
 import TgVoip
 import TgVoipWebrtc
@@ -79,6 +78,11 @@ private func callConnectionDescriptionsWebrtc(_ connection: CallSessionConnectio
         guard let id = idMapping[reflector.id] else {
             return []
         }
+        /*#if DEBUG
+        if id != 1 {
+            return []
+        }
+        #endif*/
         var result: [OngoingCallConnectionDescriptionWebrtc] = []
         if !reflector.ip.isEmpty {
             result.append(OngoingCallConnectionDescriptionWebrtc(reflectorId: id, hasStun: false, hasTurn: true, hasTcp: reflector.isTcp, ip: reflector.ip, port: reflector.port, username: "reflector", password: hexString(reflector.peerTag)))
@@ -88,6 +92,11 @@ private func callConnectionDescriptionsWebrtc(_ connection: CallSessionConnectio
         }
         return result
     case let .webRtcReflector(reflector):
+        /*#if DEBUG
+        if "".isEmpty {
+            return []
+        }
+        #endif*/
         var result: [OngoingCallConnectionDescriptionWebrtc] = []
         if !reflector.ip.isEmpty {
             result.append(OngoingCallConnectionDescriptionWebrtc(reflectorId: 0, hasStun: reflector.hasStun, hasTurn: reflector.hasTurn, hasTcp: false, ip: reflector.ip, port: reflector.port, username: reflector.username, password: reflector.password))
@@ -203,7 +212,7 @@ public struct OngoingCallContextState: Equatable {
     public let remoteBatteryLevel: RemoteBatteryLevel
 }
 
-private final class OngoingCallThreadLocalContextQueueImpl: NSObject, OngoingCallThreadLocalContextQueue, OngoingCallThreadLocalContextQueueWebrtc /*, OngoingCallThreadLocalContextQueueWebrtcCustom*/ {
+private final class OngoingCallThreadLocalContextQueueImpl: NSObject, OngoingCallThreadLocalContextQueue, OngoingCallThreadLocalContextQueueWebrtc {
     private let queue: Queue
     
     init(queue: Queue) {
@@ -224,6 +233,17 @@ private final class OngoingCallThreadLocalContextQueueImpl: NSObject, OngoingCal
     
     func isCurrent() -> Bool {
         return self.queue.isCurrent()
+    }
+    
+    func scheduleBlock(_ f: @escaping () -> Void, after timeout: Double) -> GroupCallDisposable {
+        let timer = SwiftSignalKit.Timer(timeout: timeout, repeat: false, completion: {
+            f()
+        }, queue: self.queue)
+        timer.start()
+        
+        return GroupCallDisposable(block: {
+            timer.invalidate()
+        })
     }
 }
 
@@ -326,6 +346,7 @@ private protocol OngoingCallThreadLocalContextProtocol: AnyObject {
     func nativeVersion() -> String
     func nativeGetDerivedState() -> Data
     func addExternalAudioData(data: Data)
+    func nativeSetIsAudioSessionActive(isActive: Bool)
 }
 
 private final class OngoingCallThreadLocalContextHolder {
@@ -380,6 +401,9 @@ extension OngoingCallThreadLocalContext: OngoingCallThreadLocalContextProtocol {
     }
 
     func addExternalAudioData(data: Data) {
+    }
+    
+    func nativeSetIsAudioSessionActive(isActive: Bool) {
     }
 }
 
@@ -573,6 +597,12 @@ extension OngoingCallThreadLocalContextWebrtc: OngoingCallThreadLocalContextProt
     func addExternalAudioData(data: Data) {
         self.addExternalAudioData(data)
     }
+    
+    func nativeSetIsAudioSessionActive(isActive: Bool) {
+        #if os(iOS)
+        self.setManualAudioSessionIsActive(isActive)
+        #endif
+    }
 }
 
 private extension OngoingCallContextState.State {
@@ -696,6 +726,44 @@ public final class OngoingCallContext {
         }
     }
     
+    public final class Tone {
+        public let samples: Data
+        public let sampleRate: Int
+        public let loopCount: Int
+        
+        public init(samples: Data, sampleRate: Int, loopCount: Int) {
+            self.samples = samples
+            self.sampleRate = sampleRate
+            self.loopCount = loopCount
+        }
+    }
+    
+    public final class AudioDevice {
+        let impl: SharedCallAudioDevice
+        
+        public static func create(enableSystemMute: Bool) -> AudioDevice? {
+            return AudioDevice(impl: SharedCallAudioDevice(disableRecording: false, enableSystemMute: enableSystemMute))
+        }
+        
+        private init(impl: SharedCallAudioDevice) {
+            self.impl = impl
+        }
+        
+        public func setIsAudioSessionActive(_ isActive: Bool) {
+            self.impl.setManualAudioSessionIsActive(isActive)
+        }
+        
+        public func setTone(tone: Tone?) {
+            self.impl.setTone(tone.flatMap { tone in
+                CallAudioTone(samples: tone.samples, sampleRate: tone.sampleRate, loopCount: tone.loopCount)
+            })
+        }
+    }
+    
+    public static func setupAudioSession() {
+        OngoingCallThreadLocalContextWebrtc.setupAudioSession()
+    }
+    
     public let callId: CallId
     public let internalId: CallSessionInternalId
     
@@ -725,17 +793,24 @@ public final class OngoingCallContext {
         return self.audioLevelPromise.get()
     }
     
+    private let signalingDataPipe = ValuePipe<[Data]>()
+    public var signalingData: Signal<[Data], NoError> {
+        return self.signalingDataPipe.signal()
+    }
+    
     private let audioSessionDisposable = MetaDisposable()
+    private let audioSessionActiveDisposable = MetaDisposable()
     private var networkTypeDisposable: Disposable?
     
     public static var maxLayer: Int32 {
         return OngoingCallThreadLocalContext.maxLayer()
     }
     
-    private let tempLogFile: EngineTempBoxFile
-    private let tempStatsLogFile: EngineTempBoxFile
+    private let tempStatsLogFile: EngineTempBox.File
     
     private var signalingConnectionManager: QueueLocalObject<CallSignalingConnectionManager>?
+    
+    private let audioDevice: AudioDevice?
     
     public static func versions(includeExperimental: Bool, includeReference: Bool) -> [(version: String, supportsVideo: Bool)] {
         #if os(iOS) && DEBUG && false
@@ -755,7 +830,7 @@ public final class OngoingCallContext {
         }
     }
 
-    public init(account: Account, callSessionManager: CallSessionManager, callId: CallId, internalId: CallSessionInternalId, proxyServer: ProxyServerSettings?, initialNetworkType: NetworkType, updatedNetworkType: Signal<NetworkType, NoError>, serializedData: String?, dataSaving: VoiceCallDataSaving, key: Data, isOutgoing: Bool, video: OngoingCallVideoCapturer?, connections: CallSessionConnectionSet, maxLayer: Int32, version: String, allowP2P: Bool, enableTCP: Bool, enableStunMarking: Bool, audioSessionActive: Signal<Bool, NoError>, logName: String, preferredVideoCodec: String?) {
+    public init(account: Account, callSessionManager: CallSessionManager, callId: CallId, internalId: CallSessionInternalId, proxyServer: ProxyServerSettings?, initialNetworkType: NetworkType, updatedNetworkType: Signal<NetworkType, NoError>, serializedData: String?, dataSaving: VoiceCallDataSaving, key: Data, isOutgoing: Bool, video: OngoingCallVideoCapturer?, connections: CallSessionConnectionSet, maxLayer: Int32, version: String, customParameters: String?, allowP2P: Bool, enableTCP: Bool, enableStunMarking: Bool, audioSessionActive: Signal<Bool, NoError>, logName: String, preferredVideoCodec: String?, audioDevice: AudioDevice?) {
         let _ = setupLogs
         OngoingCallThreadLocalContext.applyServerConfig(serializedData)
         
@@ -765,8 +840,10 @@ public final class OngoingCallContext {
         self.callSessionManager = callSessionManager
         self.logPath = logName.isEmpty ? "" : callLogsPath(account: self.account) + "/" + logName + ".log"
         let logPath = self.logPath
-        self.tempLogFile = EngineTempBox.shared.tempFile(fileName: "CallLog.txt")
-        let tempLogPath = self.tempLogFile.path
+        
+        self.audioDevice = audioDevice
+        
+        let _ = try? FileManager.default.createDirectory(atPath: callLogsPath(account: account), withIntermediateDirectories: true, attributes: nil)
         
         self.tempStatsLogFile = EngineTempBox.shared.tempFile(fileName: "CallStats.json")
         let tempStatsLogPath = self.tempStatsLogFile.path
@@ -871,22 +948,75 @@ public final class OngoingCallContext {
                         }
                     }
                     
-                    let context = OngoingCallThreadLocalContextWebrtc(version: version, queue: OngoingCallThreadLocalContextQueueImpl(queue: queue), proxy: voipProxyServer, networkType: ongoingNetworkTypeForTypeWebrtc(initialNetworkType), dataSaving: ongoingDataSavingForTypeWebrtc(dataSaving), derivedState: Data(), key: key, isOutgoing: isOutgoing, connections: filteredConnections, maxLayer: maxLayer, allowP2P: allowP2P, allowTCP: enableTCP, enableStunMarking: enableStunMarking, logPath: tempLogPath, statsLogPath: tempStatsLogPath, sendSignalingData: { [weak callSessionManager] data in
-                        queue.async {
-                            guard let strongSelf = self else {
-                                return
-                            }
-                            if let signalingConnectionManager = strongSelf.signalingConnectionManager {
-                                signalingConnectionManager.with { impl in
-                                    impl.send(payloadData: data)
+                    var directConnection: OngoingCallDirectConnection?
+                    if version == "9.0.0" && !"".isEmpty {
+                        if #available(iOS 12.0, *) {
+                            for connection in filteredConnections {
+                                if connection.username == "reflector" && connection.reflectorId == 1 && !connection.hasTcp && connection.hasTurn {
+                                    directConnection = CallDirectConnectionImpl(host: connection.ip, port: Int(connection.port), peerTag: dataWithHexString(connection.password))
+                                    break
                                 }
                             }
-                            
-                            if let callSessionManager = callSessionManager {
-                                callSessionManager.sendSignalingData(internalId: internalId, data: data)
-                            }
                         }
-                    }, videoCapturer: video?.impl, preferredVideoCodec: preferredVideoCodec, audioInputDeviceId: "")
+                    } else {
+                        directConnection = nil
+                    }
+                    
+                    #if DEBUG && false
+                    var customParameters = customParameters
+                    if let initialCustomParameters = try? JSONSerialization.jsonObject(with: (customParameters ?? "{}").data(using: .utf8)!) as? [String: Any] {
+                        var customParametersValue: [String: Any]
+                        customParametersValue = initialCustomParameters
+                        customParametersValue["network_standalone_reflectors"] = true as NSNumber
+                        customParametersValue["network_use_mtproto"] = true as NSNumber
+                        customParametersValue["network_skip_initial_ping"] = true as NSNumber
+                        customParameters = String(data: try! JSONSerialization.data(withJSONObject: customParametersValue), encoding: .utf8)!
+                        
+                        if let reflector = filteredConnections.first(where: { $0.username == "reflector" && $0.reflectorId == 1 }) {
+                            filteredConnections = [reflector]
+                        }
+                    }
+                    #endif
+                    
+                    let context = OngoingCallThreadLocalContextWebrtc(
+                        version: version,
+                        customParameters: customParameters,
+                        queue: OngoingCallThreadLocalContextQueueImpl(queue: queue),
+                        proxy: voipProxyServer,
+                        networkType: ongoingNetworkTypeForTypeWebrtc(initialNetworkType),
+                        dataSaving: ongoingDataSavingForTypeWebrtc(dataSaving),
+                        derivedState: Data(),
+                        key: key,
+                        isOutgoing: isOutgoing,
+                        connections: filteredConnections,
+                        maxLayer: maxLayer,
+                        allowP2P: allowP2P,
+                        allowTCP: enableTCP,
+                        enableStunMarking: enableStunMarking,
+                        logPath: logPath,
+                        statsLogPath: tempStatsLogPath,
+                        sendSignalingData: { [weak callSessionManager] data in
+                            queue.async {
+                                guard let strongSelf = self else {
+                                    return
+                                }
+                                if let signalingConnectionManager = strongSelf.signalingConnectionManager {
+                                    signalingConnectionManager.with { impl in
+                                        impl.send(payloadData: data)
+                                    }
+                                }
+                                
+                                if let callSessionManager = callSessionManager {
+                                    callSessionManager.sendSignalingData(internalId: internalId, data: data)
+                                }
+                            }
+                        },
+                        videoCapturer: video?.impl,
+                        preferredVideoCodec: preferredVideoCodec,
+                        audioInputDeviceId: "",
+                        audioDevice: audioDevice?.impl,
+                        directConnection: directConnection
+                    )
                     
                     strongSelf.contextRef = Unmanaged.passRetained(OngoingCallThreadLocalContextHolder(context))
                     context.stateChanged = { [weak callSessionManager] state, videoState, remoteVideoState, remoteAudioState, remoteBatteryLevel, _ in
@@ -950,6 +1080,16 @@ public final class OngoingCallContext {
                         self?.audioLevelPromise.set(.single(level))
                     }
                     
+                    strongSelf.audioSessionActiveDisposable.set((audioSessionActive
+                    |> deliverOn(queue)).start(next: { isActive in
+                        guard let strongSelf = self else {
+                            return
+                        }
+                        strongSelf.withContext { context in
+                            context.nativeSetIsAudioSessionActive(isActive: isActive)
+                        }
+                    }))
+                    
                     strongSelf.networkTypeDisposable = (updatedNetworkType
                     |> deliverOn(queue)).start(next: { networkType in
                         self?.withContext { context in
@@ -986,7 +1126,13 @@ public final class OngoingCallContext {
 
                 strongSelf.signalingDataDisposable = callSessionManager.beginReceivingCallSignalingData(internalId: internalId, { [weak self] dataList in
                     queue.async {
-                        self?.withContext { context in
+                        guard let self else {
+                            return
+                        }
+                        
+                        self.signalingDataPipe.putNext(dataList)
+                        
+                        self.withContext { context in
                             if let context = context as? OngoingCallThreadLocalContextWebrtc {
                                 for data in dataList {
                                     context.addSignaling(data)
@@ -1010,6 +1156,7 @@ public final class OngoingCallContext {
         }
         
         self.audioSessionDisposable.dispose()
+        self.audioSessionActiveDisposable.dispose()
         self.networkTypeDisposable?.dispose()
     }
         
@@ -1048,10 +1195,10 @@ public final class OngoingCallContext {
         if !logPath.isEmpty {
             statsLogPath = logPath + ".json"
         }
-        let tempLogPath = self.tempLogFile.path
         let tempStatsLogPath = self.tempStatsLogFile.path
         
-        self.withContextThenDeallocate { context in
+        let queue = self.queue
+        self.withContext { context in
             context.nativeStop { debugLog, bytesSentWifi, bytesReceivedWifi, bytesSentMobile, bytesReceivedMobile in
                 let delta = NetworkUsageStatsConnectionsEntry(
                     cellular: NetworkUsageStatsDirectionsEntry(
@@ -1061,12 +1208,6 @@ public final class OngoingCallContext {
                         incoming: bytesReceivedWifi,
                         outgoing: bytesSentWifi))
                 updateAccountNetworkUsageStats(account: self.account, category: .call, delta: delta)
-                
-                if !logPath.isEmpty {
-                    let logsPath = callLogsPath(account: account)
-                    let _ = try? FileManager.default.createDirectory(atPath: logsPath, withIntermediateDirectories: true, attributes: nil)
-                    let _ = try? FileManager.default.moveItem(atPath: tempLogPath, toPath: logPath)
-                }
                 
                 if !statsLogPath.isEmpty {
                     let logsPath = callLogsPath(account: account)
@@ -1087,6 +1228,10 @@ public final class OngoingCallContext {
                             break
                         }
                     })
+                }
+                
+                queue.async {
+                    let _ = context.nativeGetDerivedState()
                 }
             }
         }
@@ -1136,51 +1281,28 @@ public final class OngoingCallContext {
         return (poll |> then(.complete() |> delay(0.5, queue: Queue.concurrentDefaultQueue()))) |> restart
     }
     
-    public func makeIncomingVideoView(completion: @escaping (OngoingCallContextPresentationCallVideoView?) -> Void) {
-        self.withContext { context in
-            if let context = context as? OngoingCallThreadLocalContextWebrtc {
-                context.makeIncomingVideoView { view in
-                    if let view = view {
-                        completion(OngoingCallContextPresentationCallVideoView(
-                            view: view,
-                            setOnFirstFrameReceived: { [weak view] f in
-                                view?.setOnFirstFrameReceived(f)
-                            },
-                            getOrientation: { [weak view] in
-                                if let view = view {
-                                    return OngoingCallVideoOrientation(view.orientation)
-                                } else {
-                                    return .rotation0
-                                }
-                            },
-                            getAspect: { [weak view] in
-                                if let view = view {
-                                    return view.aspect
-                                } else {
-                                    return 0.0
-                                }
-                            },
-                            setOnOrientationUpdated: { [weak view] f in
-                                view?.setOnOrientationUpdated { value, aspect in
-                                    f?(OngoingCallVideoOrientation(value), aspect)
-                                }
-                            },
-                            setOnIsMirroredUpdated: { [weak view] f in
-                                view?.setOnIsMirroredUpdated { value in
-                                    f?(value)
-                                }
-                            },
-                            updateIsEnabled: { [weak view] value in
-                                view?.updateIsEnabled(value)
-                            }
-                        ))
-                    } else {
-                        completion(nil)
+    public func video(isIncoming: Bool) -> Signal<OngoingGroupCallContext.VideoFrameData, NoError> {
+        let queue = self.queue
+        return Signal { [weak self] subscriber in
+            let disposable = MetaDisposable()
+
+            queue.async {
+                guard let strongSelf = self else {
+                    return
+                }
+                strongSelf.withContext { context in
+                    if let context = context as? OngoingCallThreadLocalContextWebrtc {
+                        let innerDisposable = context.addVideoOutput(withIsIncoming: isIncoming, sink: { videoFrameData in
+                            subscriber.putNext(OngoingGroupCallContext.VideoFrameData(frameData: videoFrameData))
+                        })
+                        disposable.set(ActionDisposable {
+                            innerDisposable.dispose()
+                        })
                     }
                 }
-            } else {
-                completion(nil)
             }
+
+            return disposable
         }
     }
 
@@ -1189,12 +1311,219 @@ public final class OngoingCallContext {
             context.addExternalAudioData(data: data)
         }
     }
+    
+    public func sendSignalingData(data: Data) {
+        self.queue.async { [weak self] in
+            guard let strongSelf = self else {
+                return
+            }
+            if let signalingConnectionManager = strongSelf.signalingConnectionManager {
+                signalingConnectionManager.with { impl in
+                    impl.send(payloadData: data)
+                }
+            }
+            
+            strongSelf.callSessionManager.sendSignalingData(internalId: strongSelf.internalId, data: data)
+        }
+    }
 }
 
-private protocol CallSignalingConnection {
+private protocol CallSignalingConnection: AnyObject {
     func start()
     func stop()
     func send(payloadData: Data)
+}
+
+@available(iOS 13.0, *)
+private class CustomWrapperProtocol: NWProtocolFramerImplementation {
+    static var label: String = "CustomWrapperProtocol"
+    
+    static let definition = NWProtocolFramer.Definition(implementation: CustomWrapperProtocol.self)
+    
+    required init(framer: NWProtocolFramer.Instance) {
+        
+    }
+    
+    func start(framer: NWProtocolFramer.Instance) -> NWProtocolFramer.StartResult {
+        return .ready
+    }
+    
+    func handleInput(framer: NWProtocolFramer.Instance) -> Int {
+        preconditionFailure()
+    }
+    
+    func handleOutput(framer: NWProtocolFramer.Instance, message: NWProtocolFramer.Message, messageLength: Int, isComplete: Bool) {
+        preconditionFailure()
+    }
+    
+    func wakeup(framer: NWProtocolFramer.Instance) {
+    }
+    
+    func stop(framer: NWProtocolFramer.Instance) -> Bool {
+        return true
+    }
+    
+    func cleanup(framer: NWProtocolFramer.Instance) {
+    }
+}
+
+@available(iOS 12.0, *)
+private final class CallDirectConnectionImpl: NSObject, OngoingCallDirectConnection {
+    private final class Impl {
+        private let queue: Queue
+        private let peerTag: Data
+        
+        private var connection: NWConnection?
+        
+        var incomingDataHandler: ((Data) -> Void)?
+        
+        init(queue: Queue, host: String, port: Int, peerTag: Data) {
+            self.queue = queue
+            
+            var peerTag = peerTag
+            peerTag.withUnsafeMutableBytes { buffer in
+                let bytes = buffer.baseAddress!.assumingMemoryBound(to: UInt8.self)
+                for i in (buffer.count - 4) ..< buffer.count {
+                    bytes.advanced(by: i).pointee = 1
+                }
+            }
+            self.peerTag = peerTag
+            
+            if let port = NWEndpoint.Port(rawValue: UInt16(clamping: port)) {
+                self.connection = NWConnection(host: NWEndpoint.Host(host), port: port, using: .udp)
+            }
+            
+            self.connection?.stateUpdateHandler = { newState in
+                switch newState {
+                case .ready:
+                    print("CallDirectConnection: State: Ready")
+                case .setup:
+                    print("CallDirectConnection: State: Setup")
+                case .cancelled:
+                    print("CallDirectConnection: State: Cancelled")
+                case .preparing:
+                    print("CallDirectConnection: State: Preparing")
+                case let .waiting(error):
+                    print("CallDirectConnection: State: Waiting (\(error))")
+                case let .failed(error):
+                    print("CallDirectConnection: State: Error (\(error))")
+                @unknown default:
+                    print("CallDirectConnection: State: Unknown")
+                }
+            }
+            
+            self.connection?.start(queue: self.queue.queue)
+            self.receive()
+        }
+        
+        deinit {
+            
+        }
+        
+        private func receive() {
+            let queue = self.queue
+            self.connection?.receiveMessage(completion: { [weak self] data, _, _, error in
+                assert(queue.isCurrent())
+                
+                guard let `self` = self else {
+                    return
+                }
+                
+                if let data {
+                    if data.count >= 16 {
+                        var unwrappedData = Data(count: data.count - 16)
+                        unwrappedData.withUnsafeMutableBytes { destBuffer -> Void in
+                            data.withUnsafeBytes { sourceBuffer -> Void in
+                                sourceBuffer.copyBytes(to: destBuffer, from: 16 ..< sourceBuffer.count)
+                            }
+                        }
+                        
+                        self.incomingDataHandler?(unwrappedData)
+                    } else {
+                        print("Invalid data size")
+                    }
+                }
+                if error == nil {
+                    self.receive()
+                }
+            })
+        }
+        
+        func send(data: Data) {
+            var wrappedData = Data()
+            wrappedData.append(self.peerTag)
+            wrappedData.append(data)
+            
+            self.connection?.send(content: wrappedData, completion: .contentProcessed({ error in
+                if let error {
+                    print("Send error: \(error)")
+                }
+            }))
+        }
+    }
+    
+    private static let sharedQueue = Queue(name: "CallDirectConnectionImpl")
+    
+    private let queue: Queue
+    private let impl: QueueLocalObject<Impl>
+    
+    private let incomingDataHandlers = Atomic<Bag<(Data) -> Void>>(value: Bag())
+    
+    init(host: String, port: Int, peerTag: Data) {
+        let queue = CallDirectConnectionImpl.sharedQueue
+        self.queue = queue
+        self.impl = QueueLocalObject(queue: queue, generate: {
+            return Impl(queue: queue, host: host, port: port, peerTag: peerTag)
+        })
+        
+        let incomingDataHandlers = self.incomingDataHandlers
+        self.impl.with { [weak incomingDataHandlers] impl in
+            impl.incomingDataHandler = { data in
+                guard let incomingDataHandlers else {
+                    return
+                }
+                for f in incomingDataHandlers.with({ return $0.copyItems() }) {
+                    f(data)
+                }
+            }
+        }
+    }
+    
+    func add(onIncomingPacket addOnIncomingPacket: @escaping (Data) -> Void) -> Data {
+        var token = self.incomingDataHandlers.with { bag -> Int32 in
+            return Int32(bag.add(addOnIncomingPacket))
+        }
+        return withUnsafeBytes(of: &token, { buffer -> Data in
+            let bytes = buffer.baseAddress!.assumingMemoryBound(to: UInt8.self)
+            return Data(bytes: bytes, count: 4)
+        })
+    }
+    
+    func remove(onIncomingPacket token: Data) {
+        if token.count != 4 {
+            return
+        }
+        
+        var tokenValue: Int32 = 0
+        withUnsafeMutableBytes(of: &tokenValue, { tokenBuffer in
+            let tokenBytes = tokenBuffer.baseAddress!.assumingMemoryBound(to: UInt8.self)
+            
+            token.withUnsafeBytes { sourceBuffer in
+                let sourceBytes = sourceBuffer.baseAddress!.assumingMemoryBound(to: UInt8.self)
+                memcpy(tokenBytes, sourceBytes, 4)
+            }
+        })
+        
+        self.incomingDataHandlers.with { bag in
+            bag.remove(Int(tokenValue))
+        }
+    }
+    
+    func sendPacket(_ packet: Data) {
+        self.impl.with { impl in
+            impl.send(data: packet)
+        }
+    }
 }
 
 @available(iOS 12.0, *)
@@ -1220,6 +1549,7 @@ private final class CallSignalingConnectionImpl: CallSignalingConnection {
         self.peerTag = peerTag
         self.dataReceived = dataReceived
         self.isClosed = isClosed
+        
         self.connection = NWConnection(host: self.host, port: self.port, using: .tcp)
         
         self.connection.stateUpdateHandler = { [weak self] state in
@@ -1256,6 +1586,8 @@ private final class CallSignalingConnectionImpl: CallSignalingConnection {
     }
     
     func start() {
+        OngoingCallThreadLocalContextWebrtc.logMessage("CallSignaling: Connecting...")
+        
         self.connection.start(queue: self.queue.queue)
         self.receivePacketHeader()
     }
@@ -1399,48 +1731,91 @@ private final class CallSignalingConnectionImpl: CallSignalingConnection {
 }
 
 private final class CallSignalingConnectionManager {
+    private final class ConnectionContext {
+        let connection: CallSignalingConnection
+        let host: String
+        let port: UInt16
+        
+        init(connection: CallSignalingConnection, host: String, port: UInt16) {
+            self.connection = connection
+            self.host = host
+            self.port = port
+        }
+    }
+    
     private let queue: Queue
+    private let peerTag: Data
+    private let dataReceived: (Data) -> Void
+    
+    private var isRunning: Bool = false
     
     private var nextConnectionId: Int = 0
-    private var connections: [Int: CallSignalingConnection] = [:]
+    private var connections: [Int: ConnectionContext] = [:]
     
     init(queue: Queue, peerTag: Data, servers: [OngoingCallConnectionDescriptionWebrtc], dataReceived: @escaping (Data) -> Void) {
         self.queue = queue
+        self.peerTag = peerTag
+        self.dataReceived = dataReceived
         
         for server in servers {
             if server.hasTcp {
-                let id = self.nextConnectionId
-                self.nextConnectionId += 1
-                if #available(iOS 12.0, *) {
-                    let connection = CallSignalingConnectionImpl(queue: queue, host: server.ip, port: UInt16(server.port), peerTag: peerTag, dataReceived: { data in
-                        dataReceived(data)
-                    }, isClosed: { [weak self] in
-                        guard let strongSelf = self else {
-                            return
-                        }
-                        let _ = strongSelf
-                    })
-                    connections[id] = connection
-                }
+                self.spawnConnection(host: server.ip, port: UInt16(server.port))
             }
         }
     }
     
     func start() {
+        if self.isRunning {
+            return
+        }
+        self.isRunning = true
+        
         for (_, connection) in self.connections {
-            connection.start()
+            connection.connection.start()
         }
     }
     
     func stop() {
+        if !self.isRunning {
+            return
+        }
+        self.isRunning = false
+        
         for (_, connection) in self.connections {
-            connection.stop()
+            connection.connection.stop()
         }
     }
     
     func send(payloadData: Data) {
         for (_, connection) in self.connections {
-            connection.send(payloadData: payloadData)
+            connection.connection.send(payloadData: payloadData)
+        }
+    }
+    
+    private func spawnConnection(host: String, port: UInt16) {
+        let id = self.nextConnectionId
+        self.nextConnectionId += 1
+        if #available(iOS 12.0, *) {
+            let dataReceived = self.dataReceived
+            let connection = CallSignalingConnectionImpl(queue: queue, host: host, port: port, peerTag: self.peerTag, dataReceived: { data in
+                dataReceived(data)
+            }, isClosed: { [weak self] in
+                guard let `self` = self else {
+                    return
+                }
+                self.handleConnectionFailed(id: id)
+            })
+            self.connections[id] = ConnectionContext(connection: connection, host: host, port: port)
+            if self.isRunning {
+                connection.start()
+            }
+        }
+    }
+    
+    private func handleConnectionFailed(id: Int) {
+        if let connection = self.connections.removeValue(forKey: id) {
+            connection.connection.stop()
+            self.spawnConnection(host: connection.host, port: connection.port)
         }
     }
 }

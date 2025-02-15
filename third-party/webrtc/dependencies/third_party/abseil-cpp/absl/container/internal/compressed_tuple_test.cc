@@ -358,7 +358,6 @@ TEST(CompressedTupleTest, Constexpr) {
   EXPECT_EQ(x2, 5);
   EXPECT_EQ(x3, CallType::kConstRef);
 
-#if !defined(__GNUC__) || defined(__clang__) || __GNUC__ > 4
   constexpr CompressedTuple<Empty<0>, TrivialStruct, int> trivial = {};
   constexpr CallType trivial0 = trivial.get<0>().value();
   constexpr int trivial1 = trivial.get<1>().value();
@@ -367,7 +366,6 @@ TEST(CompressedTupleTest, Constexpr) {
   EXPECT_EQ(trivial0, CallType::kConstRef);
   EXPECT_EQ(trivial1, 0);
   EXPECT_EQ(trivial2, 0);
-#endif
 
   constexpr CompressedTuple<Empty<0>, NonTrivialStruct, absl::optional<int>>
       non_trivial = {};
@@ -402,6 +400,16 @@ TEST(CompressedTupleTest, EmptyFinalClass) {
   EXPECT_EQ(x.get<0>().f(), 5);
 }
 #endif
+
+// TODO(b/214288561): enable this test.
+TEST(CompressedTupleTest, DISABLED_NestedEbo) {
+  struct Empty1 {};
+  struct Empty2 {};
+  CompressedTuple<Empty1, CompressedTuple<Empty2>, int> x;
+  CompressedTuple<Empty1, Empty2, int> y;
+  // Currently fails with sizeof(x) == 8, sizeof(y) == 4.
+  EXPECT_EQ(sizeof(x), sizeof(y));
+}
 
 }  // namespace
 }  // namespace container_internal

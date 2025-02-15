@@ -4,12 +4,15 @@
 #import <FFMpegBinding/FFMpegPacket.h>
 #import <FFMpegBinding/FFMpegAVCodecContext.h>
 
+#import "libavcodec/avcodec.h"
 #import "libavformat/avformat.h"
 
 int FFMpegCodecIdH264 = AV_CODEC_ID_H264;
 int FFMpegCodecIdHEVC = AV_CODEC_ID_HEVC;
 int FFMpegCodecIdMPEG4 = AV_CODEC_ID_MPEG4;
 int FFMpegCodecIdVP9 = AV_CODEC_ID_VP9;
+int FFMpegCodecIdVP8 = AV_CODEC_ID_VP8;
+int FFMpegCodecIdAV1 = AV_CODEC_ID_AV1;
 
 @interface FFMpegAVFormatContext () {
     AVFormatContext *_impl;
@@ -37,10 +40,15 @@ int FFMpegCodecIdVP9 = AV_CODEC_ID_VP9;
     _impl->pb = [ioContext impl];
 }
 
-- (bool)openInput {
+- (bool)openInputWithDirectFilePath:(NSString * _Nullable)directFilePath {
     AVDictionary *options = nil;
     av_dict_set(&options, "usetoc", "1", 0);
-    int result = avformat_open_input(&_impl, "file", nil, &options);
+    
+    const char *url = "file";
+    if (directFilePath) {
+        url = [directFilePath UTF8String];
+    }
+    int result = avformat_open_input(&_impl, url, nil, &options);
     av_dict_free(&options);
     if (_impl != nil) {
         _impl->flags |= AVFMT_FLAG_FAST_SEEK;
@@ -61,6 +69,11 @@ int FFMpegCodecIdVP9 = AV_CODEC_ID_VP9;
         options |= AVSEEK_FLAG_ANY;
     }
     av_seek_frame(_impl, streamIndex, pts, options);
+}
+
+- (void)seekFrameForStreamIndex:(int32_t)streamIndex byteOffset:(int64_t)byteOffset {
+    int options = AVSEEK_FLAG_BYTE;
+    av_seek_frame(_impl, streamIndex, byteOffset, options);
 }
 
 - (bool)readFrameIntoPacket:(FFMpegPacket *)packet {
@@ -98,8 +111,38 @@ int FFMpegCodecIdVP9 = AV_CODEC_ID_VP9;
     return _impl->streams[streamIndex]->codecpar->codec_id;
 }
 
+- (double)duration {
+    return (double)_impl->duration / AV_TIME_BASE;
+}
+
+- (int64_t)startTimeAtStreamIndex:(int32_t)streamIndex {
+    return _impl->streams[streamIndex]->start_time;
+}
+
 - (int64_t)durationAtStreamIndex:(int32_t)streamIndex {
     return _impl->streams[streamIndex]->duration;
+}
+
+- (int)numberOfIndexEntriesAtStreamIndex:(int32_t)streamIndex {
+    return avformat_index_get_entries_count(_impl->streams[streamIndex]);
+}
+
+- (bool)fillIndexEntryAtStreamIndex:(int32_t)streamIndex entryIndex:(int32_t)entryIndex outEntry:(FFMpegAVIndexEntry * _Nonnull)outEntry {
+    const AVIndexEntry *entry = avformat_index_get_entry(_impl->streams[streamIndex], entryIndex);
+    if (!entry) {
+        outEntry->pos = -1;
+        outEntry->timestamp = 0;
+        outEntry->isKeyframe = false;
+        outEntry->size = 0;
+        return false;
+    }
+    
+    outEntry->pos = entry->pos;
+    outEntry->timestamp = entry->timestamp;
+    outEntry->isKeyframe = (entry->flags & AVINDEX_KEYFRAME) != 0;
+    outEntry->size = entry->size;
+    
+    return true;
 }
 
 - (bool)codecParamsAtStreamIndex:(int32_t)streamIndex toContext:(FFMpegAVCodecContext *)context {
@@ -115,9 +158,9 @@ int FFMpegCodecIdVP9 = AV_CODEC_ID_VP9;
     
     if (stream->time_base.den != 0 && stream->time_base.num != 0) {
         timebase = CMTimeMake((int64_t)stream->time_base.num, stream->time_base.den);
-    } else if (stream->codec->time_base.den != 0 && stream->codec->time_base.num != 0) {
+    }/* else if (stream->codec->time_base.den != 0 && stream->codec->time_base.num != 0) {
         timebase = CMTimeMake((int64_t)stream->codec->time_base.num, stream->codec->time_base.den);
-    } else {
+    }*/ else {
         timebase = defaultTimeBase;
     }
     

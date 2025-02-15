@@ -41,8 +41,6 @@ extension SettingsSearchableItemIcon {
                 return PresentationResourcesSettings.watch
             case .passport:
                 return PresentationResourcesSettings.passport
-            case .wallet:
-                return PresentationResourcesSettings.wallet
             case .support:
                 return PresentationResourcesSettings.support
             case .faq:
@@ -51,6 +49,12 @@ extension SettingsSearchableItemIcon {
                 return PresentationResourcesSettings.chatFolders
             case .deleteAccount:
                 return PresentationResourcesSettings.deleteAccount
+            case .devices:
+                return PresentationResourcesSettings.devices
+            case .premium:
+                return PresentationResourcesSettings.premium
+            case .stories:
+                return PresentationResourcesSettings.stories
         }
     }
 }
@@ -452,7 +456,7 @@ public final class SettingsSearchContainerNode: SearchDisplayControllerContentNo
         self.recentDisposable = (combineLatest(recentSearchItems, faqItems.get(), self.presentationDataPromise.get())
         |> deliverOnMainQueue).start(next: { [weak self] recentSearchItems, faqItems, presentationData in
             if let strongSelf = self {
-                let recentHeader = ChatListSearchItemHeader(type: .recentPeers, theme: presentationData.theme, strings: presentationData.strings, actionTitle: presentationData.strings.WebSearch_RecentSectionClear, action: {
+                let recentHeader = ChatListSearchItemHeader(type: .recentPeers, theme: presentationData.theme, strings: presentationData.strings, actionTitle: presentationData.strings.WebSearch_RecentSectionClear, action: { _ in
                     clearRecentSettingsSearchItems(engine: context.engine)
                 })
                 let faqHeader = ChatListSearchItemHeader(type: .faq, theme: presentationData.theme, strings: presentationData.strings)
@@ -465,7 +469,6 @@ public final class SettingsSearchContainerNode: SearchDisplayControllerContentNo
                 for i in 0 ..< faqItems.count {
                     entries.append(.faq(i, faqItems[i], faqHeader))
                 }
-                
                 
                 let previousEntries = previousRecentItems.swap(entries)
                 let transition = preparedSettingsSearchContainerRecentTransition(from: previousEntries ?? [], to: entries, account: context.account, theme: presentationData.theme, strings: presentationData.strings, interaction: interaction)

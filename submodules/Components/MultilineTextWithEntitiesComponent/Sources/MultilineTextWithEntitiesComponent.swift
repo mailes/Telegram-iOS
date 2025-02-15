@@ -30,6 +30,9 @@ public final class MultilineTextWithEntitiesComponent: Component {
     public let textShadowColor: UIColor?
     public let textStroke: (UIColor, CGFloat)?
     public let highlightColor: UIColor?
+    public let handleSpoilers: Bool
+    public let manualVisibilityControl: Bool
+    public let resetAnimationsOnVisibilityChange: Bool
     public let highlightAction: (([NSAttributedString.Key: Any]) -> NSAttributedString.Key?)?
     public let tapAction: (([NSAttributedString.Key: Any], Int) -> Void)?
     public let longTapAction: (([NSAttributedString.Key: Any], Int) -> Void)?
@@ -50,6 +53,9 @@ public final class MultilineTextWithEntitiesComponent: Component {
         textShadowColor: UIColor? = nil,
         textStroke: (UIColor, CGFloat)? = nil,
         highlightColor: UIColor? = nil,
+        handleSpoilers: Bool = false,
+        manualVisibilityControl: Bool = false,
+        resetAnimationsOnVisibilityChange: Bool = false,
         highlightAction: (([NSAttributedString.Key: Any]) -> NSAttributedString.Key?)? = nil,
         tapAction: (([NSAttributedString.Key: Any], Int) -> Void)? = nil,
         longTapAction: (([NSAttributedString.Key: Any], Int) -> Void)? = nil
@@ -70,6 +76,9 @@ public final class MultilineTextWithEntitiesComponent: Component {
         self.textStroke = textStroke
         self.highlightColor = highlightColor
         self.highlightAction = highlightAction
+        self.handleSpoilers = handleSpoilers
+        self.manualVisibilityControl = manualVisibilityControl
+        self.resetAnimationsOnVisibilityChange = resetAnimationsOnVisibilityChange
         self.tapAction = tapAction
         self.longTapAction = longTapAction
     }
@@ -99,7 +108,15 @@ public final class MultilineTextWithEntitiesComponent: Component {
         if lhs.insets != rhs.insets {
             return false
         }
-        
+        if lhs.handleSpoilers != rhs.handleSpoilers {
+            return false
+        }
+        if lhs.manualVisibilityControl != rhs.manualVisibilityControl {
+            return false
+        }
+        if lhs.resetAnimationsOnVisibilityChange != rhs.resetAnimationsOnVisibilityChange {
+            return false
+        }
         if let lhsTextShadowColor = lhs.textShadowColor, let rhsTextShadowColor = rhs.textShadowColor {
             if !lhsTextShadowColor.isEqual(rhsTextShadowColor) {
                 return false
@@ -131,6 +148,7 @@ public final class MultilineTextWithEntitiesComponent: Component {
     }
     
     public final class View: UIView {
+        var spoilerTextNode: ImmediateTextNodeWithEntities?
         let textNode: ImmediateTextNodeWithEntities
         
         public override init(frame: CGRect) {
@@ -145,7 +163,11 @@ public final class MultilineTextWithEntitiesComponent: Component {
             fatalError("init(coder:) has not been implemented")
         }
         
-        public func update(component: MultilineTextWithEntitiesComponent, availableSize: CGSize, transition: Transition) -> CGSize {
+        public func updateVisibility(_ isVisible: Bool) {
+            self.textNode.visibility = isVisible
+        }
+        
+        public func update(component: MultilineTextWithEntitiesComponent, availableSize: CGSize, transition: ComponentTransition) -> CGSize {
             let attributedString: NSAttributedString
             switch component.text {
             case let .plain(string):
@@ -170,9 +192,11 @@ public final class MultilineTextWithEntitiesComponent: Component {
             self.textNode.highlightAttributeAction = component.highlightAction
             self.textNode.tapAttributeAction = component.tapAction
             self.textNode.longTapAttributeAction = component.longTapAction
-                        
+            
+            self.textNode.resetEmojiToFirstFrameAutomatically = component.resetAnimationsOnVisibilityChange
+                                    
             if case let .curve(duration, _) = transition.animation, let previousText = previousText, previousText != attributedString.string {
-                if let snapshotView = self.snapshotView(afterScreenUpdates: false) {
+                if let snapshotView = self.snapshotContentTree() {
                     snapshotView.center = self.center
                     self.superview?.addSubview(snapshotView)
                     
@@ -183,10 +207,9 @@ public final class MultilineTextWithEntitiesComponent: Component {
                 }
             }
             
-            let size = self.textNode.updateLayout(availableSize)
-            self.textNode.frame = CGRect(origin: .zero, size: size)
-            
-            self.textNode.visibility = true
+            if !component.manualVisibilityControl {
+                self.textNode.visibility = true
+            }
             if let context = component.context, let animationCache = component.animationCache, let animationRenderer = component.animationRenderer, let placeholderColor = component.placeholderColor {
                 self.textNode.arguments = TextNodeWithEntities.Arguments(
                     context: context,
@@ -197,6 +220,48 @@ public final class MultilineTextWithEntitiesComponent: Component {
                 )
             }
             
+            let size = self.textNode.updateLayout(availableSize)
+            self.textNode.frame = CGRect(origin: .zero, size: size)
+            
+            if component.handleSpoilers {
+                let spoilerTextNode: ImmediateTextNodeWithEntities
+                if let current = self.spoilerTextNode {
+                    spoilerTextNode = current
+                } else {
+                    spoilerTextNode = ImmediateTextNodeWithEntities()
+                    spoilerTextNode.alpha = 0.0
+                    self.spoilerTextNode = spoilerTextNode
+                    
+                    self.textNode.dustNode?.textNode = spoilerTextNode
+                }
+                
+                spoilerTextNode.displaySpoilers = true
+                spoilerTextNode.displaySpoilerEffect = false
+                spoilerTextNode.attributedText = attributedString
+                spoilerTextNode.maximumNumberOfLines = component.maximumNumberOfLines
+                spoilerTextNode.truncationType = component.truncationType
+                spoilerTextNode.textAlignment = component.horizontalAlignment
+                spoilerTextNode.verticalAlignment = component.verticalAlignment
+                spoilerTextNode.lineSpacing = component.lineSpacing
+                spoilerTextNode.cutout = component.cutout
+                spoilerTextNode.insets = component.insets
+                spoilerTextNode.textShadowColor = component.textShadowColor
+                spoilerTextNode.textStroke = component.textStroke
+                spoilerTextNode.isUserInteractionEnabled = false
+                
+                let size = spoilerTextNode.updateLayout(availableSize)
+                spoilerTextNode.frame = CGRect(origin: .zero, size: size)
+                
+                if spoilerTextNode.view.superview == nil {
+                    self.addSubview(spoilerTextNode.view)
+                }
+            } else if let spoilerTextNode = self.spoilerTextNode {
+                self.spoilerTextNode = nil
+                spoilerTextNode.view.removeFromSuperview()
+                
+                self.textNode.dustNode?.textNode = nil
+            }
+            
             return size
         }
     }
@@ -205,7 +270,7 @@ public final class MultilineTextWithEntitiesComponent: Component {
         return View()
     }
     
-    public func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: Transition) -> CGSize {
+    public func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: ComponentTransition) -> CGSize {
         return view.update(component: self, availableSize: availableSize, transition: transition)
     }
 }

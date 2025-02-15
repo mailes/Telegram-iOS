@@ -1,9 +1,9 @@
 import Foundation
 import Postbox
 
+public let anonymousSavedMessagesId: Int64 = 2666000
+
 public extension Peer {
-    
-    
     var debugDisplayTitle: String {
         switch self {
         case let user as TelegramUser:
@@ -30,7 +30,10 @@ public extension Peer {
         
         if let restrictionInfo = restrictionInfo {
             for rule in restrictionInfo.rules {
-                if rule.platform == "all" || rule.platform == platform {
+                if rule.reason == "sensitive" {
+                    continue
+                }
+                if rule.platform == "all" || rule.platform == platform || contentSettings.addContentRestrictionReasons.contains(rule.platform) {
                     if !contentSettings.ignoreContentRestrictionReasons.contains(rule.reason) {
                         return rule.text
                     }
@@ -143,7 +146,7 @@ public extension Peer {
     var isDeleted: Bool {
         switch self {
         case let user as TelegramUser:
-            return user.firstName == nil && user.lastName == nil && user.phone == nil
+            return user.firstName == nil && user.lastName == nil
         default:
             return false
         }
@@ -191,6 +194,24 @@ public extension Peer {
         }
     }
     
+    var isSubscription: Bool {
+        switch self {
+        case let channel as TelegramChannel:
+            return channel.subscriptionUntilDate != nil
+        default:
+            return false
+        }
+    }
+    
+    var isCloseFriend: Bool {
+        switch self {
+        case let user as TelegramUser:
+            return user.flags.contains(.isCloseFriend)
+        default:
+            return false
+        }
+    }
+    
     var isCopyProtectionEnabled: Bool {
         switch self {
         case let group as TelegramGroup:
@@ -199,6 +220,115 @@ public extension Peer {
             return channel.flags.contains(.copyProtectionEnabled)
         default:
             return false
+        }
+    }
+    
+    func hasSensitiveContent(platform: String) -> Bool {
+        var restrictionInfo: PeerAccessRestrictionInfo?
+        switch self {
+        case let user as TelegramUser:
+            restrictionInfo = user.restrictionInfo
+        case let channel as TelegramChannel:
+            restrictionInfo = channel.restrictionInfo
+        default:
+            break
+        }
+        
+        if let restrictionInfo, let rule = restrictionInfo.rules.first(where: { $0.reason == "sensitive" }) {
+            if rule.platform == "all" || rule.platform == platform {
+                return true
+            }
+        }
+        return false
+    }
+    
+    var isForum: Bool {
+        if let channel = self as? TelegramChannel {
+            return channel.flags.contains(.isForum)
+        } else {
+            return false
+        }
+    }
+    
+    var nameColor: PeerNameColor? {
+        switch self {
+        case let user as TelegramUser:
+            if let nameColor = user.nameColor {
+                return nameColor
+            } else {
+                return PeerNameColor(rawValue: Int32(self.id.id._internalGetInt64Value() % 7))
+            }
+        case let channel as TelegramChannel:
+            if let nameColor = channel.nameColor {
+                return nameColor
+            } else {
+                return PeerNameColor(rawValue: Int32(self.id.id._internalGetInt64Value() % 7))
+            }
+        default:
+            return nil
+        }
+    }
+    
+    var verificationIconFileId: Int64? {
+        switch self {
+        case let user as TelegramUser:
+            return user.verificationIconFileId
+        case let channel as TelegramChannel:
+            return channel.verificationIconFileId
+        default:
+            return nil
+        }
+    }
+    
+    var profileColor: PeerNameColor? {
+        switch self {
+        case let user as TelegramUser:
+            return user.profileColor
+        case let channel as TelegramChannel:
+            return channel.profileColor
+        default:
+            return nil
+        }
+    }
+    
+    var hasCustomNameColor: Bool {
+        let defaultNameColor = PeerNameColor(rawValue: Int32(self.id.id._internalGetInt64Value() % 7))
+        if self.nameColor != defaultNameColor {
+            return true
+        }
+        return false
+    }
+    
+    var emojiStatus: PeerEmojiStatus? {
+        switch self {
+        case let user as TelegramUser:
+            return user.emojiStatus
+        case let channel as TelegramChannel:
+            return channel.emojiStatus
+        default:
+            return nil
+        }
+    }
+    
+    var backgroundEmojiId: Int64? {
+        switch self {
+        case let user as TelegramUser:
+            return user.backgroundEmojiId
+        case let channel as TelegramChannel:
+            return channel.backgroundEmojiId
+        default:
+            return nil
+        }
+    }
+    
+    var profileBackgroundEmojiId: Int64? {
+        switch self {
+        case let user as TelegramUser:
+            return user.profileBackgroundEmojiId
+        case let channel as TelegramChannel:
+            return channel.profileBackgroundEmojiId
+        default:
+            return nil
         }
     }
 }
@@ -305,12 +435,24 @@ public func isServicePeer(_ peer: Peer) -> Bool {
         if peer.id.isReplies {
             return true
         }
+        if peer.id.isVerificationCodes {
+            return true
+        }
         return (peer.id.namespace == Namespaces.Peer.CloudUser && (peer.id.id._internalGetInt64Value() == 777000 || peer.id.id._internalGetInt64Value() == 333000))
     }
     return false
 }
 
 public extension PeerId {
+    var isTelegramNotifications: Bool {
+        if self.namespace == Namespaces.Peer.CloudUser {
+            if self.id._internalGetInt64Value() == 777000 {
+                return true
+            }
+        }
+        return false
+    }
+    
     var isReplies: Bool {
         if self.namespace == Namespaces.Peer.CloudUser {
             if self.id._internalGetInt64Value() == 708513 || self.id._internalGetInt64Value() == 1271266957 {
@@ -320,10 +462,25 @@ public extension PeerId {
         return false
     }
     
+    var isVerificationCodes: Bool {
+        if self.namespace == Namespaces.Peer.CloudUser {
+            if self.id._internalGetInt64Value() == 489000 {
+                return true
+            }
+        }
+        return false
+    }
+    
+    var isRepliesOrVerificationCodes: Bool {
+        return self.isReplies || self.isVerificationCodes
+    }
+    
     func isRepliesOrSavedMessages(accountPeerId: PeerId) -> Bool {
         if accountPeerId == self {
             return true
         } else if self.isReplies {
+            return true
+        } else if self.isVerificationCodes {
             return true
         } else {
             return false
@@ -337,5 +494,17 @@ public extension PeerId {
             }
         }
         return false
+    }
+    
+    var isAnonymousSavedMessages: Bool {
+        if self.namespace == Namespaces.Peer.CloudUser {
+            if self.id._internalGetInt64Value() == anonymousSavedMessagesId {
+                return true
+            }
+        }
+        return false
+    }
+    var isSecretChat: Bool {
+        return self.namespace == Namespaces.Peer.SecretChat
     }
 }

@@ -77,8 +77,20 @@ int TestCpuEnv(int cpu_info) {
   if (TestEnv("LIBYUV_DISABLE_MSA")) {
     cpu_info &= ~libyuv::kCpuHasMSA;
   }
-  if (TestEnv("LIBYUV_DISABLE_MMI")) {
-    cpu_info &= ~libyuv::kCpuHasMMI;
+#endif
+#if defined(__longarch__) && defined(__linux__)
+  if (TestEnv("LIBYUV_DISABLE_LSX")) {
+    cpu_info &= ~libyuv::kCpuHasLSX;
+  }
+#endif
+#if defined(__longarch__) && defined(__linux__)
+  if (TestEnv("LIBYUV_DISABLE_LASX")) {
+    cpu_info &= ~libyuv::kCpuHasLASX;
+  }
+#endif
+#if defined(__riscv) && defined(__linux__)
+  if (TestEnv("LIBYUV_DISABLE_RVV")) {
+    cpu_info &= ~libyuv::kCpuHasRVV;
   }
 #endif
 #if !defined(__pnacl__) && !defined(__CLR_VER) &&                   \
@@ -120,6 +132,9 @@ int TestCpuEnv(int cpu_info) {
   if (TestEnv("LIBYUV_DISABLE_AVX512VL")) {
     cpu_info &= ~libyuv::kCpuHasAVX512VL;
   }
+  if (TestEnv("LIBYUV_DISABLE_AVX512VNNI")) {
+    cpu_info &= ~libyuv::kCpuHasAVX512VNNI;
+  }
   if (TestEnv("LIBYUV_DISABLE_AVX512VBMI")) {
     cpu_info &= ~libyuv::kCpuHasAVX512VBMI;
   }
@@ -129,11 +144,17 @@ int TestCpuEnv(int cpu_info) {
   if (TestEnv("LIBYUV_DISABLE_AVX512VBITALG")) {
     cpu_info &= ~libyuv::kCpuHasAVX512VBITALG;
   }
-  if (TestEnv("LIBYUV_DISABLE_AVX512VPOPCNTDQ")) {
-    cpu_info &= ~libyuv::kCpuHasAVX512VPOPCNTDQ;
+  if (TestEnv("LIBYUV_DISABLE_AVX10")) {
+    cpu_info &= ~libyuv::kCpuHasAVX10;
   }
-  if (TestEnv("LIBYUV_DISABLE_GFNI")) {
-    cpu_info &= ~libyuv::kCpuHasGFNI;
+  if (TestEnv("LIBYUV_DISABLE_AVXVNNI")) {
+    cpu_info &= ~libyuv::kCpuHasAVXVNNI;
+  }
+  if (TestEnv("LIBYUV_DISABLE_AVXVNNIINT8")) {
+    cpu_info &= ~libyuv::kCpuHasAVXVNNIINT8;
+  }
+  if (TestEnv("LIBYUV_DISABLE_AMXINT8")) {
+    cpu_info &= ~libyuv::kCpuHasAMXINT8;
   }
 #endif
   if (TestEnv("LIBYUV_DISABLE_ASM")) {

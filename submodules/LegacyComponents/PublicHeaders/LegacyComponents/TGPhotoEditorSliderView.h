@@ -8,6 +8,9 @@
 
 @property (nonatomic, assign) UIInterfaceOrientation interfaceOrientation;
 
+@property (nonatomic, assign) CGFloat lowerBoundValue;
+@property (nonatomic, assign) UIColor *lowerBoundTrackColor;
+
 @property (nonatomic, assign) CGFloat minimumValue;
 @property (nonatomic, assign) CGFloat maximumValue;
 
@@ -19,6 +22,7 @@
 
 @property (nonatomic, assign) bool displayEdges;
 @property (nonatomic, assign) bool useLinesForPositions;
+@property (nonatomic, assign) bool markPositions;
 
 @property (nonatomic, readonly) bool knobStartedDragging;
 
@@ -40,8 +44,15 @@
 @property (nonatomic, assign) CGFloat dotSize;
 
 @property (nonatomic, assign) bool enablePanHandling;
+@property (nonatomic, assign) bool enableEdgeTap;
 
 - (void)setValue:(CGFloat)value animated:(BOOL)animated;
+
+- (void)increase;
+- (void)increaseBy:(CGFloat)delta;
+
+- (void)decrease;
+- (void)decreaseBy:(CGFloat)delta;
 
 @end
 

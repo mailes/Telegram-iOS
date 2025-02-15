@@ -69,6 +69,9 @@ public final class AppLockContextImpl: AppLockContext {
     private let rootPath: String
     private let syncQueue = Queue()
     
+    private var disposable: Disposable?
+    private var autolockTimeoutDisposable: Disposable?
+    
     private let applicationBindings: TelegramApplicationBindings
     private let accountManager: AccountManager<TelegramAccountManagerTypes>
     private let presentationDataSignal: Signal<PresentationData, NoError>
@@ -112,14 +115,14 @@ public final class AppLockContextImpl: AppLockContext {
         }
         self.autolockTimeout.set(self.currentStateValue.autolockTimeout)
         
-        let _ = (combineLatest(queue: .mainQueue(),
+        self.disposable = (combineLatest(queue: .mainQueue(),
             accountManager.accessChallengeData(),
             accountManager.sharedData(keys: Set([ApplicationSpecificSharedDataKeys.presentationPasscodeSettings])),
             presentationDataSignal,
             applicationBindings.applicationIsActive,
             self.currentState.get()
         )
-        |> deliverOnMainQueue).start(next: { [weak self] accessChallengeData, sharedData, presentationData, appInForeground, state in
+        |> deliverOnMainQueue).startStrict(next: { [weak self] accessChallengeData, sharedData, presentationData, appInForeground, state in
             guard let strongSelf = self else {
                 return
             }
@@ -254,14 +257,19 @@ public final class AppLockContextImpl: AppLockContext {
         
         self.currentState.set(.single(self.currentStateValue))
         
-        let _ = (self.autolockTimeout.get()
-        |> deliverOnMainQueue).start(next: { [weak self] autolockTimeout in
+        self.autolockTimeoutDisposable = (self.autolockTimeout.get()
+        |> deliverOnMainQueue).startStrict(next: { [weak self] autolockTimeout in
             self?.updateLockState { state in
                 var state = state
                 state.autolockTimeout = autolockTimeout
                 return state
             }
         })
+    }
+    
+    deinit {
+        self.disposable?.dispose()
+        self.autolockTimeoutDisposable?.dispose()
     }
     
     private func updateTimestampRenewTimer(shouldRun: Bool) {
@@ -316,8 +324,8 @@ public final class AppLockContextImpl: AppLockContext {
     public var invalidAttempts: Signal<AccessChallengeAttempts?, NoError> {
         return self.currentState.get()
         |> map { state in
-            return state.unlockAttemts.flatMap { unlockAttemts in
-                return AccessChallengeAttempts(count: unlockAttemts.count, bootTimestamp: unlockAttemts.timestamp.bootTimestamp, uptime: unlockAttemts.timestamp.uptime)
+            return state.unlockAttempts.flatMap { unlockAttempts in
+                return AccessChallengeAttempts(count: unlockAttempts.count, bootTimestamp: unlockAttempts.timestamp.bootTimestamp, uptime: unlockAttempts.timestamp.uptime)
             }
         }
     }
@@ -346,7 +354,7 @@ public final class AppLockContextImpl: AppLockContext {
         self.updateLockState { state in
             var state = state
             
-            state.unlockAttemts = nil
+            state.unlockAttempts = nil
             
             state.isManuallyLocked = false
             
@@ -362,16 +370,16 @@ public final class AppLockContextImpl: AppLockContext {
     public func failedUnlockAttempt() {
         self.updateLockState { state in
             var state = state
-            var unlockAttemts = state.unlockAttemts ?? UnlockAttempts(count: 0, timestamp: MonotonicTimestamp(bootTimestamp: 0, uptime: 0))
+            var unlockAttempts = state.unlockAttempts ?? UnlockAttempts(count: 0, timestamp: MonotonicTimestamp(bootTimestamp: 0, uptime: 0))
             
-            unlockAttemts.count += 1
+            unlockAttempts.count += 1
             
             var bootTimestamp: Int32 = 0
             let uptime = getDeviceUptimeSeconds(&bootTimestamp)
             let timestamp = MonotonicTimestamp(bootTimestamp: bootTimestamp, uptime: uptime)
             
-            unlockAttemts.timestamp = timestamp
-            state.unlockAttemts = unlockAttemts
+            unlockAttempts.timestamp = timestamp
+            state.unlockAttempts = unlockAttempts
             return state
         }
     }

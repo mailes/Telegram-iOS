@@ -3,7 +3,6 @@ import UIKit
 import Display
 import LegacyComponents
 import TelegramCore
-import Postbox
 import SwiftSignalKit
 import TelegramPresentationData
 import AccountContext
@@ -14,18 +13,18 @@ import DeviceAccess
 import AttachmentUI
 
 public enum LocationPickerMode {
-    case share(peer: Peer?, selfPeer: Peer?, hasLiveLocation: Bool)
+    case share(peer: EnginePeer?, selfPeer: EnginePeer?, hasLiveLocation: Bool)
     case pick
 }
 
 class LocationPickerInteraction {
-    let sendLocation: (CLLocationCoordinate2D) -> Void
+    let sendLocation: (CLLocationCoordinate2D, String?, MapGeoAddress?) -> Void
     let sendLiveLocation: (CLLocationCoordinate2D) -> Void
-    let sendVenue: (TelegramMediaMap) -> Void
+    let sendVenue: (TelegramMediaMap, Int64?, String?) -> Void
     let toggleMapModeSelection: () -> Void
     let updateMapMode: (LocationMapMode) -> Void
     let goToUserLocation: () -> Void
-    let goToCoordinate: (CLLocationCoordinate2D) -> Void
+    let goToCoordinate: (CLLocationCoordinate2D, Bool) -> Void
     let openSearch: () -> Void
     let updateSearchQuery: (String) -> Void
     let dismissSearch: () -> Void
@@ -34,7 +33,7 @@ class LocationPickerInteraction {
     let openHomeWorkInfo: () -> Void
     let showPlacesInThisArea: () -> Void
     
-    init(sendLocation: @escaping (CLLocationCoordinate2D) -> Void, sendLiveLocation: @escaping (CLLocationCoordinate2D) -> Void, sendVenue: @escaping (TelegramMediaMap) -> Void, toggleMapModeSelection: @escaping () -> Void, updateMapMode: @escaping (LocationMapMode) -> Void, goToUserLocation: @escaping () -> Void, goToCoordinate: @escaping (CLLocationCoordinate2D) -> Void, openSearch: @escaping () -> Void, updateSearchQuery: @escaping (String) -> Void, dismissSearch: @escaping () -> Void, dismissInput: @escaping () -> Void, updateSendActionHighlight: @escaping (Bool) -> Void, openHomeWorkInfo: @escaping () -> Void, showPlacesInThisArea: @escaping ()-> Void) {
+    init(sendLocation: @escaping (CLLocationCoordinate2D, String?, MapGeoAddress?) -> Void, sendLiveLocation: @escaping (CLLocationCoordinate2D) -> Void, sendVenue: @escaping (TelegramMediaMap, Int64?, String?) -> Void, toggleMapModeSelection: @escaping () -> Void, updateMapMode: @escaping (LocationMapMode) -> Void, goToUserLocation: @escaping () -> Void, goToCoordinate: @escaping (CLLocationCoordinate2D, Bool) -> Void, openSearch: @escaping () -> Void, updateSearchQuery: @escaping (String) -> Void, dismissSearch: @escaping () -> Void, dismissInput: @escaping () -> Void, updateSendActionHighlight: @escaping (Bool) -> Void, openHomeWorkInfo: @escaping () -> Void, showPlacesInThisArea: @escaping ()-> Void) {
         self.sendLocation = sendLocation
         self.sendLiveLocation = sendLiveLocation
         self.sendVenue = sendVenue
@@ -53,15 +52,23 @@ class LocationPickerInteraction {
 }
 
 public final class LocationPickerController: ViewController, AttachmentContainable {
+    public enum Source {
+        case generic
+        case story
+    }
+    
     private var controllerNode: LocationPickerControllerNode {
         return self.displayNode as! LocationPickerControllerNode
     }
     
     private let context: AccountContext
     private let mode: LocationPickerMode
-    private let completion: (TelegramMediaMap, String?) -> Void
+    private let source: Source
+    let initialLocation: CLLocationCoordinate2D?
+    private let completion: (TelegramMediaMap, Int64?, String?, String?, String?) -> Void
     private var presentationData: PresentationData
     private var presentationDataDisposable: Disposable?
+    let updatedPresentationData: (initial: PresentationData, signal: Signal<PresentationData, NoError>)?
     
     private var searchNavigationContentNode: LocationSearchNavigationContentNode?
     private var isSearchingDisposable = MetaDisposable()
@@ -73,17 +80,25 @@ public final class LocationPickerController: ViewController, AttachmentContainab
     
     public var requestAttachmentMenuExpansion: () -> Void = {}
     public var updateNavigationStack: (@escaping ([AttachmentContainable]) -> ([AttachmentContainable], AttachmentMediaPickerContext?)) -> Void = { _ in }
+    public var parentController: () -> ViewController? = {
+        return nil
+    }
     public var updateTabBarAlpha: (CGFloat, ContainedViewLayoutTransition) -> Void = { _, _ in }
+    public var updateTabBarVisibility: (Bool, ContainedViewLayoutTransition) -> Void = { _, _ in }
     public var cancelPanGesture: () -> Void = { }
     public var isContainerPanning: () -> Bool = { return false }
     public var isContainerExpanded: () -> Bool = { return false }
+    public var isMinimized: Bool = false
     
-    public init(context: AccountContext, updatedPresentationData: (initial: PresentationData, signal: Signal<PresentationData, NoError>)? = nil, mode: LocationPickerMode, completion: @escaping (TelegramMediaMap, String?) -> Void) {
+    public init(context: AccountContext, updatedPresentationData: (initial: PresentationData, signal: Signal<PresentationData, NoError>)? = nil, mode: LocationPickerMode, source: Source = .generic, initialLocation: CLLocationCoordinate2D? = nil, completion: @escaping (TelegramMediaMap, Int64?, String?, String?, String?) -> Void) {
         self.context = context
         self.mode = mode
+        self.source = source
+        self.initialLocation = initialLocation
         self.completion = completion
         self.presentationData = updatedPresentationData?.initial ?? context.sharedContext.currentPresentationData.with { $0 }
-                     
+        self.updatedPresentationData = updatedPresentationData
+        
         super.init(navigationBarPresentationData: NavigationBarPresentationData(theme: NavigationBarTheme(rootControllerTheme: self.presentationData.theme).withUpdatedSeparatorColor(.clear), strings: NavigationBarStrings(presentationStrings: self.presentationData.strings)))
         
         self.navigationPresentation = .modal
@@ -108,16 +123,27 @@ public final class LocationPickerController: ViewController, AttachmentContainab
                 strongSelf.controllerNode.updatePresentationData(presentationData)
             }
         })
-        
-        let locationWithTimeout: (CLLocationCoordinate2D, Int32?) -> TelegramMediaMap = { coordinate, timeout in
-            return TelegramMediaMap(latitude: coordinate.latitude, longitude: coordinate.longitude, heading: nil, accuracyRadius: nil, geoPlace: nil, venue: nil, liveBroadcastingTimeout: timeout, liveProximityNotificationRadius: nil)
-        }
-                
-        self.interaction = LocationPickerInteraction(sendLocation: { [weak self] coordinate in
+                        
+        self.interaction = LocationPickerInteraction(sendLocation: { [weak self] coordinate, name, geoAddress in
             guard let strongSelf = self else {
                 return
             }
-            strongSelf.completion(locationWithTimeout(coordinate, nil), nil)
+            strongSelf.completion(
+                TelegramMediaMap(
+                    latitude: coordinate.latitude,
+                    longitude: coordinate.longitude,
+                    heading: nil,
+                    accuracyRadius: nil,
+                    venue: nil,
+                    address: geoAddress,
+                    liveBroadcastingTimeout: nil,
+                    liveProximityNotificationRadius: nil
+                ),
+                nil,
+                nil,
+                name,
+                geoAddress?.country
+            )
             strongSelf.dismiss()
         }, sendLiveLocation: { [weak self] coordinate in
             guard let strongSelf = self else {
@@ -132,33 +158,34 @@ public final class LocationPickerController: ViewController, AttachmentContainab
                     return
                 }
                 let controller = ActionSheetController(presentationData: strongSelf.presentationData)
-                var title = strongSelf.presentationData.strings.Map_LiveLocationGroupDescription
-                if case let .share(peer, _, _) = strongSelf.mode, let receiver = peer as? TelegramUser {
-                    title = strongSelf.presentationData.strings.Map_LiveLocationPrivateDescription(EnginePeer(receiver).compactDisplayTitle).string
+                var title = strongSelf.presentationData.strings.Map_LiveLocationGroupNewDescription
+                if case let .share(peer, _, _) = strongSelf.mode, let peer = peer, case .user = peer {
+                    title = strongSelf.presentationData.strings.Map_LiveLocationPrivateNewDescription(peer.compactDisplayTitle).string
                 }
+                
+                let sendLiveLocationImpl: (Int32) -> Void = { [weak self, weak controller] period in
+                    controller?.dismissAnimated()
+                    guard let self, let controller else {
+                        return
+                    }
+                    controller.dismissAnimated()
+                    self.completion(TelegramMediaMap(coordinate: coordinate, liveBroadcastingTimeout: period), nil, nil, nil, nil)
+                    self.dismiss()
+                }
+                
                 controller.setItemGroups([
                     ActionSheetItemGroup(items: [
-                        ActionSheetTextItem(title: title),
-                        ActionSheetButtonItem(title: strongSelf.presentationData.strings.Map_LiveLocationFor15Minutes, color: .accent, action: { [weak self, weak controller] in
-                            controller?.dismissAnimated()
-                            if let strongSelf = self {
-                                strongSelf.completion(TelegramMediaMap(coordinate: coordinate, liveBroadcastingTimeout: 15 * 60), nil)
-                                strongSelf.dismiss()
-                            }
+                        ActionSheetTextItem(title: title, font: .large, parseMarkdown: true),
+                        ActionSheetButtonItem(title: strongSelf.presentationData.strings.Map_LiveLocationForMinutes(15), color: .accent, action: { sendLiveLocationImpl(15 * 60)
                         }),
-                        ActionSheetButtonItem(title: strongSelf.presentationData.strings.Map_LiveLocationFor1Hour, color: .accent, action: { [weak self, weak controller] in
-                            controller?.dismissAnimated()
-                            if let strongSelf = self {
-                                strongSelf.completion(TelegramMediaMap(coordinate: coordinate, liveBroadcastingTimeout: 60 * 60 - 1), nil)
-                                strongSelf.dismiss()
-                            }
+                        ActionSheetButtonItem(title: strongSelf.presentationData.strings.Map_LiveLocationForHours(1), color: .accent, action: {
+                            sendLiveLocationImpl(60 * 60 - 1)
                         }),
-                        ActionSheetButtonItem(title: strongSelf.presentationData.strings.Map_LiveLocationFor8Hours, color: .accent, action: { [weak self, weak controller] in
-                            controller?.dismissAnimated()
-                            if let strongSelf = self {
-                                strongSelf.completion(TelegramMediaMap(coordinate: coordinate, liveBroadcastingTimeout: 8 * 60 * 60), nil)
-                                strongSelf.dismiss()
-                            }
+                        ActionSheetButtonItem(title: strongSelf.presentationData.strings.Map_LiveLocationForHours(8), color: .accent, action: {
+                            sendLiveLocationImpl(8 * 60 * 60)
+                        }),
+                        ActionSheetButtonItem(title: strongSelf.presentationData.strings.Map_LiveLocationIndefinite, color: .accent, action: {
+                            sendLiveLocationImpl(liveLocationIndefinitePeriod)
                         })
                     ]),
                     ActionSheetItemGroup(items: [
@@ -169,15 +196,15 @@ public final class LocationPickerController: ViewController, AttachmentContainab
                 ])
                 strongSelf.present(controller, in: .window(.root))
             })
-        }, sendVenue: { [weak self] venue in
+        }, sendVenue: { [weak self] venue, queryId, resultId in
             guard let strongSelf = self else {
                 return
             }
             let venueType = venue.venue?.type ?? ""
             if ["home", "work"].contains(venueType) {
-                completion(TelegramMediaMap(latitude: venue.latitude, longitude: venue.longitude, heading: nil, accuracyRadius: nil, geoPlace: nil, venue: nil, liveBroadcastingTimeout: nil, liveProximityNotificationRadius: nil), nil)
+                completion(TelegramMediaMap(latitude: venue.latitude, longitude: venue.longitude, heading: nil, accuracyRadius: nil, venue: nil, liveBroadcastingTimeout: nil, liveProximityNotificationRadius: nil), nil, nil, nil, nil)
             } else {
-                completion(venue, nil)
+                completion(venue, queryId, resultId, venue.venue?.address, nil)
             }
             strongSelf.dismiss()
         }, toggleMapModeSelection: { [weak self] in
@@ -204,14 +231,14 @@ public final class LocationPickerController: ViewController, AttachmentContainab
                 return
             }
             strongSelf.controllerNode.goToUserLocation()
-        }, goToCoordinate: { [weak self] coordinate in
+        }, goToCoordinate: { [weak self] coordinate, zoomOut in
             guard let strongSelf = self else {
                 return
             }
             strongSelf.controllerNode.updateState { state in
                 var state = state
                 state.displayingMapModeOptions = false
-                state.selectedLocation = .location(coordinate, nil)
+                state.selectedLocation = .location(coordinate, nil, zoomOut)
                 state.searchingVenuesAround = false
                 return state
             }
@@ -306,7 +333,7 @@ public final class LocationPickerController: ViewController, AttachmentContainab
             return
         }
         
-        self.displayNode = LocationPickerControllerNode(controller: self, context: self.context, presentationData: self.presentationData, mode: self.mode, interaction: interaction, locationManager: self.locationManager)
+        self.displayNode = LocationPickerControllerNode(controller: self, context: self.context, presentationData: self.presentationData, mode: self.mode, source: self.source, interaction: interaction, locationManager: self.locationManager)
         self.displayNodeDidLoad()
         self.controllerNode.beganInteractiveDragging = { [weak self] in
             self?.requestAttachmentMenuExpansion()
@@ -363,4 +390,36 @@ public final class LocationPickerController: ViewController, AttachmentContainab
         self.interaction?.dismissSearch()
         self.scrollToTop?()
     }
+    
+    public var mediaPickerContext: AttachmentMediaPickerContext? {
+        return LocationPickerContext()
+    }
+}
+
+private final class LocationPickerContext: AttachmentMediaPickerContext {
+}
+
+public func storyLocationPickerController(
+    context: AccountContext,
+    location: CLLocationCoordinate2D?,
+    dismissed: @escaping () -> Void,
+    completion: @escaping (TelegramMediaMap, Int64?, String?, String?, String?) -> Void
+) -> ViewController {
+    let presentationData = context.sharedContext.currentPresentationData.with({ $0 }).withUpdated(theme: defaultDarkColorPresentationTheme)
+    let updatedPresentationData: (PresentationData, Signal<PresentationData, NoError>) = (presentationData, .single(presentationData))
+    let controller = AttachmentController(context: context, updatedPresentationData: updatedPresentationData, chatLocation: nil, buttons: [.standalone], initialButton: .standalone, fromMenu: false, hasTextInput: false, makeEntityInputView: {
+        return nil
+    })
+    controller.requestController = { _, present in
+        let locationPickerController = LocationPickerController(context: context, updatedPresentationData: updatedPresentationData, mode: .share(peer: nil, selfPeer: nil, hasLiveLocation: false), source: .story, initialLocation: location, completion: { location, queryId, resultId, address, countryCode in
+            completion(location, queryId, resultId, address, countryCode)
+        })
+        present(locationPickerController, locationPickerController.mediaPickerContext)
+    }
+    controller.navigationPresentation = .flatModal
+    controller.supportedOrientations = ViewControllerSupportedOrientations(regularSize: .all, compactSize: .portrait)
+    controller.didDismiss = {
+        dismissed()
+    }
+    return controller
 }

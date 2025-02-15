@@ -2,13 +2,13 @@ import Foundation
 import UIKit
 import Display
 import AsyncDisplayKit
-import Postbox
 import TelegramCore
 import SwiftSignalKit
 import AccountContext
 import TelegramPresentationData
 import SolidRoundedButtonNode
 import PresentationDataUtils
+import VoiceChatActionButton
 
 private let accentColor: UIColor = UIColor(rgb: 0x007aff)
 
@@ -18,14 +18,14 @@ final class VoiceChatRecordingSetupController: ViewController {
     }
     
     private let context: AccountContext
-    private let peer: Peer
+    private let peer: EnginePeer
     private let completion: (Bool?) -> Void
     
     private var animatedIn = false
     
     private var presentationDataDisposable: Disposable?
     
-    init(context: AccountContext, peer: Peer, completion: @escaping (Bool?) -> Void) {
+    init(context: AccountContext, peer: EnginePeer, completion: @escaping (Bool?) -> Void) {
         self.context = context
         self.peer = peer
         self.completion = completion
@@ -91,7 +91,7 @@ final class VoiceChatRecordingSetupController: ViewController {
     }
 }
 
-private class VoiceChatRecordingSetupControllerNode: ViewControllerTracingNode, UIScrollViewDelegate {
+private class VoiceChatRecordingSetupControllerNode: ViewControllerTracingNode, ASScrollViewDelegate {
     enum MediaMode {
         case videoAndAudio
         case audioOnly
@@ -149,7 +149,7 @@ private class VoiceChatRecordingSetupControllerNode: ViewControllerTracingNode, 
     var dismiss: (() -> Void)?
     var cancel: (() -> Void)?
     
-    init(controller: VoiceChatRecordingSetupController, context: AccountContext, peer: Peer) {
+    init(controller: VoiceChatRecordingSetupController, context: AccountContext, peer: EnginePeer) {
         self.controller = controller
         self.context = context
         self.presentationData = context.sharedContext.currentPresentationData.with { $0 }
@@ -183,7 +183,7 @@ private class VoiceChatRecordingSetupControllerNode: ViewControllerTracingNode, 
         self.contentBackgroundNode.backgroundColor = backgroundColor
         
         let isLivestream: Bool
-        if let channel = peer as? TelegramChannel, case .broadcast = channel.info {
+        if case let .channel(channel) = peer, case .broadcast = channel.info {
             isLivestream = true
         } else {
             isLivestream = false
@@ -264,7 +264,7 @@ private class VoiceChatRecordingSetupControllerNode: ViewControllerTracingNode, 
         self.dimNode.view.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(self.dimTapGesture(_:))))
         self.addSubnode(self.dimNode)
         
-        self.wrappingScrollNode.view.delegate = self
+        self.wrappingScrollNode.view.delegate = self.wrappedScrollViewDelegate
         self.addSubnode(self.wrappingScrollNode)
                 
         self.wrappingScrollNode.addSubnode(self.backgroundNode)

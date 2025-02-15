@@ -5,7 +5,7 @@ import Display
 private func generateHistogram(cgImage: CGImage) -> ([[vImagePixelCount]], Int)? {
     var sourceBuffer = vImage_Buffer()
     defer {
-        free(sourceBuffer.data)
+        sourceBuffer.data?.deallocate()
     }
     
     var cgImageFormat = vImage_CGImageFormat(
@@ -29,21 +29,50 @@ private func generateHistogram(cgImage: CGImage) -> ([[vImagePixelCount]], Int)?
     }
     assert(error == kvImageNoError)
     
-    let histogramBins: [[vImagePixelCount]] = (0...3).map { _ in
-        return [vImagePixelCount](repeating: 0, count: 256)
+    var histogramBinZero = [vImagePixelCount](repeating: 0, count: 256)
+    var histogramBinOne = [vImagePixelCount](repeating: 0, count: 256)
+    var histogramBinTwo = [vImagePixelCount](repeating: 0, count: 256)
+    var histogramBinThree = [vImagePixelCount](repeating: 0, count: 256)
+    
+    histogramBinZero.withUnsafeMutableBufferPointer { zeroPtr in
+        histogramBinOne.withUnsafeMutableBufferPointer { onePtr in
+            histogramBinTwo.withUnsafeMutableBufferPointer { twoPtr in
+                histogramBinThree.withUnsafeMutableBufferPointer { threePtr in
+                    var histogramBins = [zeroPtr.baseAddress, onePtr.baseAddress, twoPtr.baseAddress, threePtr.baseAddress]
+                    histogramBins.withUnsafeMutableBufferPointer { histogramBinsPtr in
+                        let error = vImageHistogramCalculation_ARGB8888(
+                            &sourceBuffer,
+                            histogramBinsPtr.baseAddress!,
+                            noFlags
+                        )
+                        assert(error == kvImageNoError)
+                    }
+                }
+            }
+        }
     }
-    var mutableHistogram: [UnsafeMutablePointer<vImagePixelCount>?] = histogramBins.map {
-        return UnsafeMutablePointer<vImagePixelCount>(mutating: $0)
-    }
-    error = vImageHistogramCalculation_ARGB8888(&sourceBuffer, &mutableHistogram, noFlags)
-    assert(error == kvImageNoError)
     
     let alphaBinIndex = [.last, .premultipliedLast].contains(cgImage.alphaInfo) ? 3 : 0
-    return (histogramBins, alphaBinIndex)
+    return ([histogramBinZero, histogramBinOne, histogramBinTwo, histogramBinThree], alphaBinIndex)
 }
 
-public func imageHasTransparency(_ cgImage: CGImage) -> Bool {
-    guard cgImage.bitsPerComponent == 8, cgImage.bitsPerPixel == 32 else {
+public func imageHasSubject(_ image: UIImage) -> Bool {
+    guard let cgImage = image.cgImage, cgImage.bitsPerComponent == 8, cgImage.bitsPerPixel == 32 else {
+        return false
+    }
+    if let (histogramBins, _) = generateHistogram(cgImage: cgImage) {
+        var totalCount: vImagePixelCount = 0
+        for i in 0 ..< 255 {
+            totalCount += histogramBins[1][i]
+        }
+        let opaqueCount: vImagePixelCount = histogramBins[1][255]
+        return Double(opaqueCount) / Double(totalCount) > 0.05
+    }
+    return false
+}
+
+public func imageHasTransparency(_ image: UIImage) -> Bool {
+    guard let cgImage = image.cgImage, cgImage.bitsPerComponent == 8, cgImage.bitsPerPixel == 32 else {
         return false
     }
     guard [.first, .last, .premultipliedFirst, .premultipliedLast].contains(cgImage.alphaInfo) else {
@@ -61,12 +90,14 @@ public func imageHasTransparency(_ cgImage: CGImage) -> Bool {
     return false
 }
 
-private func scaledDrawingContext(_ cgImage: CGImage, maxSize: CGSize) -> DrawingContext {
+private func scaledDrawingContext(_ cgImage: CGImage, maxSize: CGSize) -> DrawingContext? {
     var size = CGSize(width: cgImage.width, height: cgImage.height)
     if (size.width > maxSize.width && size.height > maxSize.height) {
         size = size.aspectFilled(maxSize)
     }
-    let context = DrawingContext(size: size, scale: 1.0, clear: true)
+    guard let context = DrawingContext(size: size, scale: 1.0, clear: true) else {
+        return nil
+    }
     context.withFlippedContext { context in
         context.draw(cgImage, in: CGRect(origin: CGPoint(), size: size))
     }
@@ -81,7 +112,9 @@ public func imageRequiresInversion(_ cgImage: CGImage) -> Bool {
         return false
     }
     
-    let context = scaledDrawingContext(cgImage, maxSize: CGSize(width: 128.0, height: 128.0))
+    guard let context = scaledDrawingContext(cgImage, maxSize: CGSize(width: 128.0, height: 128.0)) else {
+        return false
+    }
     if let cgImage = context.generateImage()?.cgImage, let (histogramBins, alphaBinIndex) = generateHistogram(cgImage: cgImage) {
         var hasAlpha = false
         for i in 0 ..< 255 {
@@ -92,7 +125,9 @@ public func imageRequiresInversion(_ cgImage: CGImage) -> Bool {
         }
         
         if hasAlpha {
-            let probingContext = DrawingContext(size: CGSize(width: cgImage.width, height: cgImage.height))
+            guard let probingContext = DrawingContext(size: CGSize(width: cgImage.width, height: cgImage.height)) else {
+                return false
+            }
             probingContext.withContext { c in
                 c.draw(cgImage, in: CGRect(origin: CGPoint(), size: probingContext.size))
             }

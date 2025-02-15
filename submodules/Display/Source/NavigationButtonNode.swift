@@ -48,7 +48,9 @@ private final class NavigationButtonItemNode: ImmediateTextNode {
             
             self.attributedText = NSAttributedString(string: text, attributes: self.attributesForCurrentState())
             if _image == nil {
-                self.item?.accessibilityLabel = value
+                if self.item?.accessibilityLabel == nil {
+                    self.item?.accessibilityLabel = value
+                }
             }
         }
     }
@@ -336,6 +338,10 @@ public final class NavigationButtonNode: ContextControllerSourceNode {
         return nil
     }
     
+    public var mainContentNode: ASDisplayNode? {
+        return self.nodes.first
+    }
+    
     public var pressed: (Int) -> () = { _ in }
     public var highlightChanged: (Int, Bool) -> () = { _, _ in }
     
@@ -395,6 +401,14 @@ public final class NavigationButtonNode: ContextControllerSourceNode {
         }
     }
     
+    public var contentsColor: UIColor?
+    
+    public func updateManualAlpha(alpha: CGFloat, transition: ContainedViewLayoutTransition) {
+        for node in self.nodes {
+            transition.updateAlpha(node: node, alpha: alpha)
+        }
+    }
+    
     func updateManualText(_ text: String, isBack: Bool = true) {
         let node: NavigationButtonItemNode
         if self.nodes.count > 0 {
@@ -403,6 +417,7 @@ public final class NavigationButtonNode: ContextControllerSourceNode {
             node = NavigationButtonItemNode()
             node.color = self.color
             node.rippleColor = self.rippleColor
+            node.layer.layerTintColor = self.contentsColor?.cgColor
             node.highlightChanged = { [weak node, weak self] value in
                 if let strongSelf = self, let node = node {
                     if let index = strongSelf.nodes.firstIndex(where: { $0 === node }) {
@@ -446,6 +461,7 @@ public final class NavigationButtonNode: ContextControllerSourceNode {
                 node = NavigationButtonItemNode()
                 node.color = self.color
                 node.rippleColor = self.rippleColor
+                node.layer.layerTintColor = self.contentsColor?.cgColor
                 node.highlightChanged = { [weak node, weak self] value in
                     if let strongSelf = self, let node = node {
                         if let index = strongSelf.nodes.firstIndex(where: { $0 === node }) {
@@ -484,7 +500,7 @@ public final class NavigationButtonNode: ContextControllerSourceNode {
         var totalHeight: CGFloat = 0.0
         for i in 0 ..< self.nodes.count {
             if i != 0 {
-                nodeOrigin.x += 10.0
+                nodeOrigin.x += 15.0
             }
 
             let node = self.nodes[i]

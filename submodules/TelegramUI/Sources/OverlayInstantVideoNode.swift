@@ -40,14 +40,14 @@ final class OverlayInstantVideoNode: OverlayMediaItemNode {
     
     var playbackEnded: (() -> Void)?
     
-    init(postbox: Postbox, audioSession: ManagedAudioSession, manager: UniversalVideoManager, content: UniversalVideoContent, close: @escaping () -> Void) {
+    init(context: AccountContext, postbox: Postbox, audioSession: ManagedAudioSession, manager: UniversalVideoManager, content: UniversalVideoContent, close: @escaping () -> Void) {
         self.close = close
         self.content = content
         var togglePlayPauseImpl: (() -> Void)?
         let decoration = OverlayInstantVideoDecoration(tapped: {
             togglePlayPauseImpl?()
         })
-        self.videoNode = UniversalVideoNode(postbox: postbox, audioSession: audioSession, manager: manager, decoration: decoration, content: content, priority: .secondaryOverlay, snapshotContentWhenGone: true)
+        self.videoNode = UniversalVideoNode(context: context, postbox: postbox, audioSession: audioSession, manager: manager, decoration: decoration, content: content, priority: .secondaryOverlay, snapshotContentWhenGone: true)
         self.decoration = decoration
         
         super.init()
@@ -113,6 +113,12 @@ final class OverlayInstantVideoNode: OverlayMediaItemNode {
     
     func playOnceWithSound(playAndRecord: Bool) {
         self.videoNode.playOnceWithSound(playAndRecord: playAndRecord)
+    }
+    
+    func setSoundMuted(soundMuted: Bool) {
+    }
+    
+    func continueWithOverridingAmbientMode(isAmbient: Bool) {
     }
     
     func pause() {

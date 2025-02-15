@@ -13,10 +13,6 @@ optimization_flags = select({
 
 common_flags = []
 
-arm_specific_flags = [
-    "-DLIBYUV_NEON",
-]
-
 arm64_specific_flags = [
     "-DLIBYUV_NEON",
 ]
@@ -26,7 +22,6 @@ x86_64_specific_flags = [
 ]
 
 arch_specific_cflags = select({
-    "@build_bazel_rules_apple//apple:ios_armv7": common_flags + arm_specific_flags,
     "@build_bazel_rules_apple//apple:ios_arm64": common_flags + arm64_specific_flags,
     "//build-system:ios_sim_arm64": common_flags + arm64_specific_flags,
     "@build_bazel_rules_apple//apple:ios_x86_64": common_flags + x86_64_specific_flags,
@@ -38,23 +33,26 @@ cc_library(
         # Headers
         "include/libyuv.h",
         "include/libyuv/basic_types.h",
-        "include/libyuv/compare.h",
         "include/libyuv/compare_row.h",
-        "include/libyuv/convert.h",
+        "include/libyuv/compare.h",
         "include/libyuv/convert_argb.h",
-        "include/libyuv/convert_from.h",
         "include/libyuv/convert_from_argb.h",
+        "include/libyuv/convert_from.h",
+        "include/libyuv/convert.h",
         "include/libyuv/cpu_id.h",
+        "include/libyuv/loongson_intrinsics.h",
+        "include/libyuv/macros_msa.h",
         "include/libyuv/mjpeg_decoder.h",
         "include/libyuv/planar_functions.h",
-        "include/libyuv/rotate.h",
         "include/libyuv/rotate_argb.h",
         "include/libyuv/rotate_row.h",
+        "include/libyuv/rotate.h",
         "include/libyuv/row.h",
-        "include/libyuv/scale.h",
         "include/libyuv/scale_argb.h",
+        "include/libyuv/scale_rgb.h",
         "include/libyuv/scale_row.h",
         "include/libyuv/scale_uv.h",
+        "include/libyuv/scale.h",
         "include/libyuv/version.h",
         "include/libyuv/video_common.h",
 
@@ -92,6 +90,7 @@ cc_library(
         "source/scale_uv.cc",
         "source/scale_win.cc",
         "source/video_common.cc",
+        "source/scale_rgb.cc",
 
         # ARM Source Files
         "source/compare_neon.cc",

@@ -13,18 +13,21 @@ import AccountContext
 import AlertUI
 import PresentationDataUtils
 import ItemListAvatarAndNameInfoItem
+import OldChannelsController
 
 private final class ChannelBannedMemberControllerArguments {
     let context: AccountContext
     let toggleRight: (TelegramChatBannedRightsFlags, Bool) -> Void
     let toggleRightWhileDisabled: (TelegramChatBannedRightsFlags) -> Void
+    let toggleIsOptionExpanded: (TelegramChatBannedRightsFlags) -> Void
     let openTimeout: () -> Void
     let delete: () -> Void
     
-    init(context: AccountContext, toggleRight: @escaping (TelegramChatBannedRightsFlags, Bool) -> Void, toggleRightWhileDisabled: @escaping (TelegramChatBannedRightsFlags) -> Void, openTimeout: @escaping () -> Void, delete: @escaping () -> Void) {
+    init(context: AccountContext, toggleRight: @escaping (TelegramChatBannedRightsFlags, Bool) -> Void, toggleRightWhileDisabled: @escaping (TelegramChatBannedRightsFlags) -> Void, toggleIsOptionExpanded: @escaping (TelegramChatBannedRightsFlags) -> Void, openTimeout: @escaping () -> Void, delete: @escaping () -> Void) {
         self.context = context
         self.toggleRight = toggleRight
         self.toggleRightWhileDisabled = toggleRightWhileDisabled
+        self.toggleIsOptionExpanded = toggleIsOptionExpanded
         self.openTimeout = openTimeout
         self.delete = delete
     }
@@ -49,7 +52,7 @@ private enum ChannelBannedMemberEntryStableId: Hashable {
 private enum ChannelBannedMemberEntry: ItemListNodeEntry {
     case info(PresentationTheme, PresentationStrings, PresentationDateTimeFormat, EnginePeer, EnginePeer.Presence?)
     case rightsHeader(PresentationTheme, String)
-    case rightItem(PresentationTheme, Int, String, TelegramChatBannedRightsFlags, Bool, Bool)
+    case rightItem(PresentationTheme, Int, String, TelegramChatBannedRightsFlags, Bool, Bool, [SubPermission], Bool)
     case timeout(PresentationTheme, String, String)
     case exceptionInfo(PresentationTheme, String)
     case delete(PresentationTheme, String)
@@ -73,7 +76,7 @@ private enum ChannelBannedMemberEntry: ItemListNodeEntry {
                 return .info
             case .rightsHeader:
                 return .rightsHeader
-            case let .rightItem(_, _, _, right, _, _):
+            case let .rightItem(_, _, _, right, _, _, _, _):
                 return .right(right)
             case .timeout:
                 return .timeout
@@ -114,8 +117,8 @@ private enum ChannelBannedMemberEntry: ItemListNodeEntry {
                 } else {
                     return false
                 }
-            case let .rightItem(lhsTheme, lhsIndex, lhsText, lhsRight, lhsValue, lhsEnabled):
-                if case let .rightItem(rhsTheme, rhsIndex, rhsText, rhsRight, rhsValue, rhsEnabled) = rhs {
+            case let .rightItem(lhsTheme, lhsIndex, lhsText, lhsRight, lhsValue, lhsEnabled, lhsSubItems, lhsIsExpanded):
+                if case let .rightItem(rhsTheme, rhsIndex, rhsText, rhsRight, rhsValue, rhsEnabled, rhsSubItems, rhsIsExpanded) = rhs {
                     if lhsTheme !== rhsTheme {
                         return false
                     }
@@ -132,6 +135,12 @@ private enum ChannelBannedMemberEntry: ItemListNodeEntry {
                         return false
                     }
                     if lhsEnabled != rhsEnabled {
+                        return false
+                    }
+                    if lhsSubItems != rhsSubItems {
+                        return false
+                    }
+                    if lhsIsExpanded != rhsIsExpanded {
                         return false
                     }
                     return true
@@ -175,11 +184,11 @@ private enum ChannelBannedMemberEntry: ItemListNodeEntry {
                     default:
                         return true
                 }
-            case let .rightItem(_, lhsIndex, _, _, _, _):
+            case let .rightItem(_, lhsIndex, _, _, _, _, _, _):
                 switch rhs {
                     case .info, .rightsHeader:
                         return false
-                    case let .rightItem(_, rhsIndex, _, _, _, _):
+                    case let .rightItem(_, rhsIndex, _, _, _, _, _, _):
                         return lhsIndex < rhsIndex
                     default:
                         return true
@@ -207,17 +216,45 @@ private enum ChannelBannedMemberEntry: ItemListNodeEntry {
         let arguments = arguments as! ChannelBannedMemberControllerArguments
         switch self {
             case let .info(_, _, dateTimeFormat, peer, presence):
-                return ItemListAvatarAndNameInfoItem(accountContext: arguments.context, presentationData: presentationData, dateTimeFormat: dateTimeFormat, mode: .generic, peer: peer, presence: presence, memberCount: nil, state: ItemListAvatarAndNameInfoItemState(), sectionId: self.section, style: .blocks(withTopInset: true, withExtendedBottomInset: false), editingNameUpdated: { _ in
+                return ItemListAvatarAndNameInfoItem(itemContext: .accountContext(arguments.context), presentationData: presentationData, dateTimeFormat: dateTimeFormat, mode: .generic, peer: peer, presence: presence, memberCount: nil, state: ItemListAvatarAndNameInfoItemState(), sectionId: self.section, style: .blocks(withTopInset: true, withExtendedBottomInset: false), editingNameUpdated: { _ in
                 }, avatarTapped: {
                 })
             case let .rightsHeader(_, text):
                 return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
-            case let .rightItem(_, _, text, right, value, enabled):
-                return ItemListSwitchItem(presentationData: presentationData, title: text, value: value, type: .icon, enableInteractiveChanges: enabled, enabled: enabled, sectionId: self.section, style: .blocks, updated: { value in
-                    arguments.toggleRight(right, value)
-                }, activatedWhileDisabled: {
-                    arguments.toggleRightWhileDisabled(right)
-                })
+            case let .rightItem(_, _, text, right, value, enabled, subPermissions, isExpanded):
+                if !subPermissions.isEmpty {
+                    return ItemListExpandableSwitchItem(presentationData: presentationData, title: text, value: value, isExpanded: isExpanded, subItems: subPermissions.map { item in
+                        return ItemListExpandableSwitchItem.SubItem(
+                            id: AnyHashable(item.flags.rawValue),
+                            title: item.title,
+                            isSelected: item.isSelected,
+                            isEnabled: item.isEnabled
+                        )
+                    }, type: .icon, enableInteractiveChanges: enabled, enabled: enabled, sectionId: self.section, style: .blocks, updated: { value in
+                        arguments.toggleRight(right, value)
+                    }, activatedWhileDisabled: {
+                        arguments.toggleRightWhileDisabled(right)
+                    }, selectAction: {
+                        arguments.toggleIsOptionExpanded(right)
+                    }, subAction: { item in
+                        guard let value = item.id.base as? Int32 else {
+                            return
+                        }
+                        let subRights = TelegramChatBannedRightsFlags(rawValue: value)
+                        
+                        if item.isEnabled {
+                            arguments.toggleRight(subRights, !item.isSelected)
+                        } else {
+                            arguments.toggleIsOptionExpanded(subRights)
+                        }
+                    })
+                } else {
+                    return ItemListSwitchItem(presentationData: presentationData, title: text, value: value, type: .icon, enableInteractiveChanges: enabled, enabled: enabled, sectionId: self.section, style: .blocks, updated: { value in
+                        arguments.toggleRight(right, value)
+                    }, activatedWhileDisabled: {
+                        arguments.toggleRightWhileDisabled(right)
+                    })
+                }
             case let .timeout(_, text, value):
                 return ItemListDisclosureItem(presentationData: presentationData, title: text, label: value, sectionId: self.section, style: .blocks, action: {
                     arguments.openTimeout()
@@ -237,6 +274,7 @@ private struct ChannelBannedMemberControllerState: Equatable {
     var updatedFlags: TelegramChatBannedRightsFlags?
     var updatedTimeout: Int32?
     var updating: Bool = false
+    var expandedPermissions = Set<TelegramChatBannedRightsFlags>()
 }
 
 func completeRights(_ flags: TelegramChatBannedRightsFlags) -> TelegramChatBannedRightsFlags {
@@ -265,7 +303,7 @@ private func channelBannedMemberControllerEntries(presentationData: Presentation
         let currentRightsFlags: TelegramChatBannedRightsFlags
         if let updatedFlags = state.updatedFlags {
             currentRightsFlags = updatedFlags
-        } else if let initialParticipant = initialParticipant, case let .member(_, _, _, maybeBanInfo, _) = initialParticipant, let banInfo = maybeBanInfo {
+        } else if let initialParticipant = initialParticipant, case let .member(_, _, _, maybeBanInfo, _, _) = initialParticipant, let banInfo = maybeBanInfo {
             currentRightsFlags = banInfo.rights.flags
         } else {
             currentRightsFlags = defaultBannedRights.flags
@@ -274,7 +312,7 @@ private func channelBannedMemberControllerEntries(presentationData: Presentation
         let currentTimeout: Int32
         if let updatedTimeout = state.updatedTimeout {
             currentTimeout = updatedTimeout
-        } else if let initialParticipant = initialParticipant, case let .member(_, _, _, maybeBanInfo, _) = initialParticipant, let banInfo = maybeBanInfo {
+        } else if let initialParticipant = initialParticipant, case let .member(_, _, _, maybeBanInfo, _, _) = initialParticipant, let banInfo = maybeBanInfo {
             currentTimeout = banInfo.rights.untilDate
         } else {
             currentTimeout = Int32.max
@@ -291,15 +329,29 @@ private func channelBannedMemberControllerEntries(presentationData: Presentation
         entries.append(.rightsHeader(presentationData.theme, presentationData.strings.GroupPermission_SectionTitle))
         
         var index = 0
-        for (right, _) in allGroupPermissionList(peer: .channel(channel)) {
+        for (right, _) in allGroupPermissionList(peer: .channel(channel), expandMedia: false) {
             let defaultEnabled = !defaultBannedRights.flags.contains(right) && channel.hasPermission(.banMembers)
-            entries.append(.rightItem(presentationData.theme, index, stringForGroupPermission(strings: presentationData.strings, right: right, isForum: channel.flags.contains(.isForum)), right, defaultEnabled && !currentRightsFlags.contains(right), defaultEnabled && !state.updating))
+            
+            var isSelected = defaultEnabled && !currentRightsFlags.contains(right)
+            
+            var subItems: [SubPermission] = []
+            if right == .banSendMedia {
+                isSelected = banSendMediaSubList().allSatisfy({ defaultEnabled && !currentRightsFlags.contains($0.0) })
+                
+                for (subRight, _) in banSendMediaSubList() {
+                    let subItemEnabled = defaultEnabled && !state.updating && !defaultBannedRights.flags.contains(subRight) && channel.hasPermission(.banMembers)
+                    
+                    subItems.append(SubPermission(title: stringForGroupPermission(strings: presentationData.strings, right: subRight, isForum: channel.isForum), flags: subRight, isSelected: defaultEnabled && !currentRightsFlags.contains(subRight), isEnabled: subItemEnabled))
+                }
+            }
+            
+            entries.append(.rightItem(presentationData.theme, index, stringForGroupPermission(strings: presentationData.strings, right: right, isForum: channel.flags.contains(.isForum)), right, isSelected, defaultEnabled && !state.updating, subItems, state.expandedPermissions.contains(right)))
             index += 1
         }
         
         entries.append(.timeout(presentationData.theme, presentationData.strings.GroupPermission_Duration, currentTimeoutString))
         
-        if let initialParticipant = initialParticipant, case let .member(_, _, _, banInfo?, _) = initialParticipant, let initialBannedBy = initialBannedBy {
+        if let initialParticipant = initialParticipant, case let .member(_, _, _, banInfo?, _, _) = initialParticipant, let initialBannedBy = initialBannedBy {
             entries.append(.exceptionInfo(presentationData.theme, presentationData.strings.GroupPermission_AddedInfo(initialBannedBy.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder), stringForRelativeSymbolicTimestamp(strings: presentationData.strings, relativeTimestamp: banInfo.timestamp, relativeTo: state.referenceTimestamp, dateTimeFormat: presentationData.dateTimeFormat)).string))
             entries.append(.delete(presentationData.theme, presentationData.strings.GroupPermission_Delete))
         }
@@ -311,7 +363,7 @@ private func channelBannedMemberControllerEntries(presentationData: Presentation
         let currentRightsFlags: TelegramChatBannedRightsFlags
         if let updatedFlags = state.updatedFlags {
             currentRightsFlags = updatedFlags
-        } else if let initialParticipant = initialParticipant, case let .member(_, _, _, maybeBanInfo, _) = initialParticipant, let banInfo = maybeBanInfo {
+        } else if let initialParticipant = initialParticipant, case let .member(_, _, _, maybeBanInfo, _, _) = initialParticipant, let banInfo = maybeBanInfo {
             currentRightsFlags = banInfo.rights.flags
         } else {
             currentRightsFlags = defaultBannedRightsFlags
@@ -320,7 +372,7 @@ private func channelBannedMemberControllerEntries(presentationData: Presentation
         let currentTimeout: Int32
         if let updatedTimeout = state.updatedTimeout {
             currentTimeout = updatedTimeout
-        } else if let initialParticipant = initialParticipant, case let .member(_, _, _, maybeBanInfo, _) = initialParticipant, let banInfo = maybeBanInfo {
+        } else if let initialParticipant = initialParticipant, case let .member(_, _, _, maybeBanInfo, _, _) = initialParticipant, let banInfo = maybeBanInfo {
             currentTimeout = banInfo.rights.untilDate
         } else {
             currentTimeout = Int32.max
@@ -337,15 +389,29 @@ private func channelBannedMemberControllerEntries(presentationData: Presentation
         entries.append(.rightsHeader(presentationData.theme, presentationData.strings.GroupPermission_SectionTitle))
         
         var index = 0
-        for (right, _) in allGroupPermissionList(peer: .legacyGroup(group)) {
+        for (right, _) in allGroupPermissionList(peer: .legacyGroup(group), expandMedia: false) {
             let defaultEnabled = !defaultBannedRightsFlags.contains(right)
-            entries.append(.rightItem(presentationData.theme, index, stringForGroupPermission(strings: presentationData.strings, right: right, isForum: false), right, defaultEnabled && !currentRightsFlags.contains(right), defaultEnabled && !state.updating))
+            
+            var isSelected = defaultEnabled && !currentRightsFlags.contains(right)
+            
+            var subItems: [SubPermission] = []
+            if right == .banSendMedia {
+                isSelected = banSendMediaSubList().allSatisfy({ defaultEnabled && !currentRightsFlags.contains($0.0) })
+                
+                for (subRight, _) in banSendMediaSubList() {
+                    let subItemEnabled = defaultEnabled && !state.updating && !defaultBannedRightsFlags.contains(subRight)
+                    
+                    subItems.append(SubPermission(title: stringForGroupPermission(strings: presentationData.strings, right: subRight, isForum: false), flags: subRight, isSelected: defaultEnabled && !currentRightsFlags.contains(subRight), isEnabled: subItemEnabled))
+                }
+            }
+            
+            entries.append(.rightItem(presentationData.theme, index, stringForGroupPermission(strings: presentationData.strings, right: right, isForum: false), right, isSelected, defaultEnabled && !state.updating, subItems, state.expandedPermissions.contains(right)))
             index += 1
         }
         
         entries.append(.timeout(presentationData.theme, presentationData.strings.GroupPermission_Duration, currentTimeoutString))
         
-        if let initialParticipant = initialParticipant, case let .member(_, _, _, banInfo?, _) = initialParticipant, let initialBannedBy = initialBannedBy {
+        if let initialParticipant = initialParticipant, case let .member(_, _, _, banInfo?, _, _) = initialParticipant, let initialBannedBy = initialBannedBy {
             entries.append(.exceptionInfo(presentationData.theme, presentationData.strings.GroupPermission_AddedInfo(initialBannedBy.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder), stringForRelativeSymbolicTimestamp(strings: presentationData.strings, relativeTimestamp: banInfo.timestamp, relativeTo: state.referenceTimestamp, dateTimeFormat: presentationData.dateTimeFormat)).string))
             entries.append(.delete(presentationData.theme, presentationData.strings.GroupPermission_Delete))
         }
@@ -396,19 +462,46 @@ public func channelBannedMemberController(context: AccountContext, updatedPresen
                 var effectiveRightsFlags: TelegramChatBannedRightsFlags
                 if let updatedFlags = state.updatedFlags {
                     effectiveRightsFlags = updatedFlags
-                } else if let initialParticipant = initialParticipant, case let .member(_, _, _, banInfo?, _) = initialParticipant {
+                } else if let initialParticipant = initialParticipant, case let .member(_, _, _, banInfo?, _, _) = initialParticipant {
                     effectiveRightsFlags = banInfo.rights.flags
                 } else {
                     effectiveRightsFlags = defaultBannedRightsFlags
                 }
-                if value {
-                    effectiveRightsFlags.remove(rights)
-                    effectiveRightsFlags = effectiveRightsFlags.subtracting(groupPermissionDependencies(rights))
+                
+                
+                if rights == .banSendMedia {
+                    if value {
+                        effectiveRightsFlags.remove(rights)
+                        for item in banSendMediaSubList() {
+                            effectiveRightsFlags.remove(item.0)
+                        }
+                    } else {
+                        effectiveRightsFlags.insert(rights)
+                        for (right, _) in allGroupPermissionList(peer: EnginePeer(peer), expandMedia: false) {
+                            if groupPermissionDependencies(right).contains(rights) {
+                                effectiveRightsFlags.insert(right)
+                            }
+                        }
+                        
+                        for item in banSendMediaSubList() {
+                            effectiveRightsFlags.insert(item.0)
+                            for (right, _) in allGroupPermissionList(peer: EnginePeer(peer), expandMedia: false) {
+                                if groupPermissionDependencies(right).contains(item.0) {
+                                    effectiveRightsFlags.insert(right)
+                                }
+                            }
+                        }
+                    }
                 } else {
-                    effectiveRightsFlags.insert(rights)
-                    for (right, _) in allGroupPermissionList(peer: EnginePeer(peer)) {
-                        if groupPermissionDependencies(right).contains(rights) {
-                            effectiveRightsFlags.insert(right)
+                    if value {
+                        effectiveRightsFlags.remove(rights)
+                        effectiveRightsFlags = effectiveRightsFlags.subtracting(groupPermissionDependencies(rights))
+                    } else {
+                        effectiveRightsFlags.insert(rights)
+                        for (right, _) in allGroupPermissionList(peer: EnginePeer(peer), expandMedia: false) {
+                            if groupPermissionDependencies(right).contains(rights) {
+                                effectiveRightsFlags.insert(right)
+                            }
                         }
                     }
                 }
@@ -439,6 +532,16 @@ public func channelBannedMemberController(context: AccountContext, updatedPresen
             }
             presentControllerImpl?(textAlertController(context: context, updatedPresentationData: updatedPresentationData, title: nil, text: text, actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]), nil)
         })
+    }, toggleIsOptionExpanded: { flags in
+        updateState { state in
+            var state = state
+            if state.expandedPermissions.contains(flags) {
+                state.expandedPermissions.remove(flags)
+            } else {
+                state.expandedPermissions.insert(flags)
+            }
+            return state
+        }
     }, openTimeout: {
         let presentationData = updatedPresentationData?.initial ?? context.sharedContext.currentPresentationData.with { $0 }
         let actionSheet = ActionSheetController(presentationData: presentationData)
@@ -568,7 +671,7 @@ public func channelBannedMemberController(context: AccountContext, updatedPresen
                         }
                         
                         if updateFlags == nil && updateTimeout == nil {
-                            if case let .member(_, _, _, maybeBanInfo, _) = initialParticipant {
+                            if case let .member(_, _, _, maybeBanInfo, _, _) = initialParticipant {
                                 if maybeBanInfo == nil {
                                     updateFlags = defaultBannedRightsFlags
                                     updateTimeout = Int32.max
@@ -580,7 +683,7 @@ public func channelBannedMemberController(context: AccountContext, updatedPresen
                             let currentRightsFlags: TelegramChatBannedRightsFlags
                             if let updatedFlags = updateFlags {
                                 currentRightsFlags = updatedFlags
-                            } else if case let .member(_, _, _, maybeBanInfo, _) = initialParticipant, let banInfo = maybeBanInfo {
+                            } else if case let .member(_, _, _, maybeBanInfo, _, _) = initialParticipant, let banInfo = maybeBanInfo {
                                 currentRightsFlags = banInfo.rights.flags
                             } else {
                                 currentRightsFlags = defaultBannedRightsFlags
@@ -589,7 +692,7 @@ public func channelBannedMemberController(context: AccountContext, updatedPresen
                             let currentTimeout: Int32
                             if let updateTimeout = updateTimeout {
                                 currentTimeout = updateTimeout
-                            } else if case let .member(_, _, _, maybeBanInfo, _) = initialParticipant, let banInfo = maybeBanInfo {
+                            } else if case let .member(_, _, _, maybeBanInfo, _, _) = initialParticipant, let banInfo = maybeBanInfo {
                                 currentTimeout = banInfo.rights.untilDate
                             } else {
                                 currentTimeout = Int32.max
@@ -621,7 +724,7 @@ public func channelBannedMemberController(context: AccountContext, updatedPresen
                     }
                     
                     var previousRights: TelegramChatBannedRights?
-                    if let initialParticipant = initialParticipant, case let .member(_, _, _, banInfo, _) = initialParticipant, banInfo != nil {
+                    if let initialParticipant = initialParticipant, case let .member(_, _, _, banInfo, _, _) = initialParticipant, banInfo != nil {
                         previousRights = banInfo?.rights
                     }
                     
@@ -722,7 +825,7 @@ public func channelBannedMemberController(context: AccountContext, updatedPresen
         }
         
         let title: String
-        if let initialParticipant = initialParticipant, case let .member(_, _, _, banInfo, _) = initialParticipant, banInfo != nil {
+        if let initialParticipant = initialParticipant, case let .member(_, _, _, banInfo, _, _) = initialParticipant, banInfo != nil {
             title = presentationData.strings.GroupPermission_Title
         } else {
             title = presentationData.strings.GroupPermission_NewTitle

@@ -7,138 +7,104 @@ import TelegramPresentationData
 import AccountContext
 import ContextUI
 import TelegramCore
-import ChatPresentationInterfaceState
 import TextFormat
+import ReactionSelectionNode
+import WallpaperBackgroundNode
 
-public final class ChatSendMessageActionSheetController: ViewController {
-    private var controllerNode: ChatSendMessageActionSheetControllerNode {
-        return self.displayNode as! ChatSendMessageActionSheetControllerNode
+public enum SendMessageActionSheetControllerParams {
+    public final class SendMessage {
+        public let isScheduledMessages: Bool
+        public let mediaPreview: ChatSendMessageContextScreenMediaPreview?
+        public let mediaCaptionIsAbove: (Bool, (Bool) -> Void)?
+        public let messageEffect: (ChatSendMessageActionSheetControllerSendParameters.Effect?, (ChatSendMessageActionSheetControllerSendParameters.Effect?) -> Void)?
+        public let attachment: Bool
+        public let canSendWhenOnline: Bool
+        public let forwardMessageIds: [EngineMessage.Id]
+        public let canMakePaidContent: Bool
+        public let currentPrice: Int64?
+        public let hasTimers: Bool
+        
+        public init(
+            isScheduledMessages: Bool,
+            mediaPreview: ChatSendMessageContextScreenMediaPreview?,
+            mediaCaptionIsAbove: (Bool, (Bool) -> Void)?,
+            messageEffect: (ChatSendMessageActionSheetControllerSendParameters.Effect?, (ChatSendMessageActionSheetControllerSendParameters.Effect?) -> Void)?,
+            attachment: Bool,
+            canSendWhenOnline: Bool,
+            forwardMessageIds: [EngineMessage.Id],
+            canMakePaidContent: Bool,
+            currentPrice: Int64?,
+            hasTimers: Bool
+        ) {
+            self.isScheduledMessages = isScheduledMessages
+            self.mediaPreview = mediaPreview
+            self.mediaCaptionIsAbove = mediaCaptionIsAbove
+            self.messageEffect = messageEffect
+            self.attachment = attachment
+            self.canSendWhenOnline = canSendWhenOnline
+            self.forwardMessageIds = forwardMessageIds
+            self.canMakePaidContent = canMakePaidContent
+            self.currentPrice = currentPrice
+            self.hasTimers = hasTimers
+        }
     }
     
-    private let context: AccountContext
-    private let interfaceState: ChatPresentationInterfaceState
-    private let gesture: ContextGesture
-    private let sourceSendButton: ASDisplayNode
-    private let textInputNode: EditableTextNode
-    private let attachment: Bool
-    private let completion: () -> Void
-    private let sendMessage: (Bool) -> Void
-    private let schedule: () -> Void
+    public final class EditMessage {
+        public let messages: [EngineMessage]
+        public let mediaPreview: ChatSendMessageContextScreenMediaPreview?
+        public let mediaCaptionIsAbove: (Bool, (Bool) -> Void)?
+        
+        public init(messages: [EngineMessage], mediaPreview: ChatSendMessageContextScreenMediaPreview?, mediaCaptionIsAbove: (Bool, (Bool) -> Void)?) {
+            self.messages = messages
+            self.mediaPreview = mediaPreview
+            self.mediaCaptionIsAbove = mediaCaptionIsAbove
+        }
+    }
     
-    private var presentationData: PresentationData
-    private var presentationDataDisposable: Disposable?
-    
-    private var didPlayPresentationAnimation = false
-    
-    private var validLayout: ContainerViewLayout?
-    
-    private let hapticFeedback = HapticFeedback()
-    
-    public var emojiViewProvider: ((ChatTextInputTextCustomEmojiAttribute) -> UIView)?
+    case sendMessage(SendMessage)
+    case editMessage(EditMessage)
+}
 
-    public init(context: AccountContext, updatedPresentationData: (initial: PresentationData, signal: Signal<PresentationData, NoError>)? = nil, interfaceState: ChatPresentationInterfaceState, gesture: ContextGesture, sourceSendButton: ASDisplayNode, textInputNode: EditableTextNode, attachment: Bool = false, completion: @escaping () -> Void, sendMessage: @escaping (Bool) -> Void, schedule: @escaping () -> Void) {
-        self.context = context
-        self.interfaceState = interfaceState
-        self.gesture = gesture
-        self.sourceSendButton = sourceSendButton
-        self.textInputNode = textInputNode
-        self.attachment = attachment
-        self.completion = completion
-        self.sendMessage = sendMessage
-        self.schedule = schedule
-        
-        self.presentationData = updatedPresentationData?.initial ?? context.sharedContext.currentPresentationData.with { $0 }
-        
-        super.init(navigationBarPresentationData: nil)
-        
-        self.blocksBackgroundWhenInOverlay = true
-        
-        self.presentationDataDisposable = ((updatedPresentationData?.signal ?? context.sharedContext.presentationData)
-        |> deliverOnMainQueue).start(next: { [weak self] presentationData in
-            if let strongSelf = self {
-                strongSelf.presentationData = presentationData
-                if strongSelf.isNodeLoaded {
-                    strongSelf.controllerNode.updatePresentationData(presentationData)
-                }
-            }
-        })
-        
-        self.statusBar.statusBarStyle = .Hide
-        self.statusBar.ignoreInCall = true
-    }
-    
-    required init(coder aDecoder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-    
-    deinit {
-        self.presentationDataDisposable?.dispose()
-    }
-    
-    override public func loadDisplayNode() {
-        var forwardedCount: Int?
-        if let forwardMessageIds = self.interfaceState.interfaceState.forwardMessageIds, forwardMessageIds.count > 0 {
-            forwardedCount = forwardMessageIds.count
-        }
-        
-        var reminders = false
-        var isSecret = false
-        var canSchedule = false
-        var hasEntityKeyboard = false
-        if let peerId = self.interfaceState.chatLocation.peerId {
-            reminders = peerId == context.account.peerId
-            isSecret = peerId.namespace == Namespaces.Peer.SecretChat
-            canSchedule = !isSecret
-        }
-        
-        if case .media = self.interfaceState.inputMode {
-            hasEntityKeyboard = true
-        }
-        
-        self.displayNode = ChatSendMessageActionSheetControllerNode(context: self.context, presentationData: self.presentationData, reminders: reminders, gesture: gesture, sourceSendButton: self.sourceSendButton, textInputNode: self.textInputNode, attachment: self.attachment, forwardedCount: forwardedCount, hasEntityKeyboard: hasEntityKeyboard, emojiViewProvider: self.emojiViewProvider, send: { [weak self] in
-            self?.sendMessage(false)
-            self?.dismiss(cancel: false)
-        }, sendSilently: { [weak self] in
-            self?.sendMessage(true)
-            self?.dismiss(cancel: false)
-        }, schedule: !canSchedule ? nil : { [weak self] in
-            self?.schedule()
-            self?.dismiss(cancel: false)
-        }, cancel: { [weak self] in
-            self?.dismiss(cancel: true)
-        })
-        self.displayNodeDidLoad()
-    }
-    
-    override public func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
-        
-        if !self.didPlayPresentationAnimation {
-            self.didPlayPresentationAnimation = true
-            
-            self.hapticFeedback.impact()
-            self.controllerNode.animateIn()
-        }
-    }
-    
-    override public func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
-        self.validLayout = layout
-        
-        super.containerLayoutUpdated(layout, transition: transition)
-        
-        self.controllerNode.containerLayoutUpdated(layout, transition: transition)
-    }
-    
-    override public func dismiss(completion: (() -> Void)? = nil) {
-        self.dismiss(cancel: true)
-    }
-    
-    private func dismiss(cancel: Bool) {
-        self.statusBar.statusBarStyle = .Ignore
-        self.controllerNode.animateOut(cancel: cancel, completion: { [weak self] in
-            self?.completion()
-            self?.didPlayPresentationAnimation = false
-            self?.presentingViewController?.dismiss(animated: false, completion: nil)
-        })
-    }
+public func makeChatSendMessageActionSheetController(
+    initialData: ChatSendMessageContextScreen.InitialData,
+    context: AccountContext,
+    updatedPresentationData: (initial: PresentationData, signal: Signal<PresentationData, NoError>)? = nil,
+    peerId: EnginePeer.Id?,
+    params: SendMessageActionSheetControllerParams,
+    hasEntityKeyboard: Bool,
+    gesture: ContextGesture,
+    sourceSendButton: ASDisplayNode,
+    textInputView: UITextView,
+    emojiViewProvider: ((ChatTextInputTextCustomEmojiAttribute) -> UIView)?,
+    wallpaperBackgroundNode: WallpaperBackgroundNode? = nil,
+    completion: @escaping () -> Void,
+    sendMessage: @escaping (ChatSendMessageActionSheetController.SendMode, ChatSendMessageActionSheetController.SendParameters?) -> Void,
+    schedule: @escaping (ChatSendMessageActionSheetController.SendParameters?) -> Void,
+    editPrice: @escaping (Int64) -> Void,
+    openPremiumPaywall: @escaping (ViewController) -> Void,
+    reactionItems: [ReactionItem]? = nil,
+    availableMessageEffects: AvailableMessageEffects? = nil,
+    isPremium: Bool = false
+) -> ChatSendMessageActionSheetController {
+    return ChatSendMessageContextScreen(
+        initialData: initialData,
+        context: context,
+        updatedPresentationData: updatedPresentationData,
+        peerId: peerId,
+        params: params,
+        hasEntityKeyboard: hasEntityKeyboard,
+        gesture: gesture,
+        sourceSendButton: sourceSendButton,
+        textInputView: textInputView,
+        emojiViewProvider: emojiViewProvider,
+        wallpaperBackgroundNode: wallpaperBackgroundNode,
+        completion: completion,
+        sendMessage: sendMessage,
+        schedule: schedule,
+        editPrice: editPrice,
+        openPremiumPaywall: openPremiumPaywall,
+        reactionItems: reactionItems,
+        availableMessageEffects: availableMessageEffects,
+        isPremium: isPremium
+    )
 }

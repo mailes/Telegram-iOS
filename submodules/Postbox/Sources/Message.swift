@@ -477,6 +477,10 @@ public struct MessageFlags: OptionSet {
             rawValue |= MessageFlags.IsForumTopic.rawValue
         }
         
+        if flags.contains(StoreMessageFlags.ReactionsArePossible) {
+            rawValue |= MessageFlags.ReactionsArePossible.rawValue
+        }
+        
         self.rawValue = rawValue
     }
     
@@ -490,6 +494,7 @@ public struct MessageFlags: OptionSet {
     public static let CountedAsIncoming = MessageFlags(rawValue: 256)
     public static let CopyProtected = MessageFlags(rawValue: 512)
     public static let IsForumTopic = MessageFlags(rawValue: 1024)
+    public static let ReactionsArePossible = MessageFlags(rawValue: 2048)
     
     public static let IsIncomingMask = MessageFlags([.Incoming, .CountedAsIncoming])
 }
@@ -578,11 +583,41 @@ public struct MessageForwardInfo: Equatable {
     }
 }
 
+public struct StoryId: Codable, Hashable {
+    private enum CodingKeys: String, CodingKey {
+        case peerId = "p"
+        case id = "i"
+    }
+    
+    public var peerId: PeerId
+    public let id: Int32
+    
+    public init(peerId: PeerId, id: Int32) {
+        self.peerId = peerId
+        self.id = id
+    }
+    
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        
+        self.peerId = PeerId(try container.decode(Int64.self, forKey: .peerId))
+        self.id = try container.decode(Int32.self, forKey: .id)
+    }
+    
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        
+        try container.encode(self.peerId.toInt64(), forKey: .peerId)
+        try container.encode(self.id, forKey: .id)
+    }
+}
+
 public protocol MessageAttribute: AnyObject, PostboxCoding {
     var associatedPeerIds: [PeerId] { get }
     var associatedMessageIds: [MessageId] { get }
     var associatedMediaIds: [MediaId] { get }
     var automaticTimestampBasedAttribute: (UInt16, Int32)? { get }
+    var associatedStoryIds: [StoryId] { get }
 }
 
 public extension MessageAttribute {
@@ -601,10 +636,18 @@ public extension MessageAttribute {
     var automaticTimestampBasedAttribute: (UInt16, Int32)? {
         return nil
     }
+    
+    var associatedStoryIds: [StoryId] {
+        return []
+    }
 }
 
 public struct MessageGroupInfo: Equatable {
     public let stableId: UInt32
+    
+    public init(stableId: UInt32) {
+        self.stableId = stableId
+    }
 }
 
 public final class Message {
@@ -612,11 +655,13 @@ public final class Message {
         public let title: String
         public let icon: Int64?
         public let iconColor: Int32
+        public let isClosed: Bool
         
-        public init(title: String, icon: Int64?, iconColor: Int32) {
+        public init(title: String, icon: Int64?, iconColor: Int32, isClosed: Bool) {
             self.title = title
             self.icon = icon
             self.iconColor = iconColor
+            self.isClosed = isClosed
         }
         
         public static func ==(lhs: AssociatedThreadInfo, rhs: AssociatedThreadInfo) -> Bool {
@@ -630,6 +675,9 @@ public final class Message {
                 return false
             }
             if lhs.iconColor != rhs.iconColor {
+                return false
+            }
+            if lhs.isClosed != rhs.isClosed {
                 return false
             }
             return true
@@ -649,6 +697,7 @@ public final class Message {
     public let tags: MessageTags
     public let globalTags: GlobalMessageTags
     public let localTags: LocalMessageTags
+    public let customTags: [MemoryBuffer]
     public let forwardInfo: MessageForwardInfo?
     public let author: Peer?
     public let text: String
@@ -659,12 +708,13 @@ public final class Message {
     public let associatedMessageIds: [MessageId]
     public let associatedMedia: [MediaId: Media]
     public let associatedThreadInfo: AssociatedThreadInfo?
+    public let associatedStories: [StoryId: CodableEntry]
     
     public var index: MessageIndex {
         return MessageIndex(id: self.id, timestamp: self.timestamp)
     }
     
-    public init(stableId: UInt32, stableVersion: UInt32, id: MessageId, globallyUniqueId: Int64?, groupingKey: Int64?, groupInfo: MessageGroupInfo?, threadId: Int64?, timestamp: Int32, flags: MessageFlags, tags: MessageTags, globalTags: GlobalMessageTags, localTags: LocalMessageTags, forwardInfo: MessageForwardInfo?, author: Peer?, text: String, attributes: [MessageAttribute], media: [Media], peers: SimpleDictionary<PeerId, Peer>, associatedMessages: SimpleDictionary<MessageId, Message>, associatedMessageIds: [MessageId], associatedMedia: [MediaId: Media], associatedThreadInfo: AssociatedThreadInfo?) {
+    public init(stableId: UInt32, stableVersion: UInt32, id: MessageId, globallyUniqueId: Int64?, groupingKey: Int64?, groupInfo: MessageGroupInfo?, threadId: Int64?, timestamp: Int32, flags: MessageFlags, tags: MessageTags, globalTags: GlobalMessageTags, localTags: LocalMessageTags, customTags: [MemoryBuffer], forwardInfo: MessageForwardInfo?, author: Peer?, text: String, attributes: [MessageAttribute], media: [Media], peers: SimpleDictionary<PeerId, Peer>, associatedMessages: SimpleDictionary<MessageId, Message>, associatedMessageIds: [MessageId], associatedMedia: [MediaId: Media], associatedThreadInfo: AssociatedThreadInfo?, associatedStories: [StoryId: CodableEntry]) {
         self.stableId = stableId
         self.stableVersion = stableVersion
         self.id = id
@@ -677,6 +727,7 @@ public final class Message {
         self.tags = tags
         self.globalTags = globalTags
         self.localTags = localTags
+        self.customTags = customTags
         self.forwardInfo = forwardInfo
         self.author = author
         self.text = text
@@ -687,50 +738,59 @@ public final class Message {
         self.associatedMessageIds = associatedMessageIds
         self.associatedMedia = associatedMedia
         self.associatedThreadInfo = associatedThreadInfo
+        self.associatedStories = associatedStories
+    }
+    
+    public func withUpdatedStableId(stableId: UInt32) -> Message {
+        return Message(stableId: stableId, stableVersion: self.stableVersion, id: self.id, globallyUniqueId: self.globallyUniqueId, groupingKey: self.groupingKey, groupInfo: self.groupInfo, threadId: self.threadId, timestamp: self.timestamp, flags: self.flags, tags: self.tags, globalTags: self.globalTags, localTags: self.localTags, customTags: self.customTags, forwardInfo: self.forwardInfo, author: self.author, text: self.text, attributes: self.attributes, media: self.media, peers: self.peers, associatedMessages: self.associatedMessages, associatedMessageIds: self.associatedMessageIds, associatedMedia: self.associatedMedia, associatedThreadInfo: self.associatedThreadInfo, associatedStories: self.associatedStories)
+    }
+    
+    public func withUpdatedId(id: MessageId) -> Message {
+        return Message(stableId: self.stableId, stableVersion: self.stableVersion, id: id, globallyUniqueId: self.globallyUniqueId, groupingKey: self.groupingKey, groupInfo: self.groupInfo, threadId: self.threadId, timestamp: self.timestamp, flags: self.flags, tags: self.tags, globalTags: self.globalTags, localTags: self.localTags, customTags: self.customTags, forwardInfo: self.forwardInfo, author: self.author, text: self.text, attributes: self.attributes, media: self.media, peers: self.peers, associatedMessages: self.associatedMessages, associatedMessageIds: self.associatedMessageIds, associatedMedia: self.associatedMedia, associatedThreadInfo: self.associatedThreadInfo, associatedStories: self.associatedStories)
     }
     
     public func withUpdatedStableVersion(stableVersion: UInt32) -> Message {
-        return Message(stableId: self.stableId, stableVersion: stableVersion, id: self.id, globallyUniqueId: self.globallyUniqueId, groupingKey: self.groupingKey, groupInfo: self.groupInfo, threadId: self.threadId, timestamp: self.timestamp, flags: self.flags, tags: self.tags, globalTags: self.globalTags, localTags: self.localTags, forwardInfo: self.forwardInfo, author: self.author, text: self.text, attributes: self.attributes, media: self.media, peers: self.peers, associatedMessages: self.associatedMessages, associatedMessageIds: self.associatedMessageIds, associatedMedia: self.associatedMedia, associatedThreadInfo: self.associatedThreadInfo)
+        return Message(stableId: self.stableId, stableVersion: stableVersion, id: self.id, globallyUniqueId: self.globallyUniqueId, groupingKey: self.groupingKey, groupInfo: self.groupInfo, threadId: self.threadId, timestamp: self.timestamp, flags: self.flags, tags: self.tags, globalTags: self.globalTags, localTags: self.localTags, customTags: self.customTags, forwardInfo: self.forwardInfo, author: self.author, text: self.text, attributes: self.attributes, media: self.media, peers: self.peers, associatedMessages: self.associatedMessages, associatedMessageIds: self.associatedMessageIds, associatedMedia: self.associatedMedia, associatedThreadInfo: self.associatedThreadInfo, associatedStories: self.associatedStories)
     }
     
     public func withUpdatedText(_ text: String) -> Message {
-        return Message(stableId: self.stableId, stableVersion: self.stableVersion, id: self.id, globallyUniqueId: self.globallyUniqueId, groupingKey: self.groupingKey, groupInfo: self.groupInfo, threadId: self.threadId, timestamp: self.timestamp, flags: self.flags, tags: self.tags, globalTags: self.globalTags, localTags: self.localTags, forwardInfo: self.forwardInfo, author: self.author, text: text, attributes: self.attributes, media: self.media, peers: self.peers, associatedMessages: self.associatedMessages, associatedMessageIds: self.associatedMessageIds, associatedMedia: self.associatedMedia, associatedThreadInfo: self.associatedThreadInfo)
+        return Message(stableId: self.stableId, stableVersion: self.stableVersion, id: self.id, globallyUniqueId: self.globallyUniqueId, groupingKey: self.groupingKey, groupInfo: self.groupInfo, threadId: self.threadId, timestamp: self.timestamp, flags: self.flags, tags: self.tags, globalTags: self.globalTags, localTags: self.localTags, customTags: self.customTags, forwardInfo: self.forwardInfo, author: self.author, text: text, attributes: self.attributes, media: self.media, peers: self.peers, associatedMessages: self.associatedMessages, associatedMessageIds: self.associatedMessageIds, associatedMedia: self.associatedMedia, associatedThreadInfo: self.associatedThreadInfo, associatedStories: self.associatedStories)
     }
     
     public func withUpdatedTimestamp(_ timestamp: Int32) -> Message {
-        return Message(stableId: self.stableId, stableVersion: self.stableVersion, id: self.id, globallyUniqueId: self.globallyUniqueId, groupingKey: self.groupingKey, groupInfo: self.groupInfo, threadId: self.threadId, timestamp: timestamp, flags: self.flags, tags: self.tags, globalTags: self.globalTags, localTags: self.localTags, forwardInfo: self.forwardInfo, author: self.author, text: self.text, attributes: self.attributes, media: self.media, peers: self.peers, associatedMessages: self.associatedMessages, associatedMessageIds: self.associatedMessageIds, associatedMedia: self.associatedMedia, associatedThreadInfo: self.associatedThreadInfo)
+        return Message(stableId: self.stableId, stableVersion: self.stableVersion, id: self.id, globallyUniqueId: self.globallyUniqueId, groupingKey: self.groupingKey, groupInfo: self.groupInfo, threadId: self.threadId, timestamp: timestamp, flags: self.flags, tags: self.tags, globalTags: self.globalTags, localTags: self.localTags, customTags: self.customTags, forwardInfo: self.forwardInfo, author: self.author, text: self.text, attributes: self.attributes, media: self.media, peers: self.peers, associatedMessages: self.associatedMessages, associatedMessageIds: self.associatedMessageIds, associatedMedia: self.associatedMedia, associatedThreadInfo: self.associatedThreadInfo, associatedStories: self.associatedStories)
     }
     
     public func withUpdatedMedia(_ media: [Media]) -> Message {
-        return Message(stableId: self.stableId, stableVersion: self.stableVersion, id: self.id, globallyUniqueId: self.globallyUniqueId, groupingKey: self.groupingKey, groupInfo: self.groupInfo, threadId: self.threadId, timestamp: self.timestamp, flags: self.flags, tags: self.tags, globalTags: self.globalTags, localTags: self.localTags, forwardInfo: self.forwardInfo, author: self.author, text: self.text, attributes: self.attributes, media: media, peers: self.peers, associatedMessages: self.associatedMessages, associatedMessageIds: self.associatedMessageIds, associatedMedia: self.associatedMedia, associatedThreadInfo: self.associatedThreadInfo)
+        return Message(stableId: self.stableId, stableVersion: self.stableVersion, id: self.id, globallyUniqueId: self.globallyUniqueId, groupingKey: self.groupingKey, groupInfo: self.groupInfo, threadId: self.threadId, timestamp: self.timestamp, flags: self.flags, tags: self.tags, globalTags: self.globalTags, localTags: self.localTags, customTags: self.customTags, forwardInfo: self.forwardInfo, author: self.author, text: self.text, attributes: self.attributes, media: media, peers: self.peers, associatedMessages: self.associatedMessages, associatedMessageIds: self.associatedMessageIds, associatedMedia: self.associatedMedia, associatedThreadInfo: self.associatedThreadInfo, associatedStories: self.associatedStories)
     }
     
     public func withUpdatedPeers(_ peers: SimpleDictionary<PeerId, Peer>) -> Message {
-        return Message(stableId: self.stableId, stableVersion: self.stableVersion, id: self.id, globallyUniqueId: self.globallyUniqueId, groupingKey: self.groupingKey, groupInfo: self.groupInfo, threadId: self.threadId, timestamp: self.timestamp, flags: self.flags, tags: self.tags, globalTags: self.globalTags, localTags: self.localTags, forwardInfo: self.forwardInfo, author: self.author, text: self.text, attributes: self.attributes, media: self.media, peers: peers, associatedMessages: self.associatedMessages, associatedMessageIds: self.associatedMessageIds, associatedMedia: self.associatedMedia, associatedThreadInfo: self.associatedThreadInfo)
+        return Message(stableId: self.stableId, stableVersion: self.stableVersion, id: self.id, globallyUniqueId: self.globallyUniqueId, groupingKey: self.groupingKey, groupInfo: self.groupInfo, threadId: self.threadId, timestamp: self.timestamp, flags: self.flags, tags: self.tags, globalTags: self.globalTags, localTags: self.localTags, customTags: self.customTags, forwardInfo: self.forwardInfo, author: self.author, text: self.text, attributes: self.attributes, media: self.media, peers: peers, associatedMessages: self.associatedMessages, associatedMessageIds: self.associatedMessageIds, associatedMedia: self.associatedMedia, associatedThreadInfo: self.associatedThreadInfo, associatedStories: self.associatedStories)
     }
     
     public func withUpdatedFlags(_ flags: MessageFlags) -> Message {
-        return Message(stableId: self.stableId, stableVersion: self.stableVersion, id: self.id, globallyUniqueId: self.globallyUniqueId, groupingKey: self.groupingKey, groupInfo: self.groupInfo, threadId: self.threadId, timestamp: self.timestamp, flags: flags, tags: self.tags, globalTags: self.globalTags, localTags: self.localTags, forwardInfo: self.forwardInfo, author: self.author, text: self.text, attributes: self.attributes, media: self.media, peers: self.peers, associatedMessages: self.associatedMessages, associatedMessageIds: self.associatedMessageIds, associatedMedia: self.associatedMedia, associatedThreadInfo: self.associatedThreadInfo)
+        return Message(stableId: self.stableId, stableVersion: self.stableVersion, id: self.id, globallyUniqueId: self.globallyUniqueId, groupingKey: self.groupingKey, groupInfo: self.groupInfo, threadId: self.threadId, timestamp: self.timestamp, flags: flags, tags: self.tags, globalTags: self.globalTags, localTags: self.localTags, customTags: self.customTags, forwardInfo: self.forwardInfo, author: self.author, text: self.text, attributes: self.attributes, media: self.media, peers: self.peers, associatedMessages: self.associatedMessages, associatedMessageIds: self.associatedMessageIds, associatedMedia: self.associatedMedia, associatedThreadInfo: self.associatedThreadInfo, associatedStories: self.associatedStories)
     }
     
     func withUpdatedGroupInfo(_ groupInfo: MessageGroupInfo?) -> Message {
-        return Message(stableId: self.stableId, stableVersion: self.stableVersion, id: self.id, globallyUniqueId: self.globallyUniqueId, groupingKey: self.groupingKey, groupInfo: groupInfo, threadId: self.threadId, timestamp: self.timestamp, flags: self.flags, tags: self.tags, globalTags: self.globalTags, localTags: self.localTags, forwardInfo: self.forwardInfo, author: self.author, text: self.text, attributes: self.attributes, media: self.media, peers: self.peers, associatedMessages: self.associatedMessages, associatedMessageIds: self.associatedMessageIds, associatedMedia: self.associatedMedia, associatedThreadInfo: self.associatedThreadInfo)
+        return Message(stableId: self.stableId, stableVersion: self.stableVersion, id: self.id, globallyUniqueId: self.globallyUniqueId, groupingKey: self.groupingKey, groupInfo: groupInfo, threadId: self.threadId, timestamp: self.timestamp, flags: self.flags, tags: self.tags, globalTags: self.globalTags, localTags: self.localTags, customTags: self.customTags, forwardInfo: self.forwardInfo, author: self.author, text: self.text, attributes: self.attributes, media: self.media, peers: self.peers, associatedMessages: self.associatedMessages, associatedMessageIds: self.associatedMessageIds, associatedMedia: self.associatedMedia, associatedThreadInfo: self.associatedThreadInfo, associatedStories: self.associatedStories)
     }
     
     public func withUpdatedAttributes(_ attributes: [MessageAttribute]) -> Message {
-        return Message(stableId: self.stableId, stableVersion: self.stableVersion, id: self.id, globallyUniqueId: self.globallyUniqueId, groupingKey: self.groupingKey, groupInfo: self.groupInfo, threadId: self.threadId, timestamp: self.timestamp, flags: self.flags, tags: self.tags, globalTags: self.globalTags, localTags: self.localTags, forwardInfo: self.forwardInfo, author: self.author, text: self.text, attributes: attributes, media: self.media, peers: self.peers, associatedMessages: self.associatedMessages, associatedMessageIds: self.associatedMessageIds, associatedMedia: self.associatedMedia, associatedThreadInfo: self.associatedThreadInfo)
+        return Message(stableId: self.stableId, stableVersion: self.stableVersion, id: self.id, globallyUniqueId: self.globallyUniqueId, groupingKey: self.groupingKey, groupInfo: self.groupInfo, threadId: self.threadId, timestamp: self.timestamp, flags: self.flags, tags: self.tags, globalTags: self.globalTags, localTags: self.localTags, customTags: self.customTags, forwardInfo: self.forwardInfo, author: self.author, text: self.text, attributes: attributes, media: self.media, peers: self.peers, associatedMessages: self.associatedMessages, associatedMessageIds: self.associatedMessageIds, associatedMedia: self.associatedMedia, associatedThreadInfo: self.associatedThreadInfo, associatedStories: self.associatedStories)
     }
     
     func withUpdatedAssociatedMessages(_ associatedMessages: SimpleDictionary<MessageId, Message>) -> Message {
-        return Message(stableId: self.stableId, stableVersion: self.stableVersion, id: self.id, globallyUniqueId: self.globallyUniqueId, groupingKey: self.groupingKey, groupInfo: self.groupInfo, threadId: self.threadId, timestamp: self.timestamp, flags: self.flags, tags: self.tags, globalTags: self.globalTags, localTags: self.localTags, forwardInfo: self.forwardInfo, author: self.author, text: self.text, attributes: self.attributes, media: self.media, peers: self.peers, associatedMessages: associatedMessages, associatedMessageIds: self.associatedMessageIds, associatedMedia: self.associatedMedia, associatedThreadInfo: self.associatedThreadInfo)
+        return Message(stableId: self.stableId, stableVersion: self.stableVersion, id: self.id, globallyUniqueId: self.globallyUniqueId, groupingKey: self.groupingKey, groupInfo: self.groupInfo, threadId: self.threadId, timestamp: self.timestamp, flags: self.flags, tags: self.tags, globalTags: self.globalTags, localTags: self.localTags, customTags: self.customTags, forwardInfo: self.forwardInfo, author: self.author, text: self.text, attributes: self.attributes, media: self.media, peers: self.peers, associatedMessages: associatedMessages, associatedMessageIds: self.associatedMessageIds, associatedMedia: self.associatedMedia, associatedThreadInfo: self.associatedThreadInfo, associatedStories: self.associatedStories)
     }
     
     public func withUpdatedForwardInfo(_ forwardInfo: MessageForwardInfo?) -> Message {
-        return Message(stableId: self.stableId, stableVersion: self.stableVersion, id: self.id, globallyUniqueId: self.globallyUniqueId, groupingKey: self.groupingKey, groupInfo: self.groupInfo, threadId: self.threadId, timestamp: self.timestamp, flags: self.flags, tags: self.tags, globalTags: self.globalTags, localTags: self.localTags, forwardInfo: forwardInfo, author: self.author, text: self.text, attributes: self.attributes, media: self.media, peers: self.peers, associatedMessages: self.associatedMessages, associatedMessageIds: self.associatedMessageIds, associatedMedia: self.associatedMedia, associatedThreadInfo: self.associatedThreadInfo)
+        return Message(stableId: self.stableId, stableVersion: self.stableVersion, id: self.id, globallyUniqueId: self.globallyUniqueId, groupingKey: self.groupingKey, groupInfo: self.groupInfo, threadId: self.threadId, timestamp: self.timestamp, flags: self.flags, tags: self.tags, globalTags: self.globalTags, localTags: self.localTags, customTags: self.customTags, forwardInfo: forwardInfo, author: self.author, text: self.text, attributes: self.attributes, media: self.media, peers: self.peers, associatedMessages: self.associatedMessages, associatedMessageIds: self.associatedMessageIds, associatedMedia: self.associatedMedia, associatedThreadInfo: self.associatedThreadInfo, associatedStories: self.associatedStories)
     }
     
     public func withUpdatedAuthor(_ author: Peer?) -> Message {
-        return Message(stableId: self.stableId, stableVersion: self.stableVersion, id: self.id, globallyUniqueId: self.globallyUniqueId, groupingKey: self.groupingKey, groupInfo: self.groupInfo, threadId: self.threadId, timestamp: self.timestamp, flags: self.flags, tags: self.tags, globalTags: self.globalTags, localTags: self.localTags, forwardInfo: self.forwardInfo, author: author, text: self.text, attributes: self.attributes, media: self.media, peers: self.peers, associatedMessages: self.associatedMessages, associatedMessageIds: self.associatedMessageIds, associatedMedia: self.associatedMedia, associatedThreadInfo: self.associatedThreadInfo)
+        return Message(stableId: self.stableId, stableVersion: self.stableVersion, id: self.id, globallyUniqueId: self.globallyUniqueId, groupingKey: self.groupingKey, groupInfo: self.groupInfo, threadId: self.threadId, timestamp: self.timestamp, flags: self.flags, tags: self.tags, globalTags: self.globalTags, localTags: self.localTags, customTags: self.customTags, forwardInfo: self.forwardInfo, author: author, text: self.text, attributes: self.attributes, media: self.media, peers: self.peers, associatedMessages: self.associatedMessages, associatedMessageIds: self.associatedMessageIds, associatedMedia: self.associatedMedia, associatedThreadInfo: self.associatedThreadInfo, associatedStories: self.associatedStories)
     }
 }
 
@@ -788,6 +848,10 @@ public struct StoreMessageFlags: OptionSet {
             rawValue |= StoreMessageFlags.IsForumTopic.rawValue
         }
         
+        if flags.contains(.ReactionsArePossible) {
+            rawValue |= StoreMessageFlags.ReactionsArePossible.rawValue
+        }
+        
         self.rawValue = rawValue
     }
     
@@ -801,6 +865,7 @@ public struct StoreMessageFlags: OptionSet {
     public static let CountedAsIncoming = StoreMessageFlags(rawValue: 256)
     public static let CopyProtected = StoreMessageFlags(rawValue: 512)
     public static let IsForumTopic = StoreMessageFlags(rawValue: 1024)
+    public static let ReactionsArePossible = StoreMessageFlags(rawValue: 2048)
     
     public static let IsIncomingMask = StoreMessageFlags([.Incoming, .CountedAsIncoming])
 }
@@ -828,14 +893,14 @@ public enum StoreMessageId {
     }
 }
 
-public func makeMessageThreadId(_ messageId: MessageId) -> Int64 {
-    return (Int64(messageId.namespace) << 32) | Int64(bitPattern: UInt64(UInt32(bitPattern: messageId.id)))
-}
-
-public func makeThreadIdMessageId(peerId: PeerId, threadId: Int64) -> MessageId {
-    let namespace = Int32((threadId >> 32) & 0x7fffffff)
-    let id = Int32(bitPattern: UInt32(threadId & 0xffffffff))
-    return MessageId(peerId: peerId, namespace: namespace, id: id)
+public struct MessageThreadKey: Hashable {
+    public var peerId: PeerId
+    public var threadId: Int64
+    
+    public init(peerId: PeerId, threadId: Int64) {
+        self.peerId = peerId
+        self.threadId = threadId
+    }
 }
 
 public final class StoreMessage {
@@ -921,6 +986,10 @@ public final class StoreMessage {
         }
     }
     
+    public func withUpdatedMedia(_ media: [Media]) -> StoreMessage {
+        return StoreMessage(id: self.id, globallyUniqueId: self.globallyUniqueId, groupingKey: self.groupingKey, threadId: self.threadId, timestamp: self.timestamp, flags: self.flags, tags: self.tags, globalTags: self.globalTags, localTags: self.localTags, forwardInfo: self.forwardInfo, authorId: self.authorId, text: self.text, attributes: self.attributes, media: media)
+    }
+    
     public func withUpdatedAttributes(_ attributes: [MessageAttribute]) -> StoreMessage {
         return StoreMessage(id: self.id, globallyUniqueId: self.globallyUniqueId, groupingKey: self.groupingKey, threadId: self.threadId, timestamp: self.timestamp, flags: self.flags, tags: self.tags, globalTags: self.globalTags, localTags: self.localTags, forwardInfo: self.forwardInfo, authorId: self.authorId, text: self.text, attributes: attributes, media: self.media)
     }
@@ -944,6 +1013,7 @@ final class InternalStoreMessage {
     let tags: MessageTags
     let globalTags: GlobalMessageTags
     let localTags: LocalMessageTags
+    let customTags: [MemoryBuffer]
     let forwardInfo: StoreMessageForwardInfo?
     let authorId: PeerId?
     let text: String
@@ -954,7 +1024,7 @@ final class InternalStoreMessage {
         return MessageIndex(id: self.id, timestamp: self.timestamp)
     }
     
-    init(id: MessageId, timestamp: Int32, globallyUniqueId: Int64?, groupingKey: Int64?, threadId: Int64?, flags: StoreMessageFlags, tags: MessageTags, globalTags: GlobalMessageTags, localTags: LocalMessageTags, forwardInfo: StoreMessageForwardInfo?, authorId: PeerId?, text: String, attributes: [MessageAttribute], media: [Media]) {
+    init(id: MessageId, timestamp: Int32, globallyUniqueId: Int64?, groupingKey: Int64?, threadId: Int64?, flags: StoreMessageFlags, tags: MessageTags, globalTags: GlobalMessageTags, localTags: LocalMessageTags, customTags: [MemoryBuffer], forwardInfo: StoreMessageForwardInfo?, authorId: PeerId?, text: String, attributes: [MessageAttribute], media: [Media]) {
         self.id = id
         self.timestamp = timestamp
         self.globallyUniqueId = globallyUniqueId
@@ -964,6 +1034,7 @@ final class InternalStoreMessage {
         self.tags = tags
         self.globalTags = globalTags
         self.localTags = localTags
+        self.customTags = customTags
         self.forwardInfo = forwardInfo
         self.authorId = authorId
         self.text = text
@@ -972,7 +1043,7 @@ final class InternalStoreMessage {
     }
 }
 
-public enum MessageIdNamespaces {
+public enum MessageIdNamespaces: Equatable {
     case all
     case just(Set<MessageId.Namespace>)
     case not(Set<MessageId.Namespace>)
@@ -986,5 +1057,25 @@ public enum MessageIdNamespaces {
         case let .not(namespaces):
             return !namespaces.contains(namespace)
         }
+    }
+}
+
+public struct PeerAndThreadId: Hashable {
+    public var peerId: PeerId
+    public var threadId: Int64?
+    
+    public init(peerId: PeerId, threadId: Int64?) {
+        self.peerId = peerId
+        self.threadId = threadId
+    }
+}
+
+public struct MessageAndThreadId: Hashable {
+    public var messageId: MessageId
+    public var threadId: Int64?
+    
+    public init(messageId: MessageId, threadId: Int64?) {
+        self.messageId = messageId
+        self.threadId = threadId
     }
 }

@@ -4,6 +4,7 @@ import Display
 import AsyncDisplayKit
 import SwiftSignalKit
 import TelegramCore
+import Postbox
 import TelegramPresentationData
 import TelegramUIPreferences
 import DeviceAccess
@@ -22,6 +23,8 @@ import TelegramPermissionsUI
 import AppBundle
 import ContextUI
 import PhoneNumberFormat
+import LocalizedPeerData
+import ContextUI
 
 private let dropDownIcon = { () -> UIImage in
     UIGraphicsBeginImageContextWithOptions(CGSize(width: 12.0, height: 12.0), false, 0.0)
@@ -37,78 +40,43 @@ private let dropDownIcon = { () -> UIImage in
     return image
 }()
 
+private enum ContactListNodeEntrySection: Int {
+    case stories = 0
+    case contacts = 1
+}
+
 private enum ContactListNodeEntryId: Hashable {
     case search
     case sort
     case permission(action: Bool)
     case option(index: Int)
-    case peerId(Int64)
+    case peerId(peerId: Int64, section: ContactListNodeEntrySection)
     case deviceContact(DeviceContactStableId)
-    
-    static func <(lhs: ContactListNodeEntryId, rhs: ContactListNodeEntryId) -> Bool {
-        return lhs.hashValue < rhs.hashValue
-    }
-
-    static func ==(lhs: ContactListNodeEntryId, rhs: ContactListNodeEntryId) -> Bool {
-        switch lhs {
-            case .search:
-                switch rhs {
-                    case .search:
-                        return true
-                    default:
-                        return false
-                }
-            case .sort:
-                switch rhs {
-                    case .sort:
-                        return true
-                    default:
-                        return false
-                }
-            case let .permission(action):
-                if case .permission(action) = rhs {
-                    return true
-                } else {
-                    return false
-                }
-            case let .option(index):
-                if case .option(index) = rhs {
-                    return true
-                } else {
-                    return false
-                }
-            case let .peerId(lhsId):
-                switch rhs {
-                    case let .peerId(rhsId):
-                        return lhsId == rhsId
-                    default:
-                        return false
-                }
-            case let .deviceContact(id):
-                if case .deviceContact(id) = rhs {
-                    return true
-                } else {
-                    return false
-                }
-        }
-    }
 }
 
 private final class ContactListNodeInteraction {
     fileprivate let activateSearch: () -> Void
     fileprivate let authorize: () -> Void
     fileprivate let suppressWarning: () -> Void
-    fileprivate let openPeer: (ContactListPeer, ContactListAction) -> Void
-    fileprivate let contextAction: ((EnginePeer, ASDisplayNode, ContextGesture?, CGPoint?) -> Void)?
+    fileprivate let openPeer: (ContactListPeer, ContactListAction, ASDisplayNode?, ContextGesture?) -> Void
+    fileprivate let openDisabledPeer: (EnginePeer, ChatListDisabledPeerReason) -> Void
+    fileprivate let contextAction: ((EnginePeer, ASDisplayNode, ContextGesture?, CGPoint?, Bool) -> Void)?
+    fileprivate let openStories: (EnginePeer, ASDisplayNode) -> Void
+    fileprivate let deselectAll: () -> Void
+    fileprivate let toggleSelection: ([EnginePeer], Bool) -> Void
     
     let itemHighlighting = ContactItemHighlighting()
     
-    init(activateSearch: @escaping () -> Void, authorize: @escaping () -> Void, suppressWarning: @escaping () -> Void, openPeer: @escaping (ContactListPeer, ContactListAction) -> Void, contextAction: ((EnginePeer, ASDisplayNode, ContextGesture?, CGPoint?) -> Void)?) {
+    init(activateSearch: @escaping () -> Void, authorize: @escaping () -> Void, suppressWarning: @escaping () -> Void, openPeer: @escaping (ContactListPeer, ContactListAction, ASDisplayNode?, ContextGesture?) -> Void, openDisabledPeer: @escaping (EnginePeer, ChatListDisabledPeerReason) -> Void, contextAction: ((EnginePeer, ASDisplayNode, ContextGesture?, CGPoint?, Bool) -> Void)?, openStories: @escaping (EnginePeer, ASDisplayNode) -> Void, deselectAll: @escaping () -> Void, toggleSelection: @escaping ([EnginePeer], Bool) -> Void) {
         self.activateSearch = activateSearch
         self.authorize = authorize
         self.suppressWarning = suppressWarning
         self.openPeer = openPeer
+        self.openDisabledPeer = openDisabledPeer
         self.contextAction = contextAction
+        self.openStories = openStories
+        self.deselectAll = deselectAll
+        self.toggleSelection = toggleSelection
     }
 }
 
@@ -119,12 +87,18 @@ enum ContactListAnimation {
 }
 
 private enum ContactListNodeEntry: Comparable, Identifiable {
+    struct StoryData: Equatable {
+        var count: Int
+        var unseenCount: Int
+        var hasUnseenCloseFriends: Bool
+    }
+    
     case search(PresentationTheme, PresentationStrings)
     case sort(PresentationTheme, PresentationStrings, ContactsSortOrder)
     case permissionInfo(PresentationTheme, String, String, Bool)
     case permissionEnable(PresentationTheme, String)
     case option(Int, ContactListAdditionalOption, ListViewItemHeader?, PresentationTheme, PresentationStrings)
-    case peer(Int, ContactListPeer, EnginePeer.Presence?, ListViewItemHeader?, ContactsPeerItemSelection, PresentationTheme, PresentationStrings, PresentationDateTimeFormat, PresentationPersonNameOrder, PresentationPersonNameOrder, Bool, Bool)
+    case peer(Int, ContactListPeer, EnginePeer.Presence?, ListViewItemHeader?, ContactsPeerItemSelection, PresentationTheme, PresentationStrings, PresentationDateTimeFormat, PresentationPersonNameOrder, PresentationPersonNameOrder, Bool, Bool, Bool, StoryData?, Bool, String?)
     
     var stableId: ContactListNodeEntryId {
         switch self {
@@ -138,10 +112,10 @@ private enum ContactListNodeEntry: Comparable, Identifiable {
                 return .permission(action: true)
             case let .option(index, _, _, _, _):
                 return .option(index: index)
-            case let .peer(_, peer, _, _, _, _, _, _, _, _, _, _):
+            case let .peer(_, peer, _, _, _, _, _, _, _, _, _, _, _, storyData, _, _):
                 switch peer {
                     case let .peer(peer, _, _):
-                        return .peerId(peer.id.toInt64())
+                        return .peerId(peerId: peer.id.toInt64(), section: storyData != nil ? .stories : .contacts)
                     case let .deviceContact(id, _):
                         return .deviceContact(id)
                 }
@@ -170,8 +144,15 @@ private enum ContactListNodeEntry: Comparable, Identifiable {
                     interaction.authorize()
                 })
             case let .option(_, option, header, _, _):
-                return ContactListActionItem(presentationData: ItemListPresentationData(presentationData), title: option.title, icon: option.icon, clearHighlightAutomatically: option.clearHighlightAutomatically, header: header, action: option.action)
-            case let .peer(_, peer, presence, header, selection, _, strings, dateTimeFormat, nameSortOrder, nameDisplayOrder, displayCallIcons, enabled):
+                let style: ContactListActionItem.Style
+                switch option.style {
+                case .accent:
+                    style = .accent
+                case .generic:
+                    style = .generic
+                }
+                return ContactListActionItem(presentationData: ItemListPresentationData(presentationData), title: option.title, subtitle: option.subtitle, icon: option.icon, style: style, clearHighlightAutomatically: option.clearHighlightAutomatically, header: header, action: option.action)
+            case let .peer(_, peer, presence, header, selection, _, strings, dateTimeFormat, nameSortOrder, nameDisplayOrder, displayCallIcons, hasMoreButton, enabled, storyData, requiresPremiumForMessaging, customSubtitle):
                 var status: ContactsPeerItemStatus
                 let itemPeer: ContactsPeerItemPeer
                 var isContextActionEnabled = false
@@ -184,19 +165,19 @@ private enum ContactListNodeEntry: Comparable, Identifiable {
                             if let _ = peer as? TelegramUser {
                                 status = .presence(presence ?? EnginePeer.Presence(status: .longTimeAgo, lastActivity: 0), dateTimeFormat)
                             } else if let group = peer as? TelegramGroup {
-                                status = .custom(string: strings.Conversation_StatusMembers(Int32(group.participantCount)), multiline: false)
+                                status = .custom(string: NSAttributedString(string: strings.Conversation_StatusMembers(Int32(group.participantCount))), multiline: false, isActive: false, icon: nil)
                             } else if let channel = peer as? TelegramChannel {
                                 if case .group = channel.info {
                                     if let participantCount = participantCount, participantCount != 0 {
-                                        status = .custom(string: strings.Conversation_StatusMembers(participantCount), multiline: false)
+                                        status = .custom(string: NSAttributedString(string: strings.Conversation_StatusMembers(participantCount)), multiline: false, isActive: false, icon: nil)
                                     } else {
-                                        status = .custom(string: strings.Group_Status, multiline: false)
+                                        status = .custom(string: NSAttributedString(string: strings.Group_Status), multiline: false, isActive: false, icon: nil)
                                     }
                                 } else {
                                     if let participantCount = participantCount, participantCount != 0 {
-                                        status = .custom(string: strings.Conversation_StatusSubscribers(participantCount), multiline: false)
+                                        status = .custom(string: NSAttributedString(string: strings.Conversation_StatusSubscribers(participantCount)), multiline: false, isActive: false, icon: nil)
                                     } else {
-                                        status = .custom(string: strings.Channel_Status, multiline: false)
+                                        status = .custom(string: NSAttributedString(string: strings.Channel_Status), multiline: false, isActive: false, icon: nil)
                                     }
                                 }
                             } else {
@@ -217,7 +198,7 @@ private enum ContactListNodeEntry: Comparable, Identifiable {
                         switch itemPeer {
                         case let .peer(peer, _):
                             if let peer = peer {
-                                contextAction(peer, node, gesture, location)
+                                contextAction(peer, node, gesture, location, storyData != nil)
                             }
                         case .deviceContact:
                             break
@@ -228,17 +209,41 @@ private enum ContactListNodeEntry: Comparable, Identifiable {
                 }
                 
                 var additionalActions: [ContactsPeerItemAction] = []
-                if displayCallIcons {
-                    additionalActions = [ContactsPeerItemAction(icon: .voiceCall, action: { _ in
-                        interaction.openPeer(peer, .voiceCall)
-                    }), ContactsPeerItemAction(icon: .videoCall, action: { _ in
-                        interaction.openPeer(peer, .videoCall)
+                if hasMoreButton {
+                    additionalActions = [ContactsPeerItemAction(icon: .more, action: { _, sourceNode, gesture in
+                        interaction.openPeer(peer, .more, sourceNode, gesture)
+                    })]
+                } else if displayCallIcons {
+                    additionalActions = [ContactsPeerItemAction(icon: .voiceCall, action: { _, sourceNode, gesture  in
+                        interaction.openPeer(peer, .voiceCall, sourceNode, gesture)
+                    }), ContactsPeerItemAction(icon: .videoCall, action: { _, sourceNode, gesture in
+                        interaction.openPeer(peer, .videoCall, sourceNode, gesture)
                     })]
                 }
                 
-                return ContactsPeerItem(presentationData: ItemListPresentationData(presentationData), sortOrder: nameSortOrder, displayOrder: nameDisplayOrder, context: context, peerMode: isSearch ? .generalSearch : .peer, peer: itemPeer, status: status, enabled: enabled, selection: selection, selectionPosition: .left, editing: ContactsPeerItemEditing(editable: false, editing: false, revealed: false), additionalActions: additionalActions, index: nil, header: header, action: { _ in
-                    interaction.openPeer(peer, .generic)
-                }, itemHighlighting: interaction.itemHighlighting, contextAction: itemContextAction)
+            
+                var storyStats: (total: Int, unseen: Int, hasUnseenCloseFriends: Bool)?
+                if let customSubtitle {
+                    status = .custom(string: NSAttributedString(string: customSubtitle), multiline: false, isActive: false, icon: nil)
+                } else if let storyData {
+                    storyStats = (storyData.count, storyData.unseenCount, storyData.hasUnseenCloseFriends)
+                    
+                    let text: String
+                    text = presentationData.strings.ChatList_ArchiveStoryCount(Int32(storyData.count))
+                    status = .custom(string: NSAttributedString(string: text), multiline: false, isActive: false, icon: nil)
+                }
+                
+            return ContactsPeerItem(presentationData: ItemListPresentationData(presentationData), sortOrder: nameSortOrder, displayOrder: nameDisplayOrder, context: context, peerMode: isSearch ? .generalSearch(isSavedMessages: false) : .peer, peer: itemPeer, status: status, requiresPremiumForMessaging: requiresPremiumForMessaging, enabled: enabled, selection: selection, selectionPosition: .left, editing: ContactsPeerItemEditing(editable: false, editing: false, revealed: false), additionalActions: additionalActions, index: nil, header: header, action: { _ in
+                    interaction.openPeer(peer, .generic, nil, nil)
+            }, disabledAction: { _ in
+                if case let .peer(peer, _, _) = peer {
+                    interaction.openDisabledPeer(EnginePeer(peer), requiresPremiumForMessaging ? .premiumRequired : .generic)
+                }
+            }, itemHighlighting: interaction.itemHighlighting, contextAction: itemContextAction, storyStats: storyStats, openStories: { peer, sourceNode in
+                    if case let .peer(peerValue, _) = peer, let peerValue {
+                        interaction.openStories(peerValue, sourceNode)
+                    }
+                })
         }
     }
 
@@ -274,9 +279,9 @@ private enum ContactListNodeEntry: Comparable, Identifiable {
                 } else {
                     return false
                 }
-            case let .peer(lhsIndex, lhsPeer, lhsPresence, lhsHeader, lhsSelection, lhsTheme, lhsStrings, lhsTimeFormat, lhsSortOrder, lhsDisplayOrder, lhsDisplayCallIcons, lhsEnabled):
+            case let .peer(lhsIndex, lhsPeer, lhsPresence, lhsHeader, lhsSelection, lhsTheme, lhsStrings, lhsTimeFormat, lhsSortOrder, lhsDisplayOrder, lhsDisplayCallIcons, lhsHasMoreButton, lhsEnabled, lhsStoryData, lhsRequiresPremiumForMessaging, lhsCustomSubtitle):
                 switch rhs {
-                    case let .peer(rhsIndex, rhsPeer, rhsPresence, rhsHeader, rhsSelection, rhsTheme, rhsStrings, rhsTimeFormat, rhsSortOrder, rhsDisplayOrder, rhsDisplayCallIcons, rhsEnabled):
+                    case let .peer(rhsIndex, rhsPeer, rhsPresence, rhsHeader, rhsSelection, rhsTheme, rhsStrings, rhsTimeFormat, rhsSortOrder, rhsDisplayOrder, rhsDisplayCallIcons, rhsHasMoreButton, rhsEnabled, rhsStoryData, rhsRequiresPremiumForMessaging, rhsCustomSubtitle):
                         if lhsIndex != rhsIndex {
                             return false
                         }
@@ -314,7 +319,19 @@ private enum ContactListNodeEntry: Comparable, Identifiable {
                         if lhsDisplayCallIcons != rhsDisplayCallIcons {
                             return false
                         }
+                        if lhsHasMoreButton != rhsHasMoreButton {
+                            return false
+                        }
                         if lhsEnabled != rhsEnabled {
+                            return false
+                        }
+                        if lhsStoryData != rhsStoryData {
+                            return false
+                        }
+                        if lhsRequiresPremiumForMessaging != rhsRequiresPremiumForMessaging {
+                            return false
+                        }
+                        if lhsCustomSubtitle != rhsCustomSubtitle {
                             return false
                         }
                         return true
@@ -358,84 +375,25 @@ private enum ContactListNodeEntry: Comparable, Identifiable {
                         case .peer:
                             return true
                 }
-            case let .peer(lhsIndex, _, _, _, _, _, _, _, _, _, _, _):
+            case let .peer(lhsIndex, _, _, _, _, _, _, _, _, _, _, _, _, lhsStoryData, _, _):
                 switch rhs {
                     case .search, .sort, .permissionInfo, .permissionEnable, .option:
                         return false
-                    case let .peer(rhsIndex, _, _, _, _, _, _, _, _, _, _, _):
+                    case let .peer(rhsIndex, _, _, _, _, _, _, _, _, _, _, _, _, rhsStoryData, _, _):
+                        if (lhsStoryData == nil) != (rhsStoryData == nil) {
+                            if lhsStoryData != nil {
+                                return true
+                            } else {
+                                return false
+                            }
+                        }
                         return lhsIndex < rhsIndex
                 }
         }
     }
 }
 
-private extension EnginePeer.IndexName {
-    func isLessThan(other: EnginePeer.IndexName, ordering: PresentationPersonNameOrder) -> ComparisonResult {
-        switch self {
-        case let .title(lhsTitle, _):
-            let rhsString: String
-            switch other {
-            case let .title(title, _):
-                rhsString = title
-            case let .personName(first, last, _, _):
-                switch ordering {
-                case .firstLast:
-                    if first.isEmpty {
-                        rhsString = last
-                    } else {
-                        rhsString = first + last
-                    }
-                case .lastFirst:
-                    if last.isEmpty {
-                        rhsString = first
-                    } else {
-                        rhsString = last + first
-                    }
-                }
-            }
-            return lhsTitle.caseInsensitiveCompare(rhsString)
-        case let .personName(lhsFirst, lhsLast, _, _):
-            let lhsString: String
-            switch ordering {
-            case .firstLast:
-                if lhsFirst.isEmpty {
-                    lhsString = lhsLast
-                } else {
-                    lhsString = lhsFirst + lhsLast
-                }
-            case .lastFirst:
-                if lhsLast.isEmpty {
-                    lhsString = lhsFirst
-                } else {
-                    lhsString = lhsLast + lhsFirst
-                }
-            }
-            let rhsString: String
-            switch other {
-            case let .title(title, _):
-                rhsString = title
-            case let .personName(first, last, _, _):
-                switch ordering {
-                case .firstLast:
-                    if first.isEmpty {
-                        rhsString = last
-                    } else {
-                        rhsString = first + last
-                    }
-                case .lastFirst:
-                    if last.isEmpty {
-                        rhsString = first
-                    } else {
-                        rhsString = last + first
-                    }
-                }
-            }
-            return lhsString.caseInsensitiveCompare(rhsString)
-        }
-    }
-}
-
-private func contactListNodeEntries(accountPeer: EnginePeer?, peers: [ContactListPeer], presences: [EnginePeer.Id: EnginePeer.Presence], presentation: ContactListPresentation, selectionState: ContactListNodeGroupSelectionState?, theme: PresentationTheme, strings: PresentationStrings, dateTimeFormat: PresentationDateTimeFormat, sortOrder: PresentationPersonNameOrder, displayOrder: PresentationPersonNameOrder, disabledPeerIds: Set<EnginePeer.Id>, authorizationStatus: AccessType, warningSuppressed: (Bool, Bool), displaySortOptions: Bool, displayCallIcons: Bool) -> [ContactListNodeEntry] {
+private func contactListNodeEntries(accountPeer: EnginePeer?, peers: [ContactListPeer], presences: [EnginePeer.Id: EnginePeer.Presence], presentation: ContactListPresentation, selectionState: ContactListNodeGroupSelectionState?, theme: PresentationTheme, strings: PresentationStrings, dateTimeFormat: PresentationDateTimeFormat, sortOrder: PresentationPersonNameOrder, displayOrder: PresentationPersonNameOrder, disabledPeerIds: Set<EnginePeer.Id>, peerRequiresPremiumForMessaging: [EnginePeer.Id: Bool], peersWithStories: [EnginePeer.Id: PeerStoryStats], authorizationStatus: AccessType, warningSuppressed: (Bool, Bool), displaySortOptions: Bool, displayCallIcons: Bool, storySubscriptions: EngineStorySubscriptions?, topPeers: [EnginePeer], topPeersPresentation: ContactListPresentation.TopPeers, interaction: ContactListNodeInteraction) -> [ContactListNodeEntry] {
     var entries: [ContactListNodeEntry] = []
     
     var commonHeader: ListViewItemHeader?
@@ -463,8 +421,12 @@ private func contactListNodeEntries(accountPeer: EnginePeer?, peers: [ContactLis
         }
     }
     
+    if let storySubscriptions, !storySubscriptions.items.isEmpty {
+        addHeader = true
+    }
+    
     if addHeader {
-        commonHeader = ChatListSearchItemHeader(type: .contacts, theme: theme, strings: strings, actionTitle: nil, action: nil)
+        commonHeader = ChatListSearchItemHeader(type: .text(strings.Contacts_SortedByPresence.uppercased(), AnyHashable(1)), theme: theme, strings: strings, actionTitle: nil, action: nil)
     }
     
     switch presentation {
@@ -494,7 +456,7 @@ private func contactListNodeEntries(accountPeer: EnginePeer?, peers: [ContactLis
             for i in 0 ..< options.count {
                 entries.append(.option(i, options[i], commonHeader, theme, strings))
             }
-        case let .natural(options, _):
+        case let .natural(options, _, _):
             let sortedPeers = peers.sorted(by: { lhs, rhs in
                 let result = EnginePeer.IndexName(lhs.indexName).isLessThan(other: EnginePeer.IndexName(rhs.indexName), ordering: sortOrder)
                 if result == .orderedSame {
@@ -586,10 +548,171 @@ private func contactListNodeEntries(accountPeer: EnginePeer?, peers: [ContactLis
         }
     }
     
+    var existingPeerIds = Set<ContactListPeerId>()
+    switch topPeersPresentation {
+    case .recent:
+        if !topPeers.isEmpty {
+            let hasDeselectAll = !(selectionState?.selectedPeerIndices ?? [:]).isEmpty
+            
+            let header: ListViewItemHeader? = ChatListSearchItemHeader(type: .text(strings.Premium_Gift_ContactSelection_FrequentContacts.uppercased(), AnyHashable(hasDeselectAll ? 1 : 0)), theme: theme, strings: strings, actionTitle: hasDeselectAll ? strings.Premium_Gift_ContactSelection_DeselectAll.uppercased() : nil, action: { _ in
+                interaction.deselectAll()
+            })
+            
+            var index: Int = 0
+            for peer in topPeers.prefix(15) {
+                if peer.isDeleted {
+                    continue
+                }
+                existingPeerIds.insert(.peer(peer.id))
+                
+                let selection: ContactsPeerItemSelection
+                if let selectionState = selectionState {
+                    selection = .selectable(selected: selectionState.selectedPeerIndices[.peer(peer.id)] != nil)
+                } else {
+                    selection = .none
+                }
+                
+                let presence = presences[peer.id]
+                entries.append(.peer(index, .peer(peer: peer._asPeer(), isGlobal: false, participantCount: nil), presence, header, selection, theme, strings, dateTimeFormat, sortOrder, displayOrder, false, false, true, nil, false, nil))
+                
+                index += 1
+            }
+        }
+    case let .custom(showSelf, sections):
+        if !topPeers.isEmpty {
+            var index: Int = 0
+            
+            if showSelf, let accountPeer {
+                if let peer = topPeers.first(where: { $0.id == accountPeer.id }) {
+                    let header = ChatListSearchItemHeader(type: .text(strings.Premium_Gift_ContactSelection_ThisIsYou.uppercased(), AnyHashable(10)), theme: theme, strings: strings)
+                    entries.append(.peer(index, .peer(peer: peer._asPeer(), isGlobal: false, participantCount: nil), nil, header, .none, theme, strings, dateTimeFormat, sortOrder, displayOrder, false, false, true, nil, false, strings.Premium_Gift_ContactSelection_BuySelf))
+                    existingPeerIds.insert(.peer(peer.id))
+                }
+            }
+            
+            var sectionId: Int = 2
+            for (title, peerIds, hasActions) in sections {
+                var allSelected = true
+                if let selectedPeerIndices = selectionState?.selectedPeerIndices, !selectedPeerIndices.isEmpty {
+                    for peerId in peerIds {
+                        if selectedPeerIndices[.peer(peerId)] == nil {
+                            allSelected = false
+                            break
+                        }
+                    }
+                } else {
+                    allSelected = false
+                }
+                var actionTitle: String?
+                if peerIds.count > 1 {
+                    actionTitle = allSelected ? strings.Premium_Gift_ContactSelection_DeselectAll.uppercased() : strings.Premium_Gift_ContactSelection_SelectAll.uppercased()
+                }
+                let header: ListViewItemHeader? = ChatListSearchItemHeader(type: .text(title.uppercased(), AnyHashable(10 * sectionId + (allSelected ? 1 : 0))), theme: theme, strings: strings, actionTitle: actionTitle, action: { _ in
+                    var existingPeerIds = Set<EnginePeer.Id>()
+                    var peers: [EnginePeer] = []
+                    for peer in topPeers {
+                        if !existingPeerIds.contains(peer.id) {
+                            if peerIds.contains(peer.id) {
+                                peers.append(peer)
+                                existingPeerIds.insert(peer.id)
+                            }
+                        }
+                    }
+                    interaction.toggleSelection(peers, !allSelected)
+                })
+                
+                for peerId in peerIds {
+                    if let peer = topPeers.first(where: { $0.id == peerId }) {
+                        if peer.isDeleted {
+                            continue
+                        }
+                        if existingPeerIds.contains(.peer(peer.id)) {
+                            continue
+                        }
+                        existingPeerIds.insert(.peer(peer.id))
+                        
+                        let selection: ContactsPeerItemSelection
+                        if let selectionState = selectionState {
+                            selection = .selectable(selected: selectionState.selectedPeerIndices[.peer(peer.id)] != nil)
+                        } else {
+                            selection = .none
+                        }
+                        
+                        let presence = presences[peer.id]
+                        entries.append(.peer(index, .peer(peer: peer._asPeer(), isGlobal: false, participantCount: nil), presence, header, selection, theme, strings, dateTimeFormat, sortOrder, displayOrder, false, hasActions, true, nil, false, nil))
+                        
+                        index += 1
+                    }
+                }
+                sectionId += 1
+            }
+            
+            var hasDeselectAll = !(selectionState?.selectedPeerIndices ?? [:]).isEmpty
+            if !sections.isEmpty, let selectionState {
+                var hasNonBirthdayPeers = false
+                var allBirthdayPeerIds = Set<EnginePeer.Id>()
+                for (_, peerIds, _) in sections {
+                    for peerId in peerIds {
+                        allBirthdayPeerIds.insert(peerId)
+                    }
+                }
+                for id in selectionState.selectedPeerIndices.keys {
+                    if case let .peer(peerId) = id, !allBirthdayPeerIds.contains(peerId) {
+                        hasNonBirthdayPeers = true
+                        break
+                    }
+                }
+                if !hasNonBirthdayPeers {
+                    hasDeselectAll = false
+                }
+            }
+            
+            let header: ListViewItemHeader? = ChatListSearchItemHeader(type: .text(strings.Premium_Gift_ContactSelection_FrequentContacts.uppercased(), AnyHashable(hasDeselectAll ? 1 : 0)), theme: theme, strings: strings, actionTitle: hasDeselectAll ? strings.Premium_Gift_ContactSelection_DeselectAll.uppercased() : nil, action: { _ in
+                interaction.deselectAll()
+            })
+            
+            for peer in topPeers.prefix(15) {
+                if peer.isDeleted {
+                    continue
+                }
+                if existingPeerIds.contains(.peer(peer.id)) {
+                    continue
+                }
+                existingPeerIds.insert(.peer(peer.id))
+                
+                let selection: ContactsPeerItemSelection
+                if let selectionState = selectionState {
+                    selection = .selectable(selected: selectionState.selectedPeerIndices[.peer(peer.id)] != nil)
+                } else {
+                    selection = .none
+                }
+                
+                let presence = presences[peer.id]
+                entries.append(.peer(index, .peer(peer: peer._asPeer(), isGlobal: false, participantCount: nil), presence, header, selection, theme, strings, dateTimeFormat, sortOrder, displayOrder, false, false, true, peersWithStories[peer.id].flatMap {
+                    ContactListNodeEntry.StoryData(count: $0.totalCount, unseenCount: $0.unseenCount, hasUnseenCloseFriends: $0.hasUnseenCloseFriends)
+                }, false, nil))
+                
+                index += 1
+            }
+        }
+    case .none:
+        break
+    }
+    
+    if let storySubscriptions {
+        let _ = storySubscriptions
+        /*var index: Int = 0
+        
+        let header: ListViewItemHeader? = ChatListSearchItemHeader(type: .text("HIDDEN STORIES", AnyHashable(0)), theme: theme, strings: strings)
+        
+        for item in storySubscriptions.items {
+            entries.append(.peer(index, .peer(peer: item.peer._asPeer(), isGlobal: false, participantCount: nil), nil, header, .none, theme, strings, dateTimeFormat, sortOrder, displayOrder, false, true, ContactListNodeEntry.StoryData(count: item.storyCount, unseenCount: item.unseenCount, hasUnseenCloseFriends: item.hasUnseenCloseFriends)))
+            index += 1
+        }*/
+    }
     
     var index: Int = 0
     
-    var existingPeerIds = Set<ContactListPeerId>()
     if let selectionState = selectionState {
         for peer in selectionState.foundPeers {
             if existingPeerIds.contains(peer.id) {
@@ -611,7 +734,14 @@ private func contactListNodeEntries(accountPeer: EnginePeer?, peers: [ContactLis
                     enabled = true
             }
             
-            entries.append(.peer(index, peer, presence, nil, selection, theme, strings, dateTimeFormat, sortOrder, displayOrder, displayCallIcons, enabled))
+            var storyData: ContactListNodeEntry.StoryData?
+            if case let .peer(id) = peer.id {
+                storyData = peersWithStories[id].flatMap {
+                    ContactListNodeEntry.StoryData(count: $0.totalCount, unseenCount: $0.unseenCount, hasUnseenCloseFriends: $0.hasUnseenCloseFriends)
+                }
+            }
+            
+            entries.append(.peer(index, peer, presence, nil, selection, theme, strings, dateTimeFormat, sortOrder, displayOrder, displayCallIcons, false, enabled, storyData, false, nil))
             index += 1
         }
     }
@@ -640,14 +770,31 @@ private func contactListNodeEntries(accountPeer: EnginePeer?, peers: [ContactLis
         if case let .peer(peer, _, _) = peer {
             presence = presences[peer.id]
         }
-        let enabled: Bool
+        var enabled: Bool
+        var requiresPremiumForMessaging = false
         switch peer {
-            case let .peer(peer, _, _):
-                enabled = !disabledPeerIds.contains(peer.id)
-            default:
-                enabled = true
+        case let .peer(peer, _, _):
+            enabled = !disabledPeerIds.contains(peer.id)
+            
+            if let value = peerRequiresPremiumForMessaging[peer.id], value {
+                requiresPremiumForMessaging = true
+            }
+            
+            if requiresPremiumForMessaging {
+                enabled = false
+            }
+        default:
+            enabled = true
         }
-        entries.append(.peer(index, peer, presence, header, selection, theme, strings, dateTimeFormat, sortOrder, displayOrder, displayCallIcons, enabled))
+        
+        var storyData: ContactListNodeEntry.StoryData?
+        if case let .peer(id) = peer.id {
+            storyData = peersWithStories[id].flatMap {
+                ContactListNodeEntry.StoryData(count: $0.totalCount, unseenCount: $0.unseenCount, hasUnseenCloseFriends: $0.hasUnseenCloseFriends)
+            }
+        }
+        
+        entries.append(.peer(index, peer, presence, header, selection, theme, strings, dateTimeFormat, sortOrder, displayOrder, displayCallIcons, false, enabled, storyData, requiresPremiumForMessaging, nil))
         index += 1
     }
     return entries
@@ -671,7 +818,7 @@ private func preparedContactListNodeTransition(context: AccountContext, presenta
                 case .search:
                     //indexSections.apend(CollectionIndexNode.searchIndex)
                     break
-                case let .peer(_, _, _, header, _, _, _, _, _, _, _, _):
+                case let .peer(_, _, _, header, _, _, _, _, _, _, _, _, _, _, _, _):
                     if let header = header as? ContactListNameIndexHeader {
                         if !existingSections.contains(header.letter) {
                             existingSections.insert(header.letter)
@@ -717,9 +864,35 @@ private struct ContactsListNodeTransition {
 }
 
 public enum ContactListPresentation {
+    public struct Search {
+        public var signal: Signal<String, NoError>
+        public var searchChatList: Bool
+        public var searchDeviceContacts: Bool
+        public var searchGroups: Bool
+        public var searchChannels: Bool
+        public var globalSearch: Bool
+        public var displaySavedMessages: Bool
+        
+        public init(signal: Signal<String, NoError>, searchChatList: Bool, searchDeviceContacts: Bool, searchGroups: Bool, searchChannels: Bool, globalSearch: Bool, displaySavedMessages: Bool) {
+            self.signal = signal
+            self.searchChatList = searchChatList
+            self.searchDeviceContacts = searchDeviceContacts
+            self.searchGroups = searchGroups
+            self.searchChannels = searchChannels
+            self.globalSearch = globalSearch
+            self.displaySavedMessages = displaySavedMessages
+        }
+    }
+    
+    public enum TopPeers {
+        case none
+        case recent
+        case custom(showSelf: Bool, sections: [(title: String, peerIds: [EnginePeer.Id], hasActions: Bool)])
+    }
+    
     case orderedByPresence(options: [ContactListAdditionalOption])
-    case natural(options: [ContactListAdditionalOption], includeChatList: Bool)
-    case search(signal: Signal<String, NoError>, searchChatList: Bool, searchDeviceContacts: Bool, searchGroups: Bool, searchChannels: Bool, globalSearch: Bool)
+    case natural(options: [ContactListAdditionalOption], includeChatList: Bool, topPeers: TopPeers)
+    case search(Search)
     
     public var sortOrder: ContactsSortOrder? {
         switch self {
@@ -777,13 +950,14 @@ public final class ContactListNode: ASDisplayNode {
     private let context: AccountContext
     private var presentation: ContactListPresentation?
     private let filters: [ContactListFilter]
+    private let onlyWriteable: Bool
     
     public let listNode: ListView
     private var indexNode: CollectionIndexNode
     private var indexSections: [String]?
     
     private var queuedTransitions: [ContactsListNodeTransition] = []
-    private var validLayout: (ContainerViewLayout, UIEdgeInsets)?
+    private var validLayout: (ContainerViewLayout, UIEdgeInsets, CGFloat)?
     
     private var _ready = ValuePromise<Bool>()
     public var ready: Signal<Bool, NoError> {
@@ -791,7 +965,8 @@ public final class ContactListNode: ASDisplayNode {
     }
     private var didSetReady = false
     
-    private let contactPeersViewPromise = Promise<(EngineContactList, EnginePeer?)>()
+    private let contactPeersViewPromise = Promise<(EngineContactList, EnginePeer?, [EnginePeer.Id: Bool], [EnginePeer.Id: PeerStoryStats])>()
+    let storySubscriptions = Promise<EngineStorySubscriptions?>(nil)
     
     private let selectionStatePromise = Promise<ContactListNodeGroupSelectionState?>(nil)
     private var selectionStateValue: ContactListNodeGroupSelectionState? {
@@ -829,6 +1004,13 @@ public final class ContactListNode: ASDisplayNode {
         }
     }
     
+    private let pendingRemovalPeerIdsPromise = ValuePromise<Set<EnginePeer.Id>>(Set())
+    private var pendingRemovalPeerIds = Set<EnginePeer.Id>() {
+        didSet {
+            self.pendingRemovalPeerIdsPromise.set(self.pendingRemovalPeerIds)
+        }
+    }
+    
     private var interaction: ContactListNodeInteraction?
     
     private var enableUpdatesValue = false
@@ -838,23 +1020,87 @@ public final class ContactListNode: ASDisplayNode {
         } set(value) {
             if value != self.enableUpdatesValue {
                 self.enableUpdatesValue = value
-                if value {
-                    self.contactPeersViewPromise.set(self.context.engine.data.subscribe(
-                        TelegramEngine.EngineData.Item.Contacts.List(includePresences: true),
-                        TelegramEngine.EngineData.Item.Peer.Peer(id: self.context.engine.account.peerId)
+                
+                let context = self.context
+                let contactsWithPremiumRequired: Signal<[EnginePeer.Id: Bool], NoError>
+                if self.onlyWriteable {
+                    contactsWithPremiumRequired = self.context.engine.data.subscribe(
+                        TelegramEngine.EngineData.Item.Contacts.List(includePresences: false)
                     )
-                    |> mapToThrottled { next -> Signal<(EngineContactList, EnginePeer?), NoError> in
-                        return .single(next)
+                    |> map { contacts -> Set<EnginePeer.Id> in
+                        var result = Set<EnginePeer.Id>()
+                        for peer in contacts.peers {
+                            if case let .user(user) = peer, user.flags.contains(.requirePremium) {
+                                result.insert(peer.id)
+                            }
+                        }
+                        return result
+                    }
+                    |> distinctUntilChanged
+                    |> mapToSignal { peerIds -> Signal<[EnginePeer.Id: Bool], NoError> in
+                        return context.engine.data.subscribe(
+                            EngineDataMap(
+                                peerIds.map(TelegramEngine.EngineData.Item.Peer.IsPremiumRequiredForMessaging.init(id:))
+                            )
+                        )
+                    }
+                } else {
+                    contactsWithPremiumRequired = .single([:])
+                }
+                
+                let contactsWithStories: Signal<[EnginePeer.Id: PeerStoryStats], NoError> = self.context.engine.data.subscribe(
+                    TelegramEngine.EngineData.Item.Contacts.List(includePresences: false)
+                )
+                |> map { contacts -> Set<EnginePeer.Id> in
+                    var result = Set<EnginePeer.Id>()
+                    for peer in contacts.peers {
+                        result.insert(peer.id)
+                    }
+                    return result
+                }
+                |> distinctUntilChanged
+                |> mapToSignal { peerIds -> Signal<[EnginePeer.Id: PeerStoryStats], NoError> in
+                    return context.engine.data.subscribe(
+                        EngineDataMap(
+                            peerIds.map(TelegramEngine.EngineData.Item.Peer.StoryStats.init(id:))
+                        )
+                    )
+                    |> map { result -> [EnginePeer.Id: PeerStoryStats] in
+                        var filtered: [EnginePeer.Id: PeerStoryStats] = [:]
+                        for (id, value) in result {
+                            if let value {
+                                filtered[id] = value
+                            }
+                        }
+                        return filtered
+                    }
+                }
+                    
+                if value {
+                    self.contactPeersViewPromise.set(combineLatest(
+                        self.context.engine.data.subscribe(
+                            TelegramEngine.EngineData.Item.Contacts.List(includePresences: true),
+                            TelegramEngine.EngineData.Item.Peer.Peer(id: self.context.engine.account.peerId)
+                        ),
+                        contactsWithPremiumRequired,
+                        contactsWithStories
+                    )
+                    |> mapToThrottled { next, contactsWithPremiumRequired, contactsWithStories -> Signal<(EngineContactList, EnginePeer?, [EnginePeer.Id: Bool], [EnginePeer.Id: PeerStoryStats]), NoError> in
+                        return .single((next.0, next.1, contactsWithPremiumRequired, contactsWithStories))
                         |> then(
                             .complete()
                             |> delay(5.0, queue: Queue.concurrentDefaultQueue())
                         )
                     })
                 } else {
-                    self.contactPeersViewPromise.set(self.context.engine.data.subscribe(
+                    self.contactPeersViewPromise.set(combineLatest(self.context.engine.data.subscribe(
                         TelegramEngine.EngineData.Item.Contacts.List(includePresences: true),
                         TelegramEngine.EngineData.Item.Peer.Peer(id: self.context.engine.account.peerId)
-                    )
+                    ),
+                    contactsWithPremiumRequired, contactsWithStories)
+                    |> map { next, contactsWithPremiumRequired, contactsWithStories -> (EngineContactList, EnginePeer?, [EnginePeer.Id: Bool], [EnginePeer.Id: PeerStoryStats]) in
+                        return (next.0, next.1, contactsWithPremiumRequired, contactsWithStories)
+                    }
                     |> take(1))
                 }
             }
@@ -865,10 +1111,14 @@ public final class ContactListNode: ASDisplayNode {
     public var contentScrollingEnded: ((ListView) -> Bool)?
     
     public var activateSearch: (() -> Void)?
-    public var openPeer: ((ContactListPeer, ContactListAction) -> Void)?
+    public var openPeer: ((ContactListPeer, ContactListAction, ASDisplayNode?, ContextGesture?) -> Void)?
+    public var openDisabledPeer: ((EnginePeer, ChatListDisabledPeerReason) -> Void)?
+    public var deselectedAll: (() -> Void)?
+    public var updatedSelection: (([EnginePeer], Bool) -> Void)?
     public var openPrivacyPolicy: (() -> Void)?
     public var suppressPermissionWarning: (() -> Void)?
-    private let contextAction: ((EnginePeer, ASDisplayNode, ContextGesture?, CGPoint?) -> Void)?
+    private let contextAction: ((EnginePeer, ASDisplayNode, ContextGesture?, CGPoint?, Bool) -> Void)?
+    public var openStories: ((EnginePeer, ASDisplayNode) -> Void)?
     
     private let previousEntries = Atomic<[ContactListNodeEntry]?>(value: nil)
     private let disposable = MetaDisposable()
@@ -882,12 +1132,16 @@ public final class ContactListNode: ASDisplayNode {
     
     public var multipleSelection = false
     
-    public init(context: AccountContext, updatedPresentationData: (initial: PresentationData, signal: Signal<PresentationData, NoError>)? = nil, presentation: Signal<ContactListPresentation, NoError>, filters: [ContactListFilter] = [.excludeSelf], selectionState: ContactListNodeGroupSelectionState? = nil, displayPermissionPlaceholder: Bool = true, displaySortOptions: Bool = false, displayCallIcons: Bool = false, contextAction: ((EnginePeer, ASDisplayNode, ContextGesture?, CGPoint?) -> Void)? = nil, isSearch: Bool = false, multipleSelection: Bool = false) {
+    private let isPeerEnabled: ((EnginePeer) -> Bool)?
+    
+    public init(context: AccountContext, updatedPresentationData: (initial: PresentationData, signal: Signal<PresentationData, NoError>)? = nil, presentation: Signal<ContactListPresentation, NoError>, filters: [ContactListFilter] = [.excludeSelf], onlyWriteable: Bool, isGroupInvitation: Bool, isPeerEnabled: ((EnginePeer) -> Bool)? = nil, selectionState: ContactListNodeGroupSelectionState? = nil, displayPermissionPlaceholder: Bool = true, displaySortOptions: Bool = false, displayCallIcons: Bool = false, contextAction: ((EnginePeer, ASDisplayNode, ContextGesture?, CGPoint?, Bool) -> Void)? = nil, isSearch: Bool = false, multipleSelection: Bool = false) {
         self.context = context
         self.filters = filters
         self.displayPermissionPlaceholder = displayPermissionPlaceholder
         self.contextAction = contextAction
         self.multipleSelection = multipleSelection
+        self.isPeerEnabled = isPeerEnabled
+        self.onlyWriteable = onlyWriteable
         
         let presentationData = updatedPresentationData?.initial ?? context.sharedContext.currentPresentationData.with { $0 }
         self.presentationData = presentationData
@@ -949,6 +1203,7 @@ public final class ContactListNode: ASDisplayNode {
         let processingQueue = Queue()
         let previousEntries = Atomic<[ContactListNodeEntry]?>(value: nil)
         let previousSelectionState = Atomic<ContactListNodeGroupSelectionState?>(value: nil)
+        let previousPendingRemovalPeerIds = Atomic<Set<EnginePeer.Id>?>(value: nil)
         
         let interaction = ContactListNodeInteraction(activateSearch: { [weak self] in
             self?.activateSearch?()
@@ -956,9 +1211,9 @@ public final class ContactListNode: ASDisplayNode {
             authorizeImpl?()
         }, suppressWarning: { [weak self] in
             self?.suppressPermissionWarning?()
-        }, openPeer: { [weak self] peer, action in
+        }, openPeer: { [weak self] peer, action, sourceNode, gesture in
             if let strongSelf = self {
-                if multipleSelection {
+                if strongSelf.multipleSelection {
                     var updated = false
                     strongSelf.updateSelectionState({ state in
                         if let state = state {
@@ -971,13 +1226,53 @@ public final class ContactListNode: ASDisplayNode {
                         }
                     })
                     if !updated {
-                        strongSelf.openPeer?(peer, action)
+                        strongSelf.openPeer?(peer, action, sourceNode, gesture)
                     }
                 } else {
-                    strongSelf.openPeer?(peer, action)
+                    strongSelf.openPeer?(peer, action, sourceNode, gesture)
                 }
             }
-        }, contextAction: contextAction)
+        }, openDisabledPeer: { [weak self] peer, reason in
+            guard let self else {
+                return
+            }
+            self.openDisabledPeer?(peer, reason)
+        }, contextAction: contextAction, openStories: { [weak self] peer, sourceNode in
+            guard let self else {
+                return
+            }
+            self.openStories?(peer, sourceNode)
+        }, deselectAll: { [weak self] in
+            guard let self else {
+                return
+            }
+            self.updateSelectionState({ state in
+                return ContactListNodeGroupSelectionState()
+            })
+            self.deselectedAll?()
+        }, toggleSelection: { [weak self] peers, value in
+            guard let self = self else {
+                return
+            }
+            self.updateSelectionState({ state in
+                var state = state ?? ContactListNodeGroupSelectionState()
+                var selectedPeerMap = state.selectedPeerMap
+                for peer in peers {
+                    let id: ContactListPeerId = .peer(peer.id)
+                    if (state.selectedPeerIndices[id] != nil) != value  {
+                        state = state.withToggledPeerId(.peer(peer.id))
+                    }
+                    if value {
+                        selectedPeerMap[id] = .peer(peer: peer._asPeer(), isGlobal: false, participantCount: nil)
+                    } else {
+                        selectedPeerMap.removeValue(forKey: id)
+                    }
+                }
+                state = state.withSelectedPeerMap(selectedPeerMap)
+                return state
+            })
+            self.updatedSelection?(peers, value)
+        })
         
         self.indexNode.indexSelected = { [weak self] section in
             guard let strongSelf = self, let layout = strongSelf.validLayout, let entries = previousEntries.with({ $0 }) else {
@@ -1004,7 +1299,7 @@ public final class ContactListNode: ASDisplayNode {
                             strongSelf.listNode.transaction(deleteIndices: [], insertIndicesAndItems: [], updateIndicesAndItems: [], options: [.PreferSynchronousDrawing, .PreferSynchronousResourceLoading], scrollToItem: ListViewScrollToItem(index: index, position: .top(-navigationBarSearchContentHeight), animated: false, curve: .Default(duration: nil), directionHint: .Down), additionalScrollDistance: 0.0, updateSizeAndInsets: updateSizeAndInsets, stationaryItemRange: nil, updateOpaqueState: nil, completion: { _ in })
                             break loop
                         }
-                    case let .peer(_, _, _, header, _, _, _, _, _, _, _, _):
+                    case let .peer(_, _, _, header, _, _, _, _, _, _, _, _, _, _, _, _):
                         if let header = header as? ContactListNameIndexHeader {
                             if let scalar = UnicodeScalar(header.letter) {
                                 let title = "\(Character(scalar))"
@@ -1027,6 +1322,7 @@ public final class ContactListNode: ASDisplayNode {
         let context = self.context
         var firstTime: Int32 = 1
         let selectionStateSignal = self.selectionStatePromise.get()
+        let pendingRemovalPeerIdsSignal = self.pendingRemovalPeerIdsPromise.get()
         let transition: Signal<ContactsListNodeTransition, NoError>
         let presentationDataPromise = self.presentationDataPromise
         
@@ -1034,12 +1330,22 @@ public final class ContactListNode: ASDisplayNode {
         |> mapToSignal { presentation in
             var generateSections = false
             var includeChatList = false
-            if case let .natural(_, includeChatListValue) = presentation {
+            var displayTopPeers: ContactListPresentation.TopPeers = .none
+            if case let .natural(_, includeChatListValue, topPeersValue) = presentation {
                 generateSections = true
                 includeChatList = includeChatListValue
+                displayTopPeers = topPeersValue
             }
             
-            if case let .search(query, searchChatList, searchDeviceContacts, searchGroups, searchChannels, globalSearch) = presentation {
+            if case let .search(search) = presentation {
+                let query = search.signal
+                let searchChatList = search.searchChatList
+                let searchDeviceContacts = search.searchDeviceContacts
+                let searchGroups = search.searchGroups
+                let searchChannels = search.searchChannels
+                let globalSearch = search.globalSearch
+                let displaySavedMessages = search.displaySavedMessages
+                
                 return query
                 |> mapToSignal { query in
                     let foundLocalContacts: Signal<([FoundPeer], [EnginePeer.Id: EnginePeer.Presence]), NoError>
@@ -1050,6 +1356,12 @@ public final class ContactListNode: ASDisplayNode {
                             var resultPeers: [FoundPeer] = []
                             
                             for peer in peers {
+                                if !displaySavedMessages {
+                                    if peer.peerId == context.account.peerId {
+                                        continue
+                                    }
+                                }
+                                
                                 if searchGroups || searchChannels {
                                     let mainPeer = peer.chatMainPeer
                                     if let _ = mainPeer as? TelegramUser {
@@ -1069,7 +1381,13 @@ public final class ContactListNode: ASDisplayNode {
                                     }
                                 }
                                 if let mainPeer = peer.chatMainPeer {
-                                    resultPeers.append(FoundPeer(peer: mainPeer, subscribers: nil))
+                                    var matches = true
+                                    if let isPeerEnabled = isPeerEnabled {
+                                        matches = isPeerEnabled(EnginePeer(mainPeer))
+                                    }
+                                    if matches {
+                                        resultPeers.append(FoundPeer(peer: mainPeer, subscribers: nil))
+                                    }
                                 }
                             }
                             
@@ -1122,23 +1440,89 @@ public final class ContactListNode: ASDisplayNode {
                     let accountPeer = context.account.postbox.loadedPeerWithId(context.account.peerId)
                     |> take(1)
                     
-                    return combineLatest(accountPeer, foundLocalContacts, foundRemoteContacts, foundDeviceContacts, selectionStateSignal, presentationDataPromise.get())
-                    |> mapToQueue { accountPeer, localPeersAndStatuses, remotePeers, deviceContacts, selectionState, presentationData -> Signal<ContactsListNodeTransition, NoError> in
+                    struct FoundPeers {
+                        var foundLocalContacts: ([FoundPeer], [EnginePeer.Id: EnginePeer.Presence])
+                        var foundRemoteContacts: ([FoundPeer], [FoundPeer])
+                    }
+                    
+                    let foundPeers = Promise<FoundPeers>()
+                    foundPeers.set(combineLatest(
+                        foundLocalContacts,
+                        foundRemoteContacts
+                    )
+                   |> map { foundLocalContacts, foundRemoteContacts -> FoundPeers in
+                        return FoundPeers(
+                            foundLocalContacts: foundLocalContacts,
+                            foundRemoteContacts: foundRemoteContacts
+                        )
+                    })
+                    
+                    let peerRequiresPremiumForMessaging: Signal<[EnginePeer.Id: Bool], NoError>
+                    if onlyWriteable && !isGroupInvitation {
+                        peerRequiresPremiumForMessaging = foundPeers.get()
+                        |> map { foundPeers -> Set<EnginePeer.Id> in
+                            var result = Set<EnginePeer.Id>()
+                            
+                            for peer in foundPeers.foundLocalContacts.0 {
+                                if let user = peer.peer as? TelegramUser, user.flags.contains(.requirePremium) {
+                                    result.insert(user.id)
+                                }
+                            }
+                            
+                            for peer in foundPeers.foundRemoteContacts.0 {
+                                if let user = peer.peer as? TelegramUser, user.flags.contains(.requirePremium) {
+                                    result.insert(user.id)
+                                }
+                            }
+                            for peer in foundPeers.foundRemoteContacts.1 {
+                                if let user = peer.peer as? TelegramUser, user.flags.contains(.requirePremium) {
+                                    result.insert(user.id)
+                                }
+                            }
+                            
+                            return result
+                        }
+                        |> distinctUntilChanged
+                        |> mapToSignal { peerIds -> Signal<[EnginePeer.Id: Bool], NoError> in
+                            return context.engine.data.subscribe(
+                                EngineDataMap(
+                                    peerIds.map(TelegramEngine.EngineData.Item.Peer.IsPremiumRequiredForMessaging.init(id:))
+                                )
+                            )
+                        }
+                    } else {
+                        peerRequiresPremiumForMessaging = .single([:])
+                    }
+                    
+                    return combineLatest(accountPeer, foundPeers.get(), peerRequiresPremiumForMessaging, foundDeviceContacts, selectionStateSignal, pendingRemovalPeerIdsSignal, presentationDataPromise.get())
+                    |> mapToQueue { accountPeer, foundPeers, peerRequiresPremiumForMessaging, deviceContacts, selectionState, pendingRemovalPeerIds, presentationData -> Signal<ContactsListNodeTransition, NoError> in
+                        let localPeersAndStatuses = foundPeers.foundLocalContacts
+                        let remotePeers = foundPeers.foundRemoteContacts
+                        
                         let signal = deferred { () -> Signal<ContactsListNodeTransition, NoError> in
+                            if !peerRequiresPremiumForMessaging.isEmpty {
+                                context.account.viewTracker.refreshCanSendMessagesForPeerIds(peerIds: Array(peerRequiresPremiumForMessaging.keys))
+                            }
+                            
                             var existingPeerIds = Set<EnginePeer.Id>()
                             var disabledPeerIds = Set<EnginePeer.Id>()
 
                             var existingNormalizedPhoneNumbers = Set<DeviceContactNormalizedPhoneNumber>()
                             var excludeSelf = false
+                            var requirePhoneNumbers = false
                             for filter in filters {
                                 switch filter {
-                                    case .excludeSelf:
-                                        excludeSelf = true
-                                        existingPeerIds.insert(context.account.peerId)
-                                    case let .exclude(peerIds):
-                                        existingPeerIds = existingPeerIds.union(peerIds)
-                                    case let .disable(peerIds):
-                                        disabledPeerIds = disabledPeerIds.union(peerIds)
+                                case .excludeSelf:
+                                    excludeSelf = true
+                                    existingPeerIds.insert(context.account.peerId)
+                                case let .exclude(peerIds):
+                                    existingPeerIds = existingPeerIds.union(peerIds)
+                                case let .disable(peerIds):
+                                    disabledPeerIds = disabledPeerIds.union(peerIds)
+                                case .excludeWithoutPhoneNumbers:
+                                    requirePhoneNumbers = true
+                                case .excludeBots:
+                                    break
                                 }
                             }
                             
@@ -1162,18 +1546,24 @@ public final class ContactListNode: ASDisplayNode {
                             }
                             
                             for peer in localPeersAndStatuses.0 {
-                                if !existingPeerIds.contains(peer.peer.id) {
-                                    existingPeerIds.insert(peer.peer.id)
-                                    peers.append(.peer(peer: peer.peer, isGlobal: false, participantCount: peer.subscribers))
-                                    if searchDeviceContacts, let user = peer.peer as? TelegramUser, let phone = user.phone {
-                                        existingNormalizedPhoneNumbers.insert(DeviceContactNormalizedPhoneNumber(rawValue: formatPhoneNumber(phone)))
-                                    }
+                                if existingPeerIds.contains(peer.peer.id) || pendingRemovalPeerIds.contains(peer.peer.id) {
+                                    continue
+                                }
+                                existingPeerIds.insert(peer.peer.id)
+                                peers.append(.peer(peer: peer.peer, isGlobal: false, participantCount: peer.subscribers))
+                                if searchDeviceContacts, let user = peer.peer as? TelegramUser, let phone = user.phone {
+                                    existingNormalizedPhoneNumbers.insert(DeviceContactNormalizedPhoneNumber(rawValue: formatPhoneNumber(phone)))
                                 }
                             }
                             for peer in remotePeers.0 {
                                 let matches: Bool
-                                if peer.peer is TelegramUser {
-                                    matches = true
+                                if let user = peer.peer as? TelegramUser {
+                                    let phone = user.phone ?? ""
+                                    if requirePhoneNumbers && phone.isEmpty {
+                                        matches = false
+                                    } else {
+                                        matches = true
+                                    }
                                 } else if searchGroups || searchChannels {
                                     if peer.peer is TelegramGroup && searchGroups {
                                         matches = true
@@ -1191,19 +1581,25 @@ public final class ContactListNode: ASDisplayNode {
                                 }
                                 
                                 if matches {
-                                    if !existingPeerIds.contains(peer.peer.id) {
-                                        existingPeerIds.insert(peer.peer.id)
-                                        peers.append(.peer(peer: peer.peer, isGlobal: true, participantCount: peer.subscribers))
-                                        if searchDeviceContacts, let user = peer.peer as? TelegramUser, let phone = user.phone {
-                                            existingNormalizedPhoneNumbers.insert(DeviceContactNormalizedPhoneNumber(rawValue: formatPhoneNumber(phone)))
-                                        }
+                                    if existingPeerIds.contains(peer.peer.id) || pendingRemovalPeerIds.contains(peer.peer.id) {
+                                        continue
+                                    }
+                                    existingPeerIds.insert(peer.peer.id)
+                                    peers.append(.peer(peer: peer.peer, isGlobal: true, participantCount: peer.subscribers))
+                                    if searchDeviceContacts, let user = peer.peer as? TelegramUser, let phone = user.phone {
+                                        existingNormalizedPhoneNumbers.insert(DeviceContactNormalizedPhoneNumber(rawValue: formatPhoneNumber(phone)))
                                     }
                                 }
                             }
                             for peer in remotePeers.1 {
                                 let matches: Bool
-                                if peer.peer is TelegramUser {
-                                    matches = true
+                                if let user = peer.peer as? TelegramUser {
+                                    let phone = user.phone ?? ""
+                                    if requirePhoneNumbers && phone.isEmpty {
+                                        matches = false
+                                    } else {
+                                        matches = true
+                                    }
                                 } else if searchGroups || searchChannels {
                                     if peer.peer is TelegramGroup {
                                         matches = searchGroups
@@ -1221,12 +1617,13 @@ public final class ContactListNode: ASDisplayNode {
                                 }
                                 
                                 if matches {
-                                    if !existingPeerIds.contains(peer.peer.id) {
-                                        existingPeerIds.insert(peer.peer.id)
-                                        peers.append(.peer(peer: peer.peer, isGlobal: true, participantCount: peer.subscribers))
-                                        if searchDeviceContacts, let user = peer.peer as? TelegramUser, let phone = user.phone {
-                                            existingNormalizedPhoneNumbers.insert(DeviceContactNormalizedPhoneNumber(rawValue: formatPhoneNumber(phone)))
-                                        }
+                                    if existingPeerIds.contains(peer.peer.id) || pendingRemovalPeerIds.contains(peer.peer.id) {
+                                        continue
+                                    }
+                                    existingPeerIds.insert(peer.peer.id)
+                                    peers.append(.peer(peer: peer.peer, isGlobal: true, participantCount: peer.subscribers))
+                                    if searchDeviceContacts, let user = peer.peer as? TelegramUser, let phone = user.phone {
+                                        existingNormalizedPhoneNumbers.insert(DeviceContactNormalizedPhoneNumber(rawValue: formatPhoneNumber(phone)))
                                     }
                                 }
                             }
@@ -1246,7 +1643,7 @@ public final class ContactListNode: ASDisplayNode {
                                 peers.append(.deviceContact(stableId, contact.0))
                             }
                             
-                            let entries = contactListNodeEntries(accountPeer: nil, peers: peers, presences: localPeersAndStatuses.1, presentation: presentation, selectionState: selectionState, theme: presentationData.theme, strings: presentationData.strings, dateTimeFormat: presentationData.dateTimeFormat, sortOrder: presentationData.nameSortOrder, displayOrder: presentationData.nameDisplayOrder, disabledPeerIds: disabledPeerIds, authorizationStatus: .allowed, warningSuppressed: (true, true), displaySortOptions: false, displayCallIcons: displayCallIcons)
+                            let entries = contactListNodeEntries(accountPeer: nil, peers: peers, presences: localPeersAndStatuses.1, presentation: presentation, selectionState: selectionState, theme: presentationData.theme, strings: presentationData.strings, dateTimeFormat: presentationData.dateTimeFormat, sortOrder: presentationData.nameSortOrder, displayOrder: presentationData.nameDisplayOrder, disabledPeerIds: disabledPeerIds, peerRequiresPremiumForMessaging: peerRequiresPremiumForMessaging, peersWithStories: [:], authorizationStatus: .allowed, warningSuppressed: (true, true), displaySortOptions: false, displayCallIcons: displayCallIcons, storySubscriptions: nil, topPeers: [], topPeersPresentation: .none, interaction: interaction)
                             let previous = previousEntries.swap(entries)
                             return .single(preparedContactListNodeTransition(context: context, presentationData: presentationData, from: previous ?? [], to: entries, interaction: interaction, firstTime: previous == nil, isEmpty: false, generateIndexSections: generateSections, animation: .none, isSearch: isSearch))
                         }
@@ -1267,8 +1664,8 @@ public final class ContactListNode: ASDisplayNode {
                         return context.engine.data.get(EngineDataMap(
                             view.entries.compactMap { entry -> EnginePeer.Id? in
                                 switch entry {
-                                case let .MessageEntry(_, _, _, _, _, renderedPeer, _, _, _, _, _):
-                                    if let peer = renderedPeer.peer {
+                                case let .MessageEntry(entryData):
+                                    if let peer = entryData.renderedPeer.peer {
                                         if let channel = peer as? TelegramChannel, case .group = channel.info {
                                             return peer.id
                                         }
@@ -1283,8 +1680,8 @@ public final class ContactListNode: ASDisplayNode {
                             var peers: [(EnginePeer, Int32)] = []
                             for entry in view.entries {
                                 switch entry {
-                                case let .MessageEntry(_, _, _, _, _, renderedPeer, _, _, _, _, _):
-                                    if let peer = renderedPeer.peer {
+                                case let .MessageEntry(entryData):
+                                    if let peer = entryData.renderedPeer.peer {
                                         if peer is TelegramGroup {
                                             peers.append((EnginePeer(peer), 0))
                                         } else if let channel = peer as? TelegramChannel, case .group = channel.info {
@@ -1306,32 +1703,140 @@ public final class ContactListNode: ASDisplayNode {
                     chatListSignal = .single([])
                 }
                 
-                return (combineLatest(self.contactPeersViewPromise.get(), chatListSignal, selectionStateSignal, presentationDataPromise.get(), contactsAuthorization.get(), contactsWarningSuppressed.get())
-                |> mapToQueue { view, chatListPeers, selectionState, presentationData, authorizationStatus, warningSuppressed -> Signal<ContactsListNodeTransition, NoError> in
+                struct TopPeer {
+                    let peer: EnginePeer
+                    let presence: EnginePeer.Presence?
+                }
+                
+                let topPeers: Signal<[TopPeer], NoError>
+                switch displayTopPeers {
+                case .recent:
+                    topPeers = context.engine.peers.recentPeers()
+                    |> mapToSignal { recentPeers -> Signal<[TopPeer], NoError> in
+                        if case let .peers(peers) = recentPeers {
+                            let topPeers = peers.map(EnginePeer.init)
+                            return context.engine.data.subscribe(
+                                EngineDataMap(peers.map(\.id).map(TelegramEngine.EngineData.Item.Peer.Presence.init))
+                            )
+                            |> map { presences -> [TopPeer] in
+                                var result: [TopPeer] = []
+                                for peer in topPeers {
+                                    var presence: EnginePeer.Presence?
+                                    if let maybePresence = presences[peer.id], let presenceValue = maybePresence {
+                                        presence = presenceValue
+                                    }
+                                    result.append(TopPeer(peer: peer, presence: presence))
+                                }
+                                return result
+                            }
+                        } else {
+                            return .single([])                      
+                        }
+                    }
+                case let .custom(showSelf, sections):
+                    var peerIds: [EnginePeer.Id] = []
+                    if showSelf {
+                        peerIds.append(context.account.peerId)
+                    }
+                    for (_, sectionPeers, _) in sections {
+                        peerIds.append(contentsOf: sectionPeers)
+                    }
+                    topPeers = combineLatest(
+                        context.engine.data.get(EngineDataMap(peerIds.map(TelegramEngine.EngineData.Item.Peer.Peer.init(id:)))),
+                        context.engine.peers.recentPeers()
+                        |> mapToSignal { recentPeers -> Signal<[TopPeer], NoError> in
+                            if case let .peers(peers) = recentPeers {
+                                let topPeers = peers.map(EnginePeer.init)
+                                return context.engine.data.subscribe(
+                                    EngineDataMap(peers.map(\.id).map(TelegramEngine.EngineData.Item.Peer.Presence.init))
+                                )
+                                |> map { presences -> [TopPeer] in
+                                    var result: [TopPeer] = []
+                                    for peer in topPeers {
+                                        var presence: EnginePeer.Presence?
+                                        if let maybePresence = presences[peer.id], let presenceValue = maybePresence {
+                                            presence = presenceValue
+                                        }
+                                        result.append(TopPeer(peer: peer, presence: presence))
+                                    }
+                                    return result
+                                }
+                            } else {
+                                return .single([])
+                            }
+                        }
+                    ) |> map { peers, recentPeers in
+                        var result: [TopPeer] = []
+                        for peer in peers.values {
+                            if let peer {
+                                result.append(TopPeer(peer: peer, presence: nil))
+                            }
+                        }
+                        result.append(contentsOf: recentPeers)
+                        return result
+                    }
+                case .none:
+                    topPeers = .single([])
+                }
+                
+                return (combineLatest(
+                    self.contactPeersViewPromise.get(),
+                    chatListSignal,
+                    selectionStateSignal,
+                    pendingRemovalPeerIdsSignal,
+                    presentationDataPromise.get(),
+                    contactsAuthorization.get(),
+                    contactsWarningSuppressed.get(),
+                    self.storySubscriptions.get(),
+                    topPeers
+                )
+                |> mapToQueue { view, chatListPeers, selectionState, pendingRemovalPeerIds, presentationData, authorizationStatus, warningSuppressed, storySubscriptions, topPeers -> Signal<ContactsListNodeTransition, NoError> in
                     let signal = deferred { () -> Signal<ContactsListNodeTransition, NoError> in
+                        if !view.2.isEmpty {
+                            context.account.viewTracker.refreshCanSendMessagesForPeerIds(peerIds: Array(view.2.keys))
+                        }
+                        
                         var peers = view.0.peers.map({ ContactListPeer.peer(peer: $0._asPeer(), isGlobal: false, participantCount: nil) })
                         for (peer, memberCount) in chatListPeers {
                             peers.append(.peer(peer: peer._asPeer(), isGlobal: false, participantCount: memberCount))
                         }
                         var existingPeerIds = Set<EnginePeer.Id>()
                         var disabledPeerIds = Set<EnginePeer.Id>()
+                        var requirePhoneNumbers = false
                         for filter in filters {
                             switch filter {
-                                case .excludeSelf:
-                                    existingPeerIds.insert(context.account.peerId)
-                                case let .exclude(peerIds):
-                                    existingPeerIds = existingPeerIds.union(peerIds)
-                                case let .disable(peerIds):
-                                    disabledPeerIds = disabledPeerIds.union(peerIds)
+                            case .excludeSelf:
+                                existingPeerIds.insert(context.account.peerId)
+                            case let .exclude(peerIds):
+                                existingPeerIds = existingPeerIds.union(peerIds)
+                            case let .disable(peerIds):
+                                disabledPeerIds = disabledPeerIds.union(peerIds)
+                            case .excludeWithoutPhoneNumbers:
+                                requirePhoneNumbers = true
+                            case .excludeBots:
+                                break
                             }
                         }
                         
                         peers = peers.filter { contact in
                             switch contact {
-                                case let .peer(peer, _, _):
-                                    return !existingPeerIds.contains(peer.id)
-                                default:
-                                    return true
+                            case let .peer(peer, _, _):
+                                if requirePhoneNumbers, let user = peer as? TelegramUser {
+                                    let phone = user.phone ?? ""
+                                    if phone.isEmpty {
+                                        return false
+                                    }
+                                }
+                                return !existingPeerIds.contains(peer.id) && !pendingRemovalPeerIds.contains(peer.id)
+                            default:
+                                return true
+                            }
+                        }
+                        
+                        var presences = view.0.presences
+                        for peer in topPeers {
+                            if let presence = peer.presence {
+                                presences[peer.peer.id] = presence
                             }
                         }
                         
@@ -1339,31 +1844,43 @@ public final class ContactListNode: ASDisplayNode {
                         if (authorizationStatus == .notDetermined || authorizationStatus == .denied) && peers.isEmpty {
                             isEmpty = true
                         }
-                        let entries = contactListNodeEntries(accountPeer: view.1, peers: peers, presences: view.0.presences, presentation: presentation, selectionState: selectionState, theme: presentationData.theme, strings: presentationData.strings, dateTimeFormat: presentationData.dateTimeFormat, sortOrder: presentationData.nameSortOrder, displayOrder: presentationData.nameDisplayOrder, disabledPeerIds: disabledPeerIds, authorizationStatus: authorizationStatus, warningSuppressed: warningSuppressed, displaySortOptions: displaySortOptions, displayCallIcons: displayCallIcons)
+                        
+                        let entries = contactListNodeEntries(accountPeer: view.1, peers: peers, presences: presences, presentation: presentation, selectionState: selectionState, theme: presentationData.theme, strings: presentationData.strings, dateTimeFormat: presentationData.dateTimeFormat, sortOrder: presentationData.nameSortOrder, displayOrder: presentationData.nameDisplayOrder, disabledPeerIds: disabledPeerIds, peerRequiresPremiumForMessaging: view.2, peersWithStories: view.3, authorizationStatus: authorizationStatus, warningSuppressed: warningSuppressed, displaySortOptions: displaySortOptions, displayCallIcons: displayCallIcons, storySubscriptions: storySubscriptions, topPeers: topPeers.map { $0.peer }, topPeersPresentation: displayTopPeers, interaction: interaction)
                         let previous = previousEntries.swap(entries)
                         let previousSelection = previousSelectionState.swap(selectionState)
+                        let previousPendingRemovalPeerIds = previousPendingRemovalPeerIds.swap(pendingRemovalPeerIds)
                         
                         var hadPermissionInfo = false
+                        var previousOptionsCount = 0
                         if let previous = previous {
                             for entry in previous {
                                 if case .permissionInfo = entry {
                                     hadPermissionInfo = true
-                                    break
+                                }
+                                if case .option = entry {
+                                    previousOptionsCount += 1
                                 }
                             }
                         }
                         var hasPermissionInfo = false
+                        var optionsCount = 0
                         for entry in entries {
                             if case .permissionInfo = entry {
                                 hasPermissionInfo = true
-                                break
+                            }
+                            if case .option = entry {
+                                optionsCount += 1
                             }
                         }
                         
                         let animation: ContactListAnimation
                         if (previousSelection == nil) != (selectionState == nil) {
                             animation = .insertion
+                        } else if previousPendingRemovalPeerIds != pendingRemovalPeerIds {
+                            animation = .insertion
                         } else if hadPermissionInfo != hasPermissionInfo {
+                            animation = .insertion
+                        } else if optionsCount < previousOptionsCount {
                             animation = .insertion
                         } else {
                             animation = .none
@@ -1425,12 +1942,12 @@ public final class ContactListNode: ASDisplayNode {
                         }
                     })
                     
-                    if let (validLayout, headerInsets) = strongSelf.validLayout {
-                        strongSelf.containerLayoutUpdated(validLayout, headerInsets: headerInsets, transition: .immediate)
+                    if let (validLayout, headerInsets, storiesInset) = strongSelf.validLayout {
+                        strongSelf.containerLayoutUpdated(validLayout, headerInsets: headerInsets, storiesInset: storiesInset, transition: .immediate)
                     }
                 }
             }
-        })
+        }).strict()
         
         self.listNode.didEndScrolling = { [weak self] _ in
             if let strongSelf = self {
@@ -1489,9 +2006,19 @@ public final class ContactListNode: ASDisplayNode {
         }
     }
     
-    public func containerLayoutUpdated(_ layout: ContainerViewLayout, headerInsets: UIEdgeInsets, transition: ContainedViewLayoutTransition) {
+    public func updatePendingRemovalPeerIds(_ f: (Set<EnginePeer.Id>) -> Set<EnginePeer.Id>) {
+        let updatedPendingRemovalPeerIds = f(self.pendingRemovalPeerIds)
+        if updatedPendingRemovalPeerIds != self.pendingRemovalPeerIds {
+            self.pendingRemovalPeerIds = updatedPendingRemovalPeerIds
+        }
+    }
+    
+    private var previousStoriesInset: CGFloat?
+    public var ignoreStoryInsetAdjustment: Bool = false
+    
+    public func containerLayoutUpdated(_ layout: ContainerViewLayout, headerInsets: UIEdgeInsets, storiesInset: CGFloat, transition: ContainedViewLayoutTransition) {
         let hadValidLayout = self.validLayout != nil
-        self.validLayout = (layout, headerInsets)
+        self.validLayout = (layout, headerInsets, storiesInset)
         
         var insets = layout.insets(options: [.input])
         insets.left = layout.safeInsets.left
@@ -1502,12 +2029,22 @@ public final class ContactListNode: ASDisplayNode {
             headerInsets.top -= navigationBarSearchContentHeight
         }
         
+        var additionalScrollDistance: CGFloat = 0.0
+        
+        if let previousStoriesInset = self.previousStoriesInset {
+            if self.ignoreStoryInsetAdjustment {
+            } else {
+                additionalScrollDistance += previousStoriesInset - storiesInset
+            }
+        }
+        self.previousStoriesInset = storiesInset
+        
         transition.updateFrame(node: self.listNode, frame: CGRect(x: 0.0, y: 0.0, width: layout.size.width, height: layout.size.height))
         
         let (duration, curve) = listViewAnimationDurationAndCurve(transition: transition)
         let updateSizeAndInsets = ListViewUpdateSizeAndInsets(size: layout.size, insets: insets, headerInsets: headerInsets, duration: duration, curve: curve)
         
-        self.listNode.transaction(deleteIndices: [], insertIndicesAndItems: [], updateIndicesAndItems: [], options: [.Synchronous, .LowLatency], scrollToItem: nil, updateSizeAndInsets: updateSizeAndInsets, stationaryItemRange: nil, updateOpaqueState: nil, completion: { _ in })
+        self.listNode.transaction(deleteIndices: [], insertIndicesAndItems: [], updateIndicesAndItems: [], options: [.Synchronous, .LowLatency], scrollToItem: nil, additionalScrollDistance: additionalScrollDistance, updateSizeAndInsets: updateSizeAndInsets, stationaryItemRange: nil, updateOpaqueState: nil, completion: { _ in })
         if let indexSections = self.indexSections {
             var insets = layout.insets(options: [.input])
             if let inputHeight = layout.inputHeight {
@@ -1562,7 +2099,7 @@ public final class ContactListNode: ASDisplayNode {
                         options.insert(.AnimateCrossfade)
                     }
                 }
-                if let (layout, _) = self.validLayout {
+                if let (layout, _, _) = self.validLayout {
                     self.indexSections = transition.indexSections
                     
                     var insets = layout.insets(options: [.input])

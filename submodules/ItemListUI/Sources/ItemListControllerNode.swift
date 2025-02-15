@@ -127,6 +127,7 @@ private struct ItemListNodeTransition {
     let emptyStateItem: ItemListControllerEmptyStateItem?
     let searchItem: ItemListControllerSearch?
     let toolbarItem: ItemListToolbarItem?
+    let headerItem: ItemListControllerHeaderItem?
     let footerItem: ItemListControllerFooterItem?
     let focusItemTag: ItemListItemTag?
     let ensureVisibleItemTag: ItemListItemTag?
@@ -146,6 +147,7 @@ public final class ItemListNodeState {
     let emptyStateItem: ItemListControllerEmptyStateItem?
     let searchItem: ItemListControllerSearch?
     let toolbarItem: ItemListToolbarItem?
+    let headerItem: ItemListControllerHeaderItem?
     let footerItem: ItemListControllerFooterItem?
     let animateChanges: Bool
     let crossfadeState: Bool
@@ -154,13 +156,14 @@ public final class ItemListNodeState {
     let ensureVisibleItemTag: ItemListItemTag?
     let initialScrollToItem: ListViewScrollToItem?
     
-    public init<T: ItemListNodeEntry>(presentationData: ItemListPresentationData, entries: [T], style: ItemListStyle, focusItemTag: ItemListItemTag? = nil, ensureVisibleItemTag: ItemListItemTag? = nil, emptyStateItem: ItemListControllerEmptyStateItem? = nil, searchItem: ItemListControllerSearch? = nil, toolbarItem: ItemListToolbarItem? = nil, footerItem: ItemListControllerFooterItem? = nil, initialScrollToItem: ListViewScrollToItem? = nil, crossfadeState: Bool = false, animateChanges: Bool = true, scrollEnabled: Bool = true) {
+    public init<T: ItemListNodeEntry>(presentationData: ItemListPresentationData, entries: [T], style: ItemListStyle, focusItemTag: ItemListItemTag? = nil, ensureVisibleItemTag: ItemListItemTag? = nil, emptyStateItem: ItemListControllerEmptyStateItem? = nil, searchItem: ItemListControllerSearch? = nil, toolbarItem: ItemListToolbarItem? = nil, headerItem: ItemListControllerHeaderItem? = nil, footerItem: ItemListControllerFooterItem? = nil, initialScrollToItem: ListViewScrollToItem? = nil, crossfadeState: Bool = false, animateChanges: Bool = true, scrollEnabled: Bool = true) {
         self.presentationData = presentationData
         self.entries = entries.map { $0 }
         self.style = style
         self.emptyStateItem = emptyStateItem
         self.searchItem = searchItem
         self.toolbarItem = toolbarItem
+        self.headerItem = headerItem
         self.footerItem = footerItem
         self.crossfadeState = crossfadeState
         self.animateChanges = animateChanges
@@ -229,7 +232,9 @@ public final class ItemListControllerNodeView: UITracingLayerView {
     weak var controller: ItemListController?
 }
 
-open class ItemListControllerNode: ASDisplayNode {
+open class ItemListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
+    private weak var controller: ItemListController?
+    
     private var _ready = ValuePromise<Bool>()
     open var ready: Signal<Bool, NoError> {
         return self._ready.get()
@@ -238,6 +243,7 @@ open class ItemListControllerNode: ASDisplayNode {
     
     private let navigationBar: NavigationBar
     
+    private let listNodeContainer: ASDisplayNode
     public let listNode: ListView
     private let leftOverlayNode: ASDisplayNode
     private let rightOverlayNode: ASDisplayNode
@@ -250,6 +256,9 @@ open class ItemListControllerNode: ASDisplayNode {
     private var searchNode: ItemListControllerSearchNode?
     
     private var toolbarItem: ItemListToolbarItem?
+
+    private var headerItem: ItemListControllerHeaderItem?
+    private var headerItemNode: ItemListControllerHeaderItemNode?
     
     private var footerItem: ItemListControllerFooterItem?
     private var footerItemNode: ItemListControllerFooterItemNode?
@@ -265,6 +274,8 @@ open class ItemListControllerNode: ASDisplayNode {
     private var appliedFocusItemTag: ItemListItemTag?
     private var appliedEnsureVisibleItemTag: ItemListItemTag?
     
+    private(set) var panRecognizer: InteractiveTransitionGestureRecognizer?
+    
     private var afterLayoutActions: [() -> Void] = []
 
     public var dismiss: (() -> Void)?
@@ -277,6 +288,7 @@ open class ItemListControllerNode: ASDisplayNode {
     public var searchActivated: ((Bool) -> Void)?
     public var reorderEntry: ((Int, Int, [ItemListNodeAnyEntry]) -> Signal<Bool, NoError>)?
     public var reorderCompleted: (([ItemListNodeAnyEntry]) -> Void)?
+    public var afterTransactionCompleted: (() -> Void)?
     public var requestLayout: ((ContainedViewLayoutTransition) -> Void)?
     
     public var enableInteractiveDismiss = false {
@@ -289,8 +301,10 @@ open class ItemListControllerNode: ASDisplayNode {
     private var previousContentOffset: ListViewVisibleContentOffset?
     
     public init(controller: ItemListController?, navigationBar: NavigationBar, state: Signal<(ItemListPresentationData, (ItemListNodeState, Any)), NoError>) {
+        self.controller = controller
         self.navigationBar = navigationBar
         
+        self.listNodeContainer = ASDisplayNode()
         self.listNode = ListView()
         self.leftOverlayNode = ASDisplayNode()
         self.leftOverlayNode.isUserInteractionEnabled = false
@@ -306,7 +320,8 @@ open class ItemListControllerNode: ASDisplayNode {
         self.backgroundColor = nil
         self.isOpaque = false
         
-        self.addSubnode(self.listNode)
+        self.addSubnode(self.listNodeContainer)
+        self.listNodeContainer.addSubnode(self.listNode)
         
         self.listNode.displayedItemRangeChanged = { [weak self] displayedRange, opaqueTransactionState in
             if let strongSelf = self, let visibleEntriesUpdated = strongSelf.visibleEntriesUpdated, let mergedEntries = (opaqueTransactionState as? ItemListNodeOpaqueState)?.mergedEntries {
@@ -351,14 +366,18 @@ open class ItemListControllerNode: ASDisplayNode {
         }
         
         self.listNode.visibleContentOffsetChanged = { [weak self] offset in
+            guard let strongSelf = self else {
+                return
+            }
             var inVoiceOver = false
             if let validLayout = self?.validLayout {
                 inVoiceOver = validLayout.0.inVoiceOver
             }
+            strongSelf.contentOffsetChanged?(offset, inVoiceOver)
             
-            self?.contentOffsetChanged?(offset, inVoiceOver)
-            
-            if let strongSelf = self {
+            if let navigationContentNode = strongSelf.navigationBar.contentNode, case .expansion = navigationContentNode.mode {
+                strongSelf.navigationBar.updateBackgroundAlpha(1.0, transition: .immediate)
+            } else {
                 var previousContentOffsetValue: CGFloat?
                 if let previousContentOffset = strongSelf.previousContentOffset {
                     if case let .known(value) = previousContentOffset {
@@ -368,20 +387,30 @@ open class ItemListControllerNode: ASDisplayNode {
                     }
                 }
                 switch offset {
-                    case let .known(value):
-                        let transition: ContainedViewLayoutTransition
-                        if let previousContentOffsetValue = previousContentOffsetValue, value <= 0.0, previousContentOffsetValue >= 30.0 {
-                            transition = .animated(duration: 0.2, curve: .easeInOut)
-                        } else {
-                            transition = .immediate
-                        }
+                case let .known(value):
+                    let transition: ContainedViewLayoutTransition
+                    if let previousContentOffsetValue = previousContentOffsetValue, value <= 0.0, previousContentOffsetValue >= 30.0 {
+                        transition = .animated(duration: 0.2, curve: .easeInOut)
+                    } else {
+                        transition = .immediate
+                    }
+                    if let headerItemNode = strongSelf.headerItemNode {
+                        headerItemNode.updateContentOffset(value, transition: transition)
+                        strongSelf.navigationBar.updateBackgroundAlpha(0.0, transition: .immediate)
+                    } else {
                         strongSelf.navigationBar.updateBackgroundAlpha(min(30.0, value) / 30.0, transition: transition)
-                    case .unknown, .none:
+                    }
+                case .unknown, .none:
+                    if let headerItemNode = strongSelf.headerItemNode {
+                        headerItemNode.updateContentOffset(1000.0, transition: .immediate)
+                        strongSelf.navigationBar.updateBackgroundAlpha(0.0, transition: .immediate)
+                    } else {
                         strongSelf.navigationBar.updateBackgroundAlpha(1.0, transition: .immediate)
+                    }
                 }
-                
-                strongSelf.previousContentOffset = offset
             }
+            
+            strongSelf.previousContentOffset = offset
         }
         
         self.listNode.beganInteractiveDragging = { [weak self] _ in
@@ -425,7 +454,7 @@ open class ItemListControllerNode: ASDisplayNode {
                 scrollToItem = state.initialScrollToItem
             }
             
-            return ItemListNodeTransition(theme: presentationData.theme, strings: presentationData.strings, entries: transition, updateStyle: updatedStyle, emptyStateItem: state.emptyStateItem, searchItem: state.searchItem, toolbarItem: state.toolbarItem, footerItem: state.footerItem, focusItemTag: state.focusItemTag, ensureVisibleItemTag: state.ensureVisibleItemTag, scrollToItem: scrollToItem, firstTime: previous == nil, animated: previous != nil && state.animateChanges, animateAlpha: previous != nil && state.animateChanges, crossfade: state.crossfadeState, mergedEntries: state.entries, scrollEnabled: state.scrollEnabled)
+            return ItemListNodeTransition(theme: presentationData.theme, strings: presentationData.strings, entries: transition, updateStyle: updatedStyle, emptyStateItem: state.emptyStateItem, searchItem: state.searchItem, toolbarItem: state.toolbarItem, headerItem: state.headerItem, footerItem: state.footerItem, focusItemTag: state.focusItemTag, ensureVisibleItemTag: state.ensureVisibleItemTag, scrollToItem: scrollToItem, firstTime: previous == nil, animated: previous != nil && state.animateChanges, animateAlpha: previous != nil && state.animateChanges, crossfade: state.crossfadeState, mergedEntries: state.entries, scrollEnabled: state.scrollEnabled)
         })
         |> deliverOnMainQueue).start(next: { [weak self] transition in
             if let strongSelf = self {
@@ -458,6 +487,130 @@ open class ItemListControllerNode: ASDisplayNode {
         
         (self.view as? ItemListControllerNodeView)?.hitTestImpl = { [weak self] point, event in
             return self?.hitTest(point, with: event)
+        }
+        
+        let panRecognizer = InteractiveTransitionGestureRecognizer(target: self, action: #selector(self.panGesture(_:)), allowedDirections: { [weak self] _ in
+            guard let self, let directions = self.panGestureAllowedDirections?() else {
+                return []
+            }
+            return directions
+        }, edgeWidth: .widthMultiplier(factor: 1.0 / 6.0, min: 22.0, max: 80.0))
+        panRecognizer.delegate = self.wrappedGestureRecognizerDelegate
+        panRecognizer.delaysTouchesBegan = false
+        panRecognizer.cancelsTouchesInView = true
+        self.panRecognizer = panRecognizer
+//        self.view.addGestureRecognizer(panRecognizer)
+    }
+    
+    public func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        if let _ = otherGestureRecognizer as? InteractiveTransitionGestureRecognizer {
+            return false
+        }
+        if let _ = otherGestureRecognizer as? UIPanGestureRecognizer {
+            return true
+        }
+        return false
+    }
+    
+    var panGestureAllowedDirections: (() -> InteractiveTransitionGestureRecognizerDirections)?
+    var panTransitionFractionChanged: ((CGFloat?) -> Void)?
+    
+    private var panSnapshotView: UIView?
+    private var panTransitionFraction: CGFloat = 0.0
+    private var panCurrentAllowedDirections: InteractiveTransitionGestureRecognizerDirections = [.leftCenter, .rightCenter]
+    
+    @objc private func panGesture(_ gestureRecognizer: UIPanGestureRecognizer) {
+        let translation = gestureRecognizer.translation(in: self.view).x
+        let velocity = gestureRecognizer.velocity(in: self.view).x
+        
+        switch gestureRecognizer.state {
+        case .began, .changed:
+            if case .began = gestureRecognizer.state {
+                self.panCurrentAllowedDirections = self.panGestureAllowedDirections?() ?? [.leftCenter, .rightCenter]
+            }
+            
+            if self.panSnapshotView == nil, let panSnapshotView = self.listNodeContainer.view.snapshotView(afterScreenUpdates: false) {
+                self.panSnapshotView = panSnapshotView
+                self.listNodeContainer.view.superview?.insertSubview(panSnapshotView, aboveSubview: self.listNodeContainer.view)
+            }
+            self.panTransitionFraction = -translation / self.view.bounds.width
+            if !self.panCurrentAllowedDirections.contains(.leftCenter) {
+                self.panTransitionFraction = min(0.0, self.panTransitionFraction)
+            }
+            if !self.panCurrentAllowedDirections.contains(.rightCenter) {
+                self.panTransitionFraction = max(0.0, self.panTransitionFraction)
+            }
+            
+            if let panSnapshotView = self.panSnapshotView {
+                panSnapshotView.frame = panSnapshotView.bounds.offsetBy(dx: -self.panTransitionFraction * self.view.bounds.width, dy: 0.0)
+            }
+            
+            var initialOffset: CGFloat = 0.0
+            if self.panTransitionFraction > 0.0 {
+                initialOffset = self.view.bounds.width
+            } else {
+                initialOffset = -self.view.bounds.width
+            }
+            
+            self.listNodeContainer.frame = CGRect(origin: CGPoint(x: initialOffset - self.view.bounds.width * self.panTransitionFraction, y: 0.0), size: self.listNodeContainer.frame.size)
+            
+            self.panTransitionFractionChanged?(self.panTransitionFraction)
+        case .ended, .cancelled:
+            if let panSnapshotView = self.panSnapshotView {
+                self.panSnapshotView = nil
+                
+                var directionIsToRight: Bool?
+                if abs(velocity) > 10.0 {
+                    if translation > 0.0 {
+                        if velocity <= 0.0 {
+                            directionIsToRight = nil
+                        } else {
+                            directionIsToRight = true
+                        }
+                    } else {
+                        if velocity >= 0.0 {
+                            directionIsToRight = nil
+                        } else {
+                            directionIsToRight = false
+                        }
+                    }
+                } else {
+                    if abs(translation) > self.view.bounds.width / 2.0 {
+                        directionIsToRight = translation > self.view.bounds.width / 2.0
+                    }
+                }
+                if !self.panCurrentAllowedDirections.contains(.rightCenter) && directionIsToRight == true {
+                    directionIsToRight = nil
+                }
+                if !self.panCurrentAllowedDirections.contains(.leftCenter) && directionIsToRight == false {
+                    directionIsToRight = nil
+                }
+                
+                let center = CGPoint(x: self.view.bounds.width / 2.0, y: self.view.bounds.height / 2.0)
+                let previousPosition = self.listNodeContainer.position
+                self.listNodeContainer.position = center
+                if let directionIsToRight {
+                    let targetPosition: CGFloat
+                    if directionIsToRight {
+                        targetPosition = self.view.bounds.width + self.view.bounds.width / 2.0
+                    } else {
+                        targetPosition = -self.view.bounds.width + self.view.bounds.width / 2.0
+                    }
+                    panSnapshotView.layer.animatePosition(from: panSnapshotView.center, to: CGPoint(x: targetPosition, y: self.view.bounds.height / 2.0), duration: 0.4, timingFunction: kCAMediaTimingFunctionSpring, removeOnCompletion: false, completion: { _ in
+                        panSnapshotView.removeFromSuperview()
+                    })
+                    self.listNodeContainer.layer.animatePosition(from: previousPosition, to: center, duration: 0.4, timingFunction: kCAMediaTimingFunctionSpring)
+                } else {
+                    let direction = center.x - panSnapshotView.center.x
+                    panSnapshotView.layer.animatePosition(from: panSnapshotView.center, to: center, duration: 0.4, timingFunction: kCAMediaTimingFunctionSpring, removeOnCompletion: false, completion: { _ in
+                        panSnapshotView.removeFromSuperview()
+                    })
+                    self.listNodeContainer.layer.animatePosition(from: previousPosition, to: CGPoint(x: direction > 0.0 ? self.view.bounds.width + self.view.bounds.width / 2.0 : -self.view.bounds.width + self.view.bounds.width / 2.0, y: self.view.bounds.height / 2.0), duration: 0.4, timingFunction: kCAMediaTimingFunctionSpring)
+                }
+            }
+            self.panTransitionFractionChanged?(nil)
+        default:
+            break
         }
     }
     
@@ -502,10 +655,10 @@ open class ItemListControllerNode: ASDisplayNode {
         }
         
         if self.rightOverlayNode.supernode == nil {
-            self.insertSubnode(self.rightOverlayNode, aboveSubnode: self.listNode)
+            self.listNodeContainer.insertSubnode(self.rightOverlayNode, aboveSubnode: self.listNode)
         }
         if self.leftOverlayNode.supernode == nil {
-            self.insertSubnode(self.leftOverlayNode, aboveSubnode: self.listNode)
+            self.listNodeContainer.insertSubnode(self.leftOverlayNode, aboveSubnode: self.listNode)
         }
 
         if let toolbarItem = self.toolbarItem {
@@ -563,11 +716,23 @@ open class ItemListControllerNode: ASDisplayNode {
             }
         }
     
-        if let footerItemNode = self.footerItemNode {
-            let footerHeight = footerItemNode.updateLayout(layout: layout, transition: transition)
-            insets.bottom += footerHeight
+        if let headerItemNode = self.headerItemNode {
+            let headerHeight = headerItemNode.updateLayout(layout: layout, transition: transition)
+            headerItemNode.frame = CGRect(origin: .zero, size: CGSize(width: layout.size.width, height: 56.0))
+            if headerHeight > 300.0 {
+                insets.top = headerHeight
+            } else {
+                insets.top += headerHeight
+            }
         }
         
+        var footerHeight: CGFloat = 0.0
+        if let footerItemNode = self.footerItemNode {
+            footerHeight = footerItemNode.updateLayout(layout: layout, transition: transition)
+            insets.bottom = max(footerHeight, insets.bottom)
+        }
+        
+        self.listNodeContainer.frame = CGRect(x: 0.0, y: 0.0, width: layout.size.width, height: layout.size.height)
         self.listNode.bounds = CGRect(x: 0.0, y: 0.0, width: layout.size.width, height: layout.size.height)
         self.listNode.position = CGPoint(x: layout.size.width / 2.0, y: layout.size.height / 2.0)
         
@@ -593,6 +758,12 @@ open class ItemListControllerNode: ASDisplayNode {
         if dequeue {
             self.dequeueTransitions()
         }
+        
+        var layout = layout
+        layout.intrinsicInsets.left = 4.0
+        layout.intrinsicInsets.right = 4.0
+        layout.intrinsicInsets.bottom = insets.bottom
+        self.controller?.presentationContext.containerLayoutUpdated(layout, transition: transition)
         
         if !self.afterLayoutActions.isEmpty {
             let afterLayoutActions = self.afterLayoutActions
@@ -734,11 +905,7 @@ open class ItemListControllerNode: ASDisplayNode {
                         if let validLayout = self.validLayout {
                             updatedNode.updateLayout(layout: validLayout.0, navigationBarHeight: validLayout.1, transition: .immediate)
                         }
-                        if self.rightOverlayNode.supernode != nil {
-                            self.insertSubnode(updatedNode, aboveSubnode: self.rightOverlayNode)
-                        } else {
-                            self.insertSubnode(updatedNode, aboveSubnode: self.listNode)
-                        }
+                        self.addSubnode(updatedNode)
                         updatedNode.activate()
                     }
                 } else {
@@ -768,6 +935,64 @@ open class ItemListControllerNode: ASDisplayNode {
             }
             if updateToolbarItem {
                 self.toolbarItem = transition.toolbarItem
+            }
+            
+            var updateFooterItem = false
+            if let footerItem = self.footerItem, let updatedFooterItem = transition.footerItem {
+                updateFooterItem = !footerItem.isEqual(to: updatedFooterItem)
+            } else if (self.footerItem != nil) != (transition.footerItem != nil) {
+                updateFooterItem = true
+            }
+            if updateFooterItem {
+                let hadFooter = self.footerItem != nil
+                self.footerItem = transition.footerItem
+                if let footerItem = transition.footerItem {
+                    let updatedNode = footerItem.node(current: self.footerItemNode)
+                    if let footerItemNode = self.footerItemNode, updatedNode !== footerItemNode {
+                        footerItemNode.removeFromSupernode()
+                    }
+                    if self.footerItemNode !== updatedNode {
+                        self.footerItemNode = updatedNode
+                        
+                        let footerHeight: CGFloat
+                        if let validLayout = self.validLayout {
+                            footerHeight = updatedNode.updateLayout(layout: validLayout.0, transition: .immediate)
+                        } else {
+                            footerHeight = 100.0
+                        }
+                        self.addSubnode(updatedNode)
+                        
+                        if !hadFooter && !transition.firstTime {
+                            updatedNode.layer.animatePosition(from: CGPoint(x: 0.0, y: footerHeight), to: .zero, duration: 0.25, additive: true)
+                        }
+                        
+                        if !hadFooter, let (layout, navigationBarHeight, _) = self.validLayout {
+                            var insets = layout.insets(options: [.input])
+                            insets.top += navigationBarHeight
+                            insets.bottom = footerHeight
+                            
+                            let inset = max(16.0, floor((layout.size.width - 674.0) / 2.0))
+                            if layout.size.width >= 375.0 {
+                                insets.left += inset
+                                insets.right += inset
+                            }
+                              
+                            let (duration, curve) = listViewAnimationDurationAndCurve(transition: .immediate)
+                            self.listNode.transaction(deleteIndices: [], insertIndicesAndItems: [], updateIndicesAndItems: [], options: [.Synchronous, .LowLatency], scrollToItem: nil, updateSizeAndInsets: ListViewUpdateSizeAndInsets(size: layout.size, insets: insets, duration: duration, curve: curve), stationaryItemRange: nil, updateOpaqueState: nil, completion: { _ in })
+                        }
+                    }
+                } else if let footerItemNode = self.footerItemNode {
+                    let footerHeight: CGFloat
+                    if let validLayout = self.validLayout {
+                        footerHeight = footerItemNode.updateLayout(layout: validLayout.0, transition: .immediate)
+                    } else {
+                        footerHeight = 100.0
+                    }
+                    footerItemNode.layer.animatePosition(from: .zero, to: CGPoint(x: 0.0, y: footerHeight), duration: 0.25, removeOnCompletion: false, additive: true, completion: { [weak footerItemNode] _ in
+                        footerItemNode?.removeFromSupernode()
+                    })
+                    self.footerItemNode = nil
+                }
             }
             
             self.listNode.transaction(deleteIndices: transition.entries.deletions, insertIndicesAndItems: transition.entries.insertions, updateIndicesAndItems: transition.entries.updates, options: options, scrollToItem: scrollToItem, updateOpaqueState: ItemListNodeOpaqueState(mergedEntries: transition.mergedEntries), completion: { [weak self] _ in
@@ -826,6 +1051,8 @@ open class ItemListControllerNode: ASDisplayNode {
                             }
                         }
                     }
+                    
+                    strongSelf.afterTransactionCompleted?()
                 }
             })
             var updateEmptyStateItem = false
@@ -855,54 +1082,49 @@ open class ItemListControllerNode: ASDisplayNode {
                     self.emptyStateNode = nil
                 }
             }
-            var updateFooterItem = false
-            if let footerItem = self.footerItem, let updatedFooterItem = transition.footerItem {
-                updateFooterItem = !footerItem.isEqual(to: updatedFooterItem)
-            } else if (self.footerItem != nil) != (transition.footerItem != nil) {
-                updateFooterItem = true
+            var updateHeaderItem = false
+            if let headerItem = self.headerItem, let updatedHeaderItem = transition.headerItem {
+                updateHeaderItem = !headerItem.isEqual(to: updatedHeaderItem)
+            } else if (self.headerItem != nil) != (transition.headerItem != nil) {
+                updateHeaderItem = true
             }
-            if updateFooterItem {
-                let hadFooter = self.footerItem != nil
-                self.footerItem = transition.footerItem
-                if let footerItem = transition.footerItem {
-                    let updatedNode = footerItem.node(current: self.footerItemNode)
-                    if let footerItemNode = self.footerItemNode, updatedNode !== footerItemNode {
-                        footerItemNode.removeFromSupernode()
+            if updateHeaderItem {
+                self.headerItem = transition.headerItem
+                if let headerItem = transition.headerItem {
+                    let updatedNode = headerItem.node(current: self.headerItemNode)
+                    if let headerItemNode = self.headerItemNode, updatedNode !== headerItemNode {
+                        headerItemNode.removeFromSupernode()
                     }
-                    if self.footerItemNode !== updatedNode {
-                        self.footerItemNode = updatedNode
+                    if self.headerItemNode !== updatedNode {
+                        self.headerItemNode = updatedNode
                         
-                        let footerHeight: CGFloat
+                        let headerHeight: CGFloat
                         if let validLayout = self.validLayout {
-                            footerHeight = updatedNode.updateLayout(layout: validLayout.0, transition: .immediate)
+                            headerHeight = updatedNode.updateLayout(layout: validLayout.0, transition: .immediate)
                         } else {
-                            footerHeight = 100.0
+                            headerHeight = 100.0
                         }
+                        let _ = headerHeight
                         self.addSubnode(updatedNode)
-                        
-                        if !hadFooter && !transition.firstTime {
-                            updatedNode.layer.animatePosition(from: CGPoint(x: 0.0, y: footerHeight), to: .zero, duration: 0.25, additive: true)
-                        }
                     }
-                } else if let footerItemNode = self.footerItemNode {
-                    let footerHeight: CGFloat
+                } else if let headerItemNode = self.headerItemNode {
+                    let headerHeight: CGFloat
                     if let validLayout = self.validLayout {
-                        footerHeight = footerItemNode.updateLayout(layout: validLayout.0, transition: .immediate)
+                        headerHeight = headerItemNode.updateLayout(layout: validLayout.0, transition: .immediate)
                     } else {
-                        footerHeight = 100.0
+                        headerHeight = 100.0
                     }
-                    footerItemNode.layer.animatePosition(from: .zero, to: CGPoint(x: 0.0, y: footerHeight), duration: 0.25, removeOnCompletion: false, additive: true, completion: { [weak footerItemNode] _ in
-                        footerItemNode?.removeFromSupernode()
-                    })
-                    self.footerItemNode = nil
+                    let _ = headerHeight
+                    headerItemNode.removeFromSupernode()
+                    self.headerItemNode = nil
                 }
             }
             self.listNode.scrollEnabled = transition.scrollEnabled
             
             if updateSearchItem {
                 self.requestLayout?(.animated(duration: 0.3, curve: .spring))
-            } else if updateToolbarItem || updateFooterItem, let (layout, navigationBarHeight, additionalInsets) = self.validLayout {
-                self.containerLayoutUpdated(layout, navigationBarHeight: navigationBarHeight, transition: .animated(duration: 0.3, curve: .spring), additionalInsets: additionalInsets)
+            } else if updateToolbarItem || updateHeaderItem || updateFooterItem, let (layout, navigationBarHeight, additionalInsets) = self.validLayout {
+                self.containerLayoutUpdated(layout, navigationBarHeight: navigationBarHeight, transition: updateHeaderItem ? .immediate : .animated(duration: 0.3, curve: .spring), additionalInsets: additionalInsets)
             }
         }
     }

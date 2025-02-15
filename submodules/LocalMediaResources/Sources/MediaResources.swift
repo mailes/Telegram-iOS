@@ -7,24 +7,28 @@ import PersistentStringHash
 public final class VideoMediaResourceAdjustments: PostboxCoding, Equatable {
     public let data: MemoryBuffer
     public let digest: MemoryBuffer
+    public let isStory: Bool
     
-    public init(data: MemoryBuffer, digest: MemoryBuffer) {
+    public init(data: MemoryBuffer, digest: MemoryBuffer, isStory: Bool = false) {
         self.data = data
         self.digest = digest
+        self.isStory = isStory
     }
     
     public init(decoder: PostboxDecoder) {
         self.data = decoder.decodeBytesForKey("d")!
         self.digest = decoder.decodeBytesForKey("h")!
+        self.isStory = decoder.decodeBoolForKey("s", orElse: false)
     }
     
     public func encode(_ encoder: PostboxEncoder) {
         encoder.encodeBytes(self.data, forKey: "d")
         encoder.encodeBytes(self.digest, forKey: "h")
+        encoder.encodeBool(self.isStory, forKey: "s")
     }
     
     public static func ==(lhs: VideoMediaResourceAdjustments, rhs: VideoMediaResourceAdjustments) -> Bool {
-        return lhs.data == rhs.data && lhs.digest == rhs.digest
+        return lhs.data == rhs.data && lhs.digest == rhs.digest && lhs.isStory == rhs.isStory
     }
 }
 
@@ -157,7 +161,7 @@ public final class LocalFileVideoMediaResource: TelegramMediaResource {
     }
     
     public let randomId: Int64
-    public let path: String
+    public let paths: [String]
     public let adjustments: VideoMediaResourceAdjustments?
     
     public var headerSize: Int32 {
@@ -166,19 +170,30 @@ public final class LocalFileVideoMediaResource: TelegramMediaResource {
     
     public init(randomId: Int64, path: String, adjustments: VideoMediaResourceAdjustments?) {
         self.randomId = randomId
-        self.path = path
+        self.paths = [path]
+        self.adjustments = adjustments
+    }
+    
+    public init(randomId: Int64, paths: [String], adjustments: VideoMediaResourceAdjustments?) {
+        self.randomId = randomId
+        self.paths = paths
         self.adjustments = adjustments
     }
     
     public required init(decoder: PostboxDecoder) {
         self.randomId = decoder.decodeInt64ForKey("i", orElse: 0)
-        self.path = decoder.decodeStringForKey("p", orElse: "")
+        let paths = decoder.decodeStringArrayForKey("ps")
+        if !paths.isEmpty {
+            self.paths = paths
+        } else {
+            self.paths = [decoder.decodeStringForKey("p", orElse: "")]
+        }
         self.adjustments = decoder.decodeObjectForKey("a", decoder: { VideoMediaResourceAdjustments(decoder: $0) }) as? VideoMediaResourceAdjustments
     }
     
     public func encode(_ encoder: PostboxEncoder) {
         encoder.encodeInt64(self.randomId, forKey: "i")
-        encoder.encodeString(self.path, forKey: "p")
+        encoder.encodeStringArray(self.paths, forKey: "ps")
         if let adjustments = self.adjustments {
             encoder.encodeObject(adjustments, forKey: "a")
         } else {
@@ -192,7 +207,7 @@ public final class LocalFileVideoMediaResource: TelegramMediaResource {
     
     public func isEqual(to: MediaResource) -> Bool {
         if let to = to as? LocalFileVideoMediaResource {
-            return self.randomId == to.randomId && self.path == to.path && self.adjustments == to.adjustments
+            return self.randomId == to.randomId && self.paths == to.paths && self.adjustments == to.adjustments
         } else {
             return false
         }
@@ -216,6 +231,11 @@ public struct PhotoLibraryMediaResourceId {
     }
 }
 
+public enum MediaImageFormat: Int32 {
+    case jpeg
+    case jxl
+}
+
 public class PhotoLibraryMediaResource: TelegramMediaResource {
     public var size: Int64? {
         return nil
@@ -223,20 +243,52 @@ public class PhotoLibraryMediaResource: TelegramMediaResource {
     
     public let localIdentifier: String
     public let uniqueId: Int64
+    public let width: Int32?
+    public let height: Int32?
+    public let format: MediaImageFormat?
+    public let quality: Int32?
     
-    public init(localIdentifier: String, uniqueId: Int64) {
+    public init(localIdentifier: String, uniqueId: Int64, width: Int32? = nil, height: Int32? = nil, format: MediaImageFormat? = nil, quality: Int32? = nil) {
         self.localIdentifier = localIdentifier
         self.uniqueId = uniqueId
+        self.width = width
+        self.height = height
+        self.format = format
+        self.quality = quality
     }
     
     public required init(decoder: PostboxDecoder) {
         self.localIdentifier = decoder.decodeStringForKey("i", orElse: "")
         self.uniqueId = decoder.decodeInt64ForKey("uid", orElse: 0)
+        self.width = decoder.decodeOptionalInt32ForKey("w")
+        self.height = decoder.decodeOptionalInt32ForKey("h")
+        self.format = decoder.decodeOptionalInt32ForKey("f").flatMap(MediaImageFormat.init(rawValue:))
+        self.quality = decoder.decodeOptionalInt32ForKey("q")
     }
     
     public func encode(_ encoder: PostboxEncoder) {
         encoder.encodeString(self.localIdentifier, forKey: "i")
         encoder.encodeInt64(self.uniqueId, forKey: "uid")
+        if let width = self.width {
+            encoder.encodeInt32(width, forKey: "w")
+        } else {
+            encoder.encodeNil(forKey: "w")
+        }
+        if let height = self.height {
+            encoder.encodeInt32(height, forKey: "h")
+        } else {
+            encoder.encodeNil(forKey: "h")
+        }
+        if let format = self.format {
+            encoder.encodeInt32(format.rawValue, forKey: "f")
+        } else {
+            encoder.encodeNil(forKey: "f")
+        }
+        if let quality = self.quality {
+            encoder.encodeInt32(quality, forKey: "q")
+        } else {
+            encoder.encodeNil(forKey: "q")
+        }
     }
     
     public var id: MediaResourceId {
@@ -245,7 +297,25 @@ public class PhotoLibraryMediaResource: TelegramMediaResource {
     
     public func isEqual(to: MediaResource) -> Bool {
         if let to = to as? PhotoLibraryMediaResource {
-            return self.localIdentifier == to.localIdentifier && self.uniqueId == to.uniqueId
+            if self.localIdentifier != to.localIdentifier {
+                return false
+            }
+            if self.uniqueId != to.uniqueId {
+                return false
+            }
+            if self.width != to.width {
+                return false
+            }
+            if self.height != to.height {
+                return false
+            }
+            if self.format != to.format {
+                return false
+            }
+            if self.quality != to.quality {
+                return false
+            }
+            return true
         } else {
             return false
         }

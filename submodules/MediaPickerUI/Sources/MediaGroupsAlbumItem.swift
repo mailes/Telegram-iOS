@@ -140,7 +140,6 @@ class MediaGroupsAlbumItemNode: ListViewItemNode {
     init() {
         self.backgroundNode = ASDisplayNode()
         self.backgroundNode.isLayerBacked = true
-        self.backgroundNode.backgroundColor = .white
         
         self.topStripeNode = ASDisplayNode()
         self.topStripeNode.isLayerBacked = true
@@ -226,7 +225,6 @@ class MediaGroupsAlbumItemNode: ListViewItemNode {
                     if let _ = updatedTheme {
                         strongSelf.topStripeNode.backgroundColor = item.presentationData.theme.list.itemPlainSeparatorColor
                         strongSelf.bottomStripeNode.backgroundColor = item.presentationData.theme.list.itemPlainSeparatorColor
-                        strongSelf.backgroundNode.backgroundColor = item.presentationData.theme.list.plainBackgroundColor
                         strongSelf.highlightedBackgroundNode.backgroundColor = item.presentationData.theme.list.itemHighlightedBackgroundColor
                         
                         strongSelf.iconNode.image = generateTintedImage(image: item.icon?.image, color: item.presentationData.theme.list.itemAccentColor)
@@ -314,7 +312,7 @@ class MediaGroupsAlbumItemNode: ListViewItemNode {
         }
     }
     
-    override func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
+    override func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.4)
     }
     

@@ -18,7 +18,7 @@ public enum PresentationContextType {
 
 public final class PresentationContext {
     private var _view: UIView?
-    var view: UIView? {
+    public var view: UIView? {
         get {
             return self._view
         } set(value) {
@@ -52,7 +52,12 @@ public final class PresentationContext {
         return self.view != nil && self.layout != nil
     }
     
-    private(set) var controllers: [(ContainableController, PresentationSurfaceLevel)] = []
+    public private(set) var controllers: [(ContainableController, PresentationSurfaceLevel)] = [] {
+        didSet {
+            self.controllersUpdated(self.controllers)
+        }
+    }
+    public var controllersUpdated: ([(ContainableController, PresentationSurfaceLevel)]) -> Void = { _ in }
     
     private var presentationDisposables = DisposableSet()
     
@@ -121,6 +126,9 @@ public final class PresentationContext {
     
     private func layoutForController(containerLayout: ContainerViewLayout, controller: ContainableController) -> (ContainerViewLayout, CGRect) {
         return (containerLayout, CGRect(origin: CGPoint(), size: containerLayout.size))
+    }
+    
+    public init() {
     }
     
     public func present(_ controller: ContainableController, on level: PresentationSurfaceLevel, blockInteraction: Bool = false, completion: @escaping () -> Void) {
@@ -306,7 +314,7 @@ public final class PresentationContext {
         UIAccessibility.post(notification: UIAccessibility.Notification.screenChanged, argument: nil)
     }
     
-    func hitTest(view: UIView, point: CGPoint, with event: UIEvent?) -> UIView? {
+    public func hitTest(view: UIView, point: CGPoint, with event: UIEvent?) -> UIView? {
         for (controller, _) in self.controllers.reversed() {
             if controller.isViewLoaded {
                 if let result = controller.view.hitTest(view.convert(point, to: controller.view), with: event) {

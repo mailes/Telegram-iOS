@@ -28,8 +28,8 @@ func apiEntitiesFromMessageTextEntities(_ entities: [MessageTextEntity], associa
                 apiEntities.append(.messageEntityItalic(offset: offset, length: length))
             case .Code:
                 apiEntities.append(.messageEntityCode(offset: offset, length: length))
-            case .Pre:
-                apiEntities.append(.messageEntityPre(offset: offset, length: length, language: ""))
+            case let .Pre(language):
+                apiEntities.append(.messageEntityPre(offset: offset, length: length, language: language ?? ""))
             case let .TextUrl(url):
                 apiEntities.append(.messageEntityTextUrl(offset: offset, length: length, url: url))
             case let .TextMention(peerId):
@@ -40,8 +40,12 @@ func apiEntitiesFromMessageTextEntities(_ entities: [MessageTextEntity], associa
                 break
             case .Strikethrough:
                 apiEntities.append(.messageEntityStrike(offset: offset, length: length))
-            case .BlockQuote:
-                apiEntities.append(.messageEntityBlockquote(offset: offset, length: length))
+            case let .BlockQuote(isCollapsed):
+                var flags: Int32 = 0
+                if isCollapsed {
+                    flags |= 1 << 0
+                }
+                apiEntities.append(.messageEntityBlockquote(flags: flags, offset: offset, length: length))
             case .Underline:
                 apiEntities.append(.messageEntityUnderline(offset: offset, length: length))
             case .BankCard:

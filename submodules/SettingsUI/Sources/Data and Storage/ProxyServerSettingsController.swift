@@ -2,7 +2,6 @@ import Foundation
 import UIKit
 import Display
 import SwiftSignalKit
-import Postbox
 import TelegramCore
 import MtProtoKit
 import TelegramPresentationData
@@ -27,7 +26,7 @@ private func shareLink(for server: ProxyServerSettings) -> String {
     return link
 }
 
-private final class proxyServerSettingsControllerArguments {
+private final class ProxyServerSettingsControllerArguments {
     let updateState: ((ProxyServerSettingsControllerState) -> ProxyServerSettingsControllerState) -> Void
     let share: () -> Void
     let usePasteboardSettings: () -> Void
@@ -114,7 +113,7 @@ private enum ProxySettingsEntry: ItemListNodeEntry {
     }
     
     func item(presentationData: ItemListPresentationData, arguments: Any) -> ListViewItem {
-        let arguments = arguments as! proxyServerSettingsControllerArguments
+        let arguments = arguments as! ProxyServerSettingsControllerArguments
         switch self {
             case let .usePasteboardSettings(_, title):
                 return ItemListActionItem(presentationData: presentationData, title: title, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: {
@@ -159,7 +158,7 @@ private enum ProxySettingsEntry: ItemListNodeEntry {
             case let .credentialsHeader(_, text):
                 return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
             case let .credentialsUsername(_, _, placeholder, text):
-                return ItemListSingleLineInputItem(presentationData: presentationData, title: NSAttributedString(), text: text, placeholder: placeholder, sectionId: self.section, textUpdated: { value in
+                return ItemListSingleLineInputItem(context: nil, presentationData: presentationData, title: NSAttributedString(), text: text, placeholder: placeholder, sectionId: self.section, textUpdated: { value in
                     arguments.updateState { current in
                         var state = current
                         state.username = value
@@ -266,10 +265,10 @@ private func proxyServerSettings(with state: ProxyServerSettingsControllerState)
 
 public func proxyServerSettingsController(context: AccountContext, currentSettings: ProxyServerSettings? = nil) -> ViewController {
     let presentationData = context.sharedContext.currentPresentationData.with { $0 }
-    return proxyServerSettingsController(context: context, presentationData: presentationData, updatedPresentationData: context.sharedContext.presentationData, accountManager: context.sharedContext.accountManager, postbox: context.account.postbox, network: context.account.network, currentSettings: currentSettings)
+    return proxyServerSettingsController(sharedContext: context.sharedContext, context: context, presentationData: presentationData, updatedPresentationData: context.sharedContext.presentationData, accountManager: context.sharedContext.accountManager, network: context.account.network, currentSettings: currentSettings)
 }
 
-func proxyServerSettingsController(context: AccountContext? = nil, presentationData: PresentationData, updatedPresentationData: Signal<PresentationData, NoError>, accountManager: AccountManager<TelegramAccountManagerTypes>, postbox: Postbox, network: Network, currentSettings: ProxyServerSettings?) -> ViewController {
+func proxyServerSettingsController(sharedContext: SharedAccountContext, context: AccountContext? = nil, presentationData: PresentationData, updatedPresentationData: Signal<PresentationData, NoError>, accountManager: AccountManager<TelegramAccountManagerTypes>, network: Network, currentSettings: ProxyServerSettings?) -> ViewController {
     var currentMode: ProxyServerSettingsControllerMode = .socks5
     var currentUsername: String?
     var currentPassword: String?
@@ -286,7 +285,7 @@ func proxyServerSettingsController(context: AccountContext? = nil, presentationD
                 currentMode = .mtp
         }
     } else {
-        if let proxy = parseProxyUrl(UIPasteboard.general.string ?? "") {
+        if let proxy = parseProxyUrl(sharedContext: sharedContext, url: UIPasteboard.general.string ?? "") {
             if let secret = proxy.secret, let parsedSecret = MTProxySecret.parseData(secret) {
                 pasteboardSettings = ProxyServerSettings(host: proxy.host, port: proxy.port, connection: .mtp(secret: parsedSecret.serialize()))
             } else {
@@ -307,7 +306,7 @@ func proxyServerSettingsController(context: AccountContext? = nil, presentationD
     
     var shareImpl: (() -> Void)?
     
-    let arguments = proxyServerSettingsControllerArguments(updateState: { f in
+    let arguments = ProxyServerSettingsControllerArguments(updateState: { f in
         updateState(f)
     }, share: {
         shareImpl?()

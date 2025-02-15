@@ -204,7 +204,7 @@ private enum UploadedThemeDataContent {
 }
 
 private func uploadedTheme(postbox: Postbox, network: Network, resource: MediaResource) -> Signal<UploadedThemeData, NoError> {
-    return multipartUpload(network: network, postbox: postbox, source: .resource(.standalone(resource: resource)), encrypt: false, tag: TelegramMediaResourceFetchTag(statsCategory: .file), hintFileSize: nil, hintFileIsLarge: false, forceNoBigParts: false)
+    return multipartUpload(network: network, postbox: postbox, source: .resource(.standalone(resource: resource)), encrypt: false, tag: TelegramMediaResourceFetchTag(statsCategory: .file, userContentType: .file), hintFileSize: nil, hintFileIsLarge: false, forceNoBigParts: false)
     |> map { result -> UploadedThemeData in
         return UploadedThemeData(content: .result(result))
     }
@@ -214,7 +214,7 @@ private func uploadedTheme(postbox: Postbox, network: Network, resource: MediaRe
 }
 
 private func uploadedThemeThumbnail(postbox: Postbox, network: Network, data: Data) -> Signal<UploadedThemeData, NoError> {
-    return multipartUpload(network: network, postbox: postbox, source: .data(data), encrypt: false, tag: TelegramMediaResourceFetchTag(statsCategory: .image), hintFileSize: nil, hintFileIsLarge: false, forceNoBigParts: false)
+    return multipartUpload(network: network, postbox: postbox, source: .data(data), encrypt: false, tag: TelegramMediaResourceFetchTag(statsCategory: .image, userContentType: .image), hintFileSize: nil, hintFileIsLarge: false, forceNoBigParts: false)
     |> map { result -> UploadedThemeData in
         return UploadedThemeData(content: .result(result))
     }
@@ -258,7 +258,7 @@ private func uploadTheme(account: Account, resource: MediaResource, thumbnailDat
                             return account.network.request(Api.functions.account.uploadTheme(flags: flags, file: file, thumb: thumbnailFile, fileName: fileName, mimeType: mimeType))
                             |> mapError { _ in return UploadThemeError.generic }
                             |> mapToSignal { document -> Signal<UploadThemeResult, UploadThemeError> in
-                                if let file = telegramMediaFileFromApiDocument(document) {
+                                if let file = telegramMediaFileFromApiDocument(document, altDocuments: []) {
                                     return .single(.complete(file))
                                 } else {
                                     return .fail(.generic)

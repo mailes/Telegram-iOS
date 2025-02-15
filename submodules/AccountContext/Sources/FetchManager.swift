@@ -86,8 +86,15 @@ public struct FetchManagerPriorityKey: Comparable {
     }
 }
 
-public enum FetchManagerLocation: Hashable {
+public enum FetchManagerLocation: Hashable, CustomStringConvertible {
     case chat(PeerId)
+    
+    public var description: String {
+        switch self {
+        case let .chat(peerId):
+            return "chat:\(peerId)"
+        }
+    }
 }
 
 public enum FetchManagerForegroundDirection {
@@ -152,7 +159,7 @@ public enum FetchManagerPriority: Comparable {
 public protocol FetchManager {
     var queue: Queue { get }
     
-    func interactivelyFetched(category: FetchManagerCategory, location: FetchManagerLocation, locationKey: FetchManagerLocationKey, mediaReference: AnyMediaReference?, resourceReference: MediaResourceReference, ranges: RangeSet<Int64>, statsCategory: MediaResourceStatsCategory, elevatedPriority: Bool, userInitiated: Bool, priority: FetchManagerPriority, storeToDownloadsPeerType: MediaAutoDownloadPeerType?) -> Signal<Void, NoError>
+    func interactivelyFetched(category: FetchManagerCategory, location: FetchManagerLocation, locationKey: FetchManagerLocationKey, mediaReference: AnyMediaReference?, resourceReference: MediaResourceReference, ranges: RangeSet<Int64>, statsCategory: MediaResourceStatsCategory, elevatedPriority: Bool, userInitiated: Bool, priority: FetchManagerPriority, storeToDownloadsPeerId: EnginePeer.Id?) -> Signal<Void, NoError>
     func cancelInteractiveFetches(category: FetchManagerCategory, location: FetchManagerLocation, locationKey: FetchManagerLocationKey, resource: MediaResource)
     func cancelInteractiveFetches(resourceId: String)
     func toggleInteractiveFetchPaused(resourceId: String, isPaused: Bool)

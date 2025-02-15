@@ -22,24 +22,36 @@ public extension TelegramEngine {
             return _internal_cachedStickerPack(postbox: self.account.postbox, network: self.account.network, reference: reference, forceRemote: forceRemote)
         }
 
-        public func loadedStickerPack(reference: StickerPackReference, forceActualized: Bool) -> Signal<LoadedStickerPack, NoError> {
-            return _internal_loadedStickerPack(postbox: self.account.postbox, network: self.account.network, reference: reference, forceActualized: forceActualized)
+        public func loadedStickerPack(reference: StickerPackReference, forceActualized: Bool, ignoreCache: Bool = false) -> Signal<LoadedStickerPack, NoError> {
+            return _internal_loadedStickerPack(postbox: self.account.postbox, network: self.account.network, reference: reference, forceActualized: forceActualized, ignoreCache: ignoreCache)
         }
 
         public func randomGreetingSticker() -> Signal<FoundStickerItem?, NoError> {
             return _internal_randomGreetingSticker(account: self.account)
         }
 
-        public func searchStickers(query: String, scope: SearchStickersScope = [.installed, .remote]) -> Signal<[FoundStickerItem], NoError> {
-            return _internal_searchStickers(account: self.account, query: query, scope: scope)
+        public func searchStickers(query: String?, emoticon: [String], inputLanguageCode: String = "", scope: SearchStickersScope = [.installed, .remote]) -> Signal<(items: [FoundStickerItem], isFinalResult: Bool), NoError> {
+            return _internal_searchStickers(account: self.account, query: query, emoticon: emoticon, inputLanguageCode: inputLanguageCode, scope: scope)
+        }
+        
+        public func searchStickers(category: EmojiSearchCategories.Group, scope: SearchStickersScope = [.installed, .remote]) -> Signal<(items: [FoundStickerItem], isFinalResult: Bool), NoError> {
+            return _internal_searchStickers(account: self.account, category: category, scope: scope)
         }
 
         public func searchStickerSetsRemotely(query: String) -> Signal<FoundStickerSets, NoError> {
             return _internal_searchStickerSetsRemotely(network: self.account.network, query: query)
         }
+        
+        public func searchEmojiSetsRemotely(query: String) -> Signal<FoundStickerSets, NoError> {
+            return _internal_searchEmojiSetsRemotely(postbox: self.account.postbox, network: self.account.network, query: query)
+        }
 
         public func searchStickerSets(query: String) -> Signal<FoundStickerSets, NoError> {
             return _internal_searchStickerSets(postbox: self.account.postbox, query: query)
+        }
+        
+        public func searchEmojiSets(query: String) -> Signal<FoundStickerSets, NoError> {
+            return _internal_searchEmojiSets(postbox: self.account.postbox, query: query)
         }
 
         public func searchGifs(query: String, nextOffset: String = "") -> Signal<ChatContextResultCollection?, NoError> {
@@ -70,12 +82,40 @@ public extension TelegramEngine {
             return _internal_stickerPacksAttachedToMedia(account: self.account, media: media)
         }
         
-        public func uploadSticker(peer: Peer, resource: MediaResource, alt: String, dimensions: PixelDimensions, mimeType: String) -> Signal<UploadStickerStatus, UploadStickerError> {
-            return _internal_uploadSticker(account: self.account, peer: peer, resource: resource, alt: alt, dimensions: dimensions, mimeType: mimeType)
+        public func uploadSticker(peer: Peer, resource: MediaResource, thumbnail: MediaResource?, alt: String, dimensions: PixelDimensions, duration: Double?, mimeType: String) -> Signal<UploadStickerStatus, UploadStickerError> {
+            return _internal_uploadSticker(account: self.account, peer: peer, resource: resource, thumbnail: thumbnail, alt: alt, dimensions: dimensions, duration: duration, mimeType: mimeType)
         }
         
         public func createStickerSet(title: String, shortName: String, stickers: [ImportSticker], thumbnail: ImportSticker?, type: CreateStickerSetType, software: String?) -> Signal<CreateStickerSetStatus, CreateStickerSetError> {
             return _internal_createStickerSet(account: self.account, title: title, shortName: shortName, stickers: stickers, thumbnail: thumbnail, type: type, software: software)
+        }
+        
+        public func renameStickerSet(packReference: StickerPackReference, title: String) -> Signal<Never, RenameStickerSetError> {
+            return _internal_renameStickerSet(account: self.account, packReference: packReference, title: title)
+        }
+        
+        public func deleteStickerSet(packReference: StickerPackReference) -> Signal<Never, DeleteStickerSetError> {
+            return _internal_deleteStickerSet(account: self.account, packReference: packReference)
+        }
+        
+        public func addStickerToStickerSet(packReference: StickerPackReference, sticker: ImportSticker) -> Signal<Bool, AddStickerToSetError> {
+            return _internal_addStickerToStickerSet(account: self.account, packReference: packReference, sticker: sticker)
+        }
+        
+        public func reorderSticker(sticker: FileMediaReference, position: Int) -> Signal<Never, ReorderStickerError> {
+            return _internal_reorderSticker(account: self.account, sticker: sticker, position: position)
+        }
+        
+        public func deleteStickerFromStickerSet(sticker: FileMediaReference) -> Signal<Never, DeleteStickerError> {
+            return _internal_deleteStickerFromStickerSet(account: self.account, sticker: sticker)
+        }
+        
+        public func replaceSticker(previousSticker: FileMediaReference, sticker: ImportSticker) -> Signal<Never, ReplaceStickerError> {
+            return _internal_replaceSticker(account: self.account, previousSticker: previousSticker, sticker: sticker)
+        }
+        
+        public func getMyStickerSets() -> Signal<[(StickerPackCollectionInfo, StickerPackItem?)], NoError> {
+            return _internal_getMyStickerSets(account: self.account)
         }
         
         public func getStickerSetShortNameSuggestion(title: String) -> Signal<String?, NoError> {
@@ -103,6 +143,69 @@ public extension TelegramEngine {
         
         public func availableReactions() -> Signal<AvailableReactions?, NoError> {
             return _internal_cachedAvailableReactions(postbox: self.account.postbox)
+        }
+        
+        public func availableMessageEffects() -> Signal<AvailableMessageEffects?, NoError> {
+            return _internal_cachedAvailableMessageEffects(postbox: self.account.postbox)
+        }
+        
+        public func savedMessageTagData() -> Signal<SavedMessageTags?, NoError> {
+            return self.account.postbox.combinedView(keys: [PostboxViewKey.cachedItem(_internal_savedMessageTagsCacheKey())])
+            |> mapToSignal { views -> Signal<SavedMessageTags?, NoError> in
+                guard let views = views.views[PostboxViewKey.cachedItem(_internal_savedMessageTagsCacheKey())] as? CachedItemView else {
+                    return .single(nil)
+                }
+                guard let savedMessageTags = views.value?.get(SavedMessageTags.self) else {
+                    return .single(nil)
+                }
+                return .single(savedMessageTags)
+            }
+        }
+        
+        public func savedMessageTags() -> Signal<([SavedMessageTags.Tag], [Int64: TelegramMediaFile]), NoError> {
+            return self.account.postbox.combinedView(keys: [PostboxViewKey.cachedItem(_internal_savedMessageTagsCacheKey())])
+            |> mapToSignal { views -> Signal<([SavedMessageTags.Tag], [Int64: TelegramMediaFile]), NoError> in
+                guard let views = views.views[PostboxViewKey.cachedItem(_internal_savedMessageTagsCacheKey())] as? CachedItemView else {
+                    return .single(([], [:]))
+                }
+                guard let savedMessageTags = views.value?.get(SavedMessageTags.self) else {
+                    return .single(([], [:]))
+                }
+                return self.account.postbox.transaction { transaction -> ([SavedMessageTags.Tag], [Int64: TelegramMediaFile]) in
+                    var files: [Int64: TelegramMediaFile] = [:]
+                    for tag in savedMessageTags.tags {
+                        if case let .custom(fileId) = tag.reaction {
+                            let mediaId = MediaId(namespace: Namespaces.Media.CloudFile, id: fileId)
+                            if let file = transaction.getMedia(mediaId) as? TelegramMediaFile {
+                                files[fileId] = file
+                            }
+                        }
+                    }
+                    return (savedMessageTags.tags, files)
+                }
+            }
+        }
+        
+        private var refreshedSavedMessageTags = Atomic<Set<EnginePeer.Id?>>(value: Set())
+        public func refreshSavedMessageTags(subPeerId: EnginePeer.Id?) -> Signal<Never, NoError> {
+            var force = false
+            let _ = refreshedSavedMessageTags.modify { value in
+                var value = value
+                if !value.contains(subPeerId) {
+                    value.insert(subPeerId)
+                    force = true
+                }
+                return value
+            }
+            return synchronizeSavedMessageTags(postbox: self.account.postbox, network: self.account.network, peerId: self.account.peerId, threadId: subPeerId?.toInt64(), force: force)
+        }
+        
+        public func setSavedMessageTagTitle(reaction: MessageReaction.Reaction, title: String?) -> Signal<Never, NoError> {
+            return _internal_setSavedMessageTagTitle(account: self.account, reaction: reaction, title: title)
+        }
+        
+        public func emojiSearchCategories(kind: EmojiSearchCategories.Kind) -> Signal<EmojiSearchCategories?, NoError> {
+            return _internal_cachedEmojiSearchCategories(postbox: self.account.postbox, kind: kind)
         }
         
         public func updateQuickReaction(reaction: MessageReaction.Reaction) -> Signal<Never, NoError> {
@@ -179,10 +282,44 @@ public extension TelegramEngine {
         public func resolveInlineStickers(fileIds: [Int64]) -> Signal<[Int64: TelegramMediaFile], NoError> {
             return _internal_resolveInlineStickers(postbox: self.account.postbox, network: self.account.network, fileIds: fileIds)
         }
+        
+        public func resolveInlineStickersLocal(fileIds: [Int64]) -> Signal<[Int64: TelegramMediaFile], NoError> {
+            return _internal_resolveInlineStickersLocal(postbox: self.account.postbox, fileIds: fileIds)
+        }
+        
+        public func searchEmoji(query: String?, emoticon: [String], inputLanguageCode: String = "") -> Signal<(items: [TelegramMediaFile], isFinalResult: Bool), NoError> {
+            return _internal_searchEmoji(account: self.account, query: query, emoticon: emoticon, inputLanguageCode: inputLanguageCode)
+            |> map { items, isFinalResult -> (items: [TelegramMediaFile], isFinalResult: Bool) in
+                return (items.map(\.file), isFinalResult)
+            }
+        }
+        
+        public func searchEmoji(category: EmojiSearchCategories.Group) -> Signal<(items: [TelegramMediaFile], isFinalResult: Bool), NoError> {
+            return _internal_searchEmoji(account: self.account, query: nil, emoticon: category.identifiers, inputLanguageCode: "")
+            |> map { items, isFinalResult -> (items: [TelegramMediaFile], isFinalResult: Bool) in
+                return (items.map(\.file), isFinalResult)
+            }
+        }
+        
+        public func addRecentlyUsedSticker(fileReference: FileMediaReference) {
+            let _ = self.account.postbox.transaction({ transaction -> Void in
+                TelegramCore.addRecentlyUsedSticker(transaction: transaction, fileReference: fileReference)
+            }).start()
+        }
+        
+        public func removeRecentlyUsedSticker(fileReference: FileMediaReference) {
+            let _ = self.account.postbox.transaction({ transaction -> Void in
+                _internal_removeRecentlyUsedSticker(transaction: transaction, fileReference: fileReference)
+            }).start()
+        }
     }
 }
 
-func _internal_resolveInlineStickers(postbox: Postbox, network: Network, fileIds: [Int64]) -> Signal<[Int64: TelegramMediaFile], NoError> {
+public func _internal_resolveInlineStickers(postbox: Postbox, network: Network, fileIds: [Int64]) -> Signal<[Int64: TelegramMediaFile], NoError> {
+    if fileIds.isEmpty {
+        return .single([:])
+    }
+    
     return postbox.transaction { transaction -> [Int64: TelegramMediaFile] in
         var cachedFiles: [Int64: TelegramMediaFile] = [:]
         for fileId in fileIds {
@@ -204,25 +341,54 @@ func _internal_resolveInlineStickers(postbox: Postbox, network: Network, fileIds
             }
         }
         
-        return network.request(Api.functions.messages.getCustomEmojiDocuments(documentId: Array(unknownIds)))
-        |> map(Optional.init)
-        |> `catch` { _ -> Signal<[Api.Document]?, NoError> in
-            return .single(nil)
+        var signals: [Signal<[Api.Document]?, NoError>] = []
+        var remainingIds = Array(unknownIds)
+        while !remainingIds.isEmpty {
+            let partIdCount = min(100, remainingIds.count)
+            let partIds = remainingIds.prefix(partIdCount)
+            remainingIds.removeFirst(partIdCount)
+            signals.append(network.request(Api.functions.messages.getCustomEmojiDocuments(documentId: Array(partIds)))
+            |> map(Optional.init)
+            |> `catch` { _ -> Signal<[Api.Document]?, NoError> in
+                return .single(nil)
+            })
         }
-        |> mapToSignal { result -> Signal<[Int64: TelegramMediaFile], NoError> in
-            guard let result = result else {
-                return .single(cachedFiles)
-            }
+        
+        return combineLatest(signals)
+        |> mapToSignal { documentSets -> Signal<[Int64: TelegramMediaFile], NoError> in
             return postbox.transaction { transaction -> [Int64: TelegramMediaFile] in
                 var resultFiles: [Int64: TelegramMediaFile] = cachedFiles
-                for document in result {
-                    if let file = telegramMediaFileFromApiDocument(document) {
-                        resultFiles[file.fileId.id] = file
-                        transaction.storeMediaIfNotPresent(media: file)
+                for result in documentSets {
+                    if let result = result {
+                        for document in result {
+                            if let file = telegramMediaFileFromApiDocument(document, altDocuments: []) {
+                                resultFiles[file.fileId.id] = file
+                                transaction.storeMediaIfNotPresent(media: file)
+                            }
+                        }
                     }
                 }
                 return resultFiles
             }
         }
+    }
+}
+
+func _internal_resolveInlineStickersLocal(postbox: Postbox, fileIds: [Int64]) -> Signal<[Int64: TelegramMediaFile], NoError> {
+    if fileIds.isEmpty {
+        return .single([:])
+    }
+    
+    return postbox.transaction { transaction -> [Int64: TelegramMediaFile] in
+        var cachedFiles: [Int64: TelegramMediaFile] = [:]
+        for fileId in fileIds {
+            if let file = transaction.getMedia(MediaId(namespace: Namespaces.Media.CloudFile, id: fileId)) as? TelegramMediaFile {
+                cachedFiles[fileId] = file
+            }
+        }
+        return cachedFiles
+    }
+    |> mapToSignal { cachedFiles -> Signal<[Int64: TelegramMediaFile], NoError> in
+        return .single(cachedFiles)
     }
 }

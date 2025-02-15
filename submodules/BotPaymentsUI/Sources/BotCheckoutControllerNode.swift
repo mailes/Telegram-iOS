@@ -23,14 +23,16 @@ import Markdown
 
 final class BotCheckoutControllerArguments {
     fileprivate let account: Account
+    fileprivate let source: BotPaymentInvoiceSource
     fileprivate let openInfo: (BotCheckoutInfoControllerFocus) -> Void
     fileprivate let openPaymentMethod: () -> Void
     fileprivate let openShippingMethod: () -> Void
     fileprivate let updateTip: (Int64) -> Void
     fileprivate let ensureTipInputVisible: () -> Void
     
-    fileprivate init(account: Account, openInfo: @escaping (BotCheckoutInfoControllerFocus) -> Void, openPaymentMethod: @escaping () -> Void, openShippingMethod: @escaping () -> Void, updateTip: @escaping (Int64) -> Void, ensureTipInputVisible: @escaping () -> Void) {
+    fileprivate init(account: Account, source: BotPaymentInvoiceSource, openInfo: @escaping (BotCheckoutInfoControllerFocus) -> Void, openPaymentMethod: @escaping () -> Void, openShippingMethod: @escaping () -> Void, updateTip: @escaping (Int64) -> Void, ensureTipInputVisible: @escaping () -> Void) {
         self.account = account
+        self.source = source
         self.openInfo = openInfo
         self.openPaymentMethod = openPaymentMethod
         self.openShippingMethod = openShippingMethod
@@ -245,7 +247,7 @@ enum BotCheckoutEntry: ItemListNodeEntry {
         let arguments = arguments as! BotCheckoutControllerArguments
         switch self {
             case let .header(theme, invoice, botName):
-                return BotCheckoutHeaderItem(account: arguments.account, theme: theme, invoice: invoice, botName: botName, sectionId: self.section)
+                return BotCheckoutHeaderItem(account: arguments.account, theme: theme, invoice: invoice, source: arguments.source, botName: botName, sectionId: self.section)
             case let .price(_, theme, text, value, isFinal, hasSeparator, shimmeringIndex):
                 return BotCheckoutPriceItem(theme: theme, title: text, label: value, isFinal: isFinal, hasSeparator: hasSeparator, shimmeringIndex: shimmeringIndex, sectionId: self.section)
             case let .tip(_, _, text, currency, value, numericValue, maxValue, variants):
@@ -557,7 +559,7 @@ private final class RecurrentConfirmationNode: ASDisplayNode {
         return super.hitTest(point, with: event)
     }
     
-    func update(presentationData: PresentationData, botName: String, width: CGFloat, sideInset: CGFloat) -> CGFloat {
+    func update(presentationData: PresentationData, botName: String, isRecurrent: Bool, width: CGFloat, sideInset: CGFloat) -> CGFloat {
         let spacing: CGFloat = 16.0
         let topInset: CGFloat = 8.0
         
@@ -575,10 +577,10 @@ private final class RecurrentConfirmationNode: ASDisplayNode {
         
         let checkSize = CGSize(width: 22.0, height: 22.0)
         
-        self.textNode.linkHighlightColor = presentationData.theme.list.itemAccentColor.withAlphaComponent(0.3)
+        self.textNode.linkHighlightColor = presentationData.theme.list.itemAccentColor.withAlphaComponent(0.2)
         
         let attributedText = parseMarkdownIntoAttributedString(
-            presentationData.strings.Bot_AccepRecurrentInfo(botName).string,
+            isRecurrent ? presentationData.strings.Bot_AccepRecurrentInfo(botName).string : presentationData.strings.Bot_AcceptTermsInfo(botName).string,
             attributes: MarkdownAttributes(
                 body: MarkdownAttributeSet(font: Font.regular(13.0), textColor: presentationData.theme.list.freeTextColor),
                 bold: MarkdownAttributeSet(font: Font.semibold(13.0), textColor: presentationData.theme.list.freeTextColor),
@@ -617,7 +619,7 @@ private final class ActionButtonPanelNode: ASDisplayNode {
         var height = max(layout.intrinsicInsets.bottom, layout.inputHeight ?? 0.0) + bottomPanelVerticalInset * 2.0 + BotCheckoutActionButton.height
         var actionButtonOffset: CGFloat = bottomPanelVerticalInset
         
-        if let invoice = invoice, let recurrentInfo = invoice.recurrentInfo, let botName = botName {
+        if let invoice = invoice, let termsInfo = invoice.termsInfo, let botName = botName {
             let recurrentConfirmationNode: RecurrentConfirmationNode
             if let current = self.recurrentConfirmationNode {
                 recurrentConfirmationNode = current
@@ -635,9 +637,7 @@ private final class ActionButtonPanelNode: ASDisplayNode {
                 self.addSubnode(recurrentConfirmationNode)
             }
             
-            let _ = recurrentInfo
-            
-            let recurrentConfirmationHeight = recurrentConfirmationNode.update(presentationData: presentationData, botName: botName, width: layout.size.width, sideInset: layout.safeInsets.left + 33.0)
+            let recurrentConfirmationHeight = recurrentConfirmationNode.update(presentationData: presentationData, botName: botName, isRecurrent: termsInfo.isRecurrent, width: layout.size.width, sideInset: layout.safeInsets.left + 33.0)
             recurrentConfirmationNode.frame = CGRect(origin: CGPoint(), size: CGSize(width: layout.size.width, height: recurrentConfirmationHeight))
             
             actionButtonOffset += recurrentConfirmationHeight
@@ -712,7 +712,7 @@ final class BotCheckoutControllerNode: ItemListControllerNode, PKPaymentAuthoriz
         var openShippingMethodImpl: (() -> Void)?
         var ensureTipInputVisibleImpl: (() -> Void)?
         
-        let arguments = BotCheckoutControllerArguments(account: context.account, openInfo: { item in
+        let arguments = BotCheckoutControllerArguments(account: context.account, source: source, openInfo: { item in
             openInfoImpl?(item)
         }, openPaymentMethod: {
             openPaymentMethodImpl?()
@@ -774,10 +774,10 @@ final class BotCheckoutControllerNode: ItemListControllerNode, PKPaymentAuthoriz
         }
         
         self.actionButtonPanelNode.openRecurrentTerms = { [weak self] in
-            guard let strongSelf = self, let paymentForm = strongSelf.paymentFormValue, let recurrentInfo = paymentForm.invoice.recurrentInfo else {
+            guard let strongSelf = self, let paymentForm = strongSelf.paymentFormValue, let termsInfo = paymentForm.invoice.termsInfo else {
                 return
             }
-            strongSelf.context.sharedContext.openExternalUrl(context: strongSelf.context, urlContext: .generic, url: recurrentInfo.termsUrl, forceExternal: true, presentationData: context.sharedContext.currentPresentationData.with { $0 }, navigationController: nil, dismissInput: {
+            strongSelf.context.sharedContext.openExternalUrl(context: strongSelf.context, urlContext: .generic, url: termsInfo.termsUrl, forceExternal: true, presentationData: context.sharedContext.currentPresentationData.with { $0 }, navigationController: nil, dismissInput: {
                 self?.view.endEditing(true)
             })
         }
@@ -812,7 +812,7 @@ final class BotCheckoutControllerNode: ItemListControllerNode, PKPaymentAuthoriz
             }
         }
         
-        let openNewCard: (String?) -> Void = { [weak self] customUrl in
+        let openNewCard: (String?, String?) -> Void = { [weak self] customUrl, customTitle in
             if let strongSelf = self, let paymentForm = strongSelf.paymentFormValue {
                 if customUrl == nil, let nativeProvider = paymentForm.nativeProvider, nativeProvider.name == "stripe" {
                     guard let paramsData = nativeProvider.params.data(using: .utf8) else {
@@ -903,10 +903,17 @@ final class BotCheckoutControllerNode: ItemListControllerNode, PKPaymentAuthoriz
                     guard let publicToken = nativeParams["public_token"] as? String else {
                         return
                     }
+                    
+                    var customTokenizeUrl: String?
+                    if let value = nativeParams["public_token"] as? String, let url = URL(string: value), let host = url.host {
+                        if url.scheme == "https" && (host == "smart-glocal.com" || host.hasSuffix(".smart-glocal.com")) {
+                            customTokenizeUrl = value
+                        }
+                    }
 
                     var dismissImpl: (() -> Void)?
                     let canSave = paymentForm.canSaveCredentials || paymentForm.passwordMissing
-                    let controller = BotCheckoutNativeCardEntryController(context: strongSelf.context, provider: .smartglobal(isTesting: paymentForm.invoice.isTest, publicToken: publicToken), completion: { method in
+                    let controller = BotCheckoutNativeCardEntryController(context: strongSelf.context, provider: .smartglobal(isTesting: paymentForm.invoice.isTest, publicToken: publicToken, customTokenizeUrl: customTokenizeUrl), completion: { method in
                         guard let strongSelf = self else {
                             return
                         }
@@ -963,7 +970,13 @@ final class BotCheckoutControllerNode: ItemListControllerNode, PKPaymentAuthoriz
                     strongSelf.present(controller, ViewControllerPresentationArguments(presentationAnimation: .modalSheet))
                 } else {
                     var dismissImpl: (() -> Void)?
-                    let controller = BotCheckoutWebInteractionController(context: context, url: customUrl ?? paymentForm.url, intent: .addPaymentMethod({ [weak self] token in
+                    let url: String
+                    if let customUrl {
+                        url = customUrl
+                    } else {
+                        url = paymentForm.url ?? ""
+                    }
+                    let controller = BotCheckoutWebInteractionController(context: context, url: url, intent: .addPaymentMethod(customTitle: customTitle, completion: { [weak self] token in
                         dismissImpl?()
                         
                         guard let strongSelf = self else {
@@ -1062,14 +1075,14 @@ final class BotCheckoutControllerNode: ItemListControllerNode, PKPaymentAuthoriz
                 strongSelf.controller?.view.endEditing(true)
                 let methods = availablePaymentMethods(form: paymentForm, current: strongSelf.currentPaymentMethod)
                 if methods.isEmpty {
-                    openNewCard(nil)
+                    openNewCard(nil, nil)
                 } else {
                     strongSelf.present(BotCheckoutPaymentMethodSheetController(context: strongSelf.context, currentMethod: strongSelf.currentPaymentMethod, methods: methods, applyValue: { method in
                         applyPaymentMethod(method)
                     }, newCard: {
-                        openNewCard(nil)
-                    }, otherMethod: { url in
-                        openNewCard(url)
+                        openNewCard(nil, nil)
+                    }, otherMethod: { url, title in
+                        openNewCard(url, title)
                     }), ViewControllerPresentationArguments(presentationAnimation: .modalSheet))
                 }
             }
@@ -1116,7 +1129,7 @@ final class BotCheckoutControllerNode: ItemListControllerNode, PKPaymentAuthoriz
                 
                 strongSelf.updateActionButton()
             }
-        })
+        }).strict()
 
         self.addSubnode(self.actionButtonPanelNode)
         self.actionButtonPanelNode.addSubnode(self.actionButtonPanelSeparator)
@@ -1140,7 +1153,7 @@ final class BotCheckoutControllerNode: ItemListControllerNode, PKPaymentAuthoriz
                     strongSelf.passwordTip = hint
                 }
             }
-        })
+        }).strict()
         
         self.actionButtonPanelSeparator.backgroundColor = self.presentationData.theme.rootController.navigationBar.separatorColor
         self.actionButtonPanelNode.backgroundColor = presentationData.theme.rootController.navigationBar.opaqueBackgroundColor
@@ -1189,7 +1202,7 @@ final class BotCheckoutControllerNode: ItemListControllerNode, PKPaymentAuthoriz
         if let paymentForm = self.paymentFormValue, totalAmount > 0 {
             payString = self.presentationData.strings.Checkout_PayPrice(formatCurrencyAmount(totalAmount, currency: paymentForm.invoice.currency)).string
             
-            if let _ = paymentForm.invoice.recurrentInfo {
+            if let _ = paymentForm.invoice.termsInfo {
                 if !self.actionButtonPanelNode.isAccepted {
                     isButtonEnabled = false
                 }
@@ -1376,6 +1389,9 @@ final class BotCheckoutControllerNode: ItemListControllerNode, PKPaymentAuthoriz
                     }
                     
                     let botPeerId = paymentForm.paymentBotId
+                    guard let botPeerId else {
+                        return
+                    }
                     let _ = (context.engine.data.get(
                         TelegramEngine.EngineData.Item.Peer.Peer(id: botPeerId)
                     )
@@ -1447,15 +1463,15 @@ final class BotCheckoutControllerNode: ItemListControllerNode, PKPaymentAuthoriz
             }
         }
         
-        if !liabilityNoticeAccepted {
-            let botPeer: Signal<EnginePeer?, NoError> = context.engine.data.get(
-                TelegramEngine.EngineData.Item.Peer.Peer(id: paymentForm.paymentBotId)
+        if !liabilityNoticeAccepted, let paymentBotId = paymentForm.paymentBotId {
+            let botPeer: Signal<EnginePeer?, NoError> = self.context.engine.data.get(
+                TelegramEngine.EngineData.Item.Peer.Peer(id: paymentBotId)
             )
-            let providerPeer: Signal<EnginePeer?, NoError> = context.engine.data.get(
-                TelegramEngine.EngineData.Item.Peer.Peer(id: paymentForm.providerId)
-            )
+            let providerPeer: Signal<EnginePeer?, NoError> = paymentForm.providerId.flatMap { 
+                self.context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: $0))
+            } ?? .single(nil)
             let _ = (combineLatest(
-                ApplicationSpecificNotice.getBotPaymentLiability(accountManager: self.context.sharedContext.accountManager, peerId: paymentForm.paymentBotId),
+                ApplicationSpecificNotice.getBotPaymentLiability(accountManager: self.context.sharedContext.accountManager, peerId: paymentBotId),
                 botPeer,
                 providerPeer
             )
@@ -1476,7 +1492,7 @@ final class BotCheckoutControllerNode: ItemListControllerNode, PKPaymentAuthoriz
                         
                         strongSelf.present(textAlertController(context: strongSelf.context, title: strongSelf.presentationData.strings.Checkout_LiabilityAlertTitle, text: paymentText, actions: [TextAlertAction(type: .genericAction, title: strongSelf.presentationData.strings.Common_Cancel, action: { }), TextAlertAction(type: .defaultAction, title: strongSelf.presentationData.strings.Common_OK, action: {
                             if let strongSelf = self {
-                                let _ = ApplicationSpecificNotice.setBotPaymentLiability(accountManager: strongSelf.context.sharedContext.accountManager, peerId: paymentForm.paymentBotId).start()
+                                let _ = ApplicationSpecificNotice.setBotPaymentLiability(accountManager: strongSelf.context.sharedContext.accountManager, peerId: paymentBotId).start()
                                 strongSelf.pay(savedCredentialsToken: savedCredentialsToken, liabilityNoticeAccepted: true)
                             }
                         })]), nil)
@@ -1511,7 +1527,7 @@ final class BotCheckoutControllerNode: ItemListControllerNode, PKPaymentAuthoriz
                     }
                     
                     switch result {
-                        case let .done(receiptMessageId):
+                        case let .done(receiptMessageId, _, _):
                             proceedWithCompletion(true, receiptMessageId)
                         case let .externalVerificationRequired(url):
                             strongSelf.updateActionButton()
@@ -1542,19 +1558,23 @@ final class BotCheckoutControllerNode: ItemListControllerNode, PKPaymentAuthoriz
                         applePayController.presentingViewController?.dismiss(animated: true, completion: nil)
                     }
                     
-                    let text: String
+                    let text: String?
                     switch error {
-                        case .precheckoutFailed:
-                            text = strongSelf.presentationData.strings.Checkout_ErrorPrecheckoutFailed
-                        case .paymentFailed:
-                            text = strongSelf.presentationData.strings.Checkout_ErrorPaymentFailed
-                        case .alreadyPaid:
-                            text = strongSelf.presentationData.strings.Checkout_ErrorInvoiceAlreadyPaid
-                        case .generic:
-                            text = strongSelf.presentationData.strings.Checkout_ErrorGeneric
+                    case .precheckoutFailed:
+                        text = strongSelf.presentationData.strings.Checkout_ErrorPrecheckoutFailed
+                    case .paymentFailed:
+                        text = strongSelf.presentationData.strings.Checkout_ErrorPaymentFailed
+                    case .alreadyPaid:
+                        text = strongSelf.presentationData.strings.Checkout_ErrorInvoiceAlreadyPaid
+                    case .generic:
+                        text = strongSelf.presentationData.strings.Checkout_ErrorGeneric
+                    default:
+                        text = nil
                     }
                     
-                    strongSelf.present(textAlertController(context: strongSelf.context, title: nil, text: text, actions: [TextAlertAction(type: .defaultAction, title: strongSelf.presentationData.strings.Common_OK, action: {})]), nil)
+                    if let text {
+                        strongSelf.present(textAlertController(context: strongSelf.context, title: nil, text: text, actions: [TextAlertAction(type: .defaultAction, title: strongSelf.presentationData.strings.Common_OK, action: {})]), nil)
+                    }
                     
                     strongSelf.failed()
                 }

@@ -5,7 +5,7 @@ import PackageDescription
 
 let package = Package(
     name: "OpusBinding",
-    platforms: [.macOS(.v10_12)],
+    platforms: [.macOS(.v10_13)],
     products: [
         // Products define the executables and libraries a package produces, and make them visible to other packages.
         .library(
@@ -28,8 +28,8 @@ let package = Package(
             cSettings: [
                 .headerSearchPath("PublicHeaders"),
                 .headerSearchPath("PublicHeaders/OpusBinding"),
+                .headerSearchPath("SharedHeaders/libopus/include"),
                 .headerSearchPath("Sources"),
-                .unsafeFlags(["-I../../../../core-xprojects/libopus/build/libopus/include"])
             ]),
     ]
 )

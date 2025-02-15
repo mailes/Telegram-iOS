@@ -39,14 +39,28 @@ public protocol MediaResourceFetchTag {
 public protocol MediaResourceFetchInfo {
 }
 
+public final class MediaResourceStorageLocation {
+    public let peerId: PeerId
+    public let messageId: MessageId?
+    
+    public init(peerId: PeerId, messageId: MessageId?) {
+        self.peerId = peerId
+        self.messageId = messageId
+    }
+}
+
 public struct MediaResourceFetchParameters {
     public let tag: MediaResourceFetchTag?
     public let info: MediaResourceFetchInfo?
+    public let location: MediaResourceStorageLocation?
+    public let contentType: UInt8
     public let isRandomAccessAllowed: Bool
     
-    public init(tag: MediaResourceFetchTag?, info: MediaResourceFetchInfo?, isRandomAccessAllowed: Bool) {
+    public init(tag: MediaResourceFetchTag?, info: MediaResourceFetchInfo?, location: MediaResourceStorageLocation?, contentType: UInt8, isRandomAccessAllowed: Bool) {
         self.tag = tag
         self.info = info
+        self.location = location
+        self.contentType = contentType
         self.isRandomAccessAllowed = isRandomAccessAllowed
     }
 }

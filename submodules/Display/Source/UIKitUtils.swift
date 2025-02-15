@@ -145,6 +145,20 @@ public extension UIColor {
         }
     }
     
+    var components: (r: CGFloat, g: CGFloat, b: CGFloat, a: CGFloat) {
+        var red: CGFloat = 0.0
+        var green: CGFloat = 0.0
+        var blue: CGFloat = 0.0
+        var alpha: CGFloat = 0.0
+        if self.getRed(&red, green: &green, blue: &blue, alpha: &alpha) {
+            return (red, green, blue, alpha)
+        } else if self.getWhite(&red, alpha: &alpha) {
+            return (red, red, red, alpha)
+        } else {
+            return (0.0, 0.0, 0.0, 0.0)
+        }
+    }
+    
     var lightness: CGFloat {
         var red: CGFloat = 0.0
         var green: CGFloat = 0.0
@@ -156,6 +170,30 @@ public extension UIColor {
         } else {
             return 0.0
         }
+    }
+    
+    func contrastRatio(with other: UIColor) -> CGFloat {
+        let l1 = self.lightness
+        let l2 = other.lightness
+        return (max(l1, l2) + 0.05) / (min(l1, l2) + 0.05)
+    }
+    
+    var brightness: CGFloat {
+        var hue: CGFloat = 0.0
+        var saturation: CGFloat = 0.0
+        var brightness: CGFloat = 0.0
+        var alpha: CGFloat = 0.0
+        self.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
+        return brightness
+    }
+    
+    var saturation: CGFloat {
+        var hue: CGFloat = 0.0
+        var saturation: CGFloat = 0.0
+        var brightness: CGFloat = 0.0
+        var alpha: CGFloat = 0.0
+        self.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
+        return saturation
     }
     
     func withMultipliedBrightnessBy(_ factor: CGFloat) -> UIColor {
@@ -202,6 +240,26 @@ public extension UIColor {
         return self
     }
     
+    func multipliedWith(_ other: UIColor) -> UIColor {
+        var r1: CGFloat = 0.0
+        var r2: CGFloat = 0.0
+        var g1: CGFloat = 0.0
+        var g2: CGFloat = 0.0
+        var b1: CGFloat = 0.0
+        var b2: CGFloat = 0.0
+        var a1: CGFloat = 0.0
+        var a2: CGFloat = 0.0
+        if self.getRed(&r1, green: &g1, blue: &b1, alpha: &a1) &&
+            other.getRed(&r2, green: &g2, blue: &b2, alpha: &a2)
+        {
+            let r = r1 * r2
+            let g = g1 * g2
+            let b = b1 * b2
+            return UIColor(red: r, green: g, blue: b, alpha: 1.0)
+        }
+        return self
+    }
+    
     func blitOver(_ other: UIColor, alpha: CGFloat) -> UIColor {
         let alpha = min(1.0, max(0.0, alpha))
         
@@ -226,6 +284,35 @@ public extension UIColor {
             return UIColor(red: r, green: g, blue: b, alpha: a)
         }
         return self
+    }
+    
+    func blendOver(background: UIColor) -> UIColor {
+        let base = background
+        let blend = self
+        
+        func overlayChannel(baseChannel: CGFloat, blendChannel: CGFloat) -> CGFloat {
+            if baseChannel < 0.5 {
+                return 2 * baseChannel * blendChannel
+            } else {
+                return 1 - 2 * (1 - baseChannel) * (1 - blendChannel)
+            }
+        }
+        
+        var baseRed: CGFloat = 0, baseGreen: CGFloat = 0, baseBlue: CGFloat = 0, baseAlpha: CGFloat = 0
+        base.getRed(&baseRed, green: &baseGreen, blue: &baseBlue, alpha: &baseAlpha)
+        
+        var blendRed: CGFloat = 0, blendGreen: CGFloat = 0, blendBlue: CGFloat = 0, blendAlpha: CGFloat = 0
+        blend.getRed(&blendRed, green: &blendGreen, blue: &blendBlue, alpha: &blendAlpha)
+        
+        var red = overlayChannel(baseChannel: baseRed, blendChannel: blendRed)
+        var green = overlayChannel(baseChannel: baseGreen, blendChannel: blendGreen)
+        var blue = overlayChannel(baseChannel: baseBlue, blendChannel: blendBlue)
+        
+        red = max(0.0, min(1.0, red))
+        green = max(0.0, min(1.0, green))
+        blue = max(0.0, min(1.0, blue))
+        
+        return UIColor(red: red, green: green, blue: blue, alpha: blendAlpha).blitOver(background, alpha: 1.0)
     }
     
     func withMultipliedAlpha(_ alpha: CGFloat) -> UIColor {
@@ -399,9 +486,21 @@ public extension UIImage {
     }
 }
 
-private func makeSubtreeSnapshot(layer: CALayer, keepTransform: Bool = false) -> UIView? {
+private func makeSubtreeSnapshot(layer: CALayer, keepPortals: Bool = false, keepTransform: Bool = false) -> UIView? {
     if layer is AVSampleBufferDisplayLayer {
         return nil
+    }
+    if keepPortals && layer.description.contains("PortalLayer") {
+        let sourceView = (layer.delegate as? UIView)?.value(forKey: "sourceView") as? UIView
+        if let snapshotView = sourceView?.snapshotContentTree() {
+            let globalFrame = layer.convert(layer.bounds, to: sourceView?.layer)
+            snapshotView.frame = CGRect(origin: CGPoint(x: -globalFrame.minX, y: -globalFrame.minY), size: snapshotView.frame.size)
+            snapshotView.alpha = 1.0
+            snapshotView.tag = 0xbeef
+            return snapshotView
+        } else {
+            return nil
+        }
     }
     let view = UIView()
     view.layer.isHidden = layer.isHidden
@@ -437,21 +536,23 @@ private func makeSubtreeSnapshot(layer: CALayer, keepTransform: Bool = false) ->
     view.layer.backgroundColor = layer.backgroundColor
     if let sublayers = layer.sublayers {
         for sublayer in sublayers {
-            let subtree = makeSubtreeSnapshot(layer: sublayer, keepTransform: keepTransform)
+            let subtree = makeSubtreeSnapshot(layer: sublayer, keepPortals: keepPortals, keepTransform: keepTransform)
             if let subtree = subtree {
                 if keepTransform {
                     subtree.layer.transform = sublayer.transform
                 }
-                subtree.layer.transform = sublayer.transform
-                subtree.layer.position = sublayer.position
-                subtree.layer.bounds = sublayer.bounds
-                subtree.layer.anchorPoint = sublayer.anchorPoint
-                subtree.layer.layerTintColor = sublayer.layerTintColor
+                if subtree.tag != 0xbeef {
+                    subtree.layer.transform = sublayer.transform
+                    subtree.layer.position = sublayer.position
+                    subtree.layer.bounds = sublayer.bounds
+                    subtree.layer.anchorPoint = sublayer.anchorPoint
+                    subtree.layer.layerTintColor = sublayer.layerTintColor
+                }
                 if let maskLayer = subtree.layer.mask {
-                    maskLayer.transform = sublayer.transform
-                    maskLayer.position = sublayer.position
-                    maskLayer.bounds = sublayer.bounds
-                    maskLayer.anchorPoint = sublayer.anchorPoint
+//                    maskLayer.transform = sublayer.transform
+//                    maskLayer.position = sublayer.position
+//                    maskLayer.bounds = sublayer.bounds
+//                    maskLayer.anchorPoint = sublayer.anchorPoint
                     maskLayer.layerTintColor = sublayer.layerTintColor
                 }
                 view.addSubview(subtree)
@@ -467,33 +568,111 @@ private func makeLayerSubtreeSnapshot(layer: CALayer) -> CALayer? {
     if layer is AVSampleBufferDisplayLayer {
         return nil
     }
-    let view = CALayer()
-    view.isHidden = layer.isHidden
-    view.opacity = layer.opacity
-    view.contents = layer.contents
-    view.contentsRect = layer.contentsRect
-    view.contentsScale = layer.contentsScale
-    view.contentsCenter = layer.contentsCenter
-    view.contentsGravity = layer.contentsGravity
-    view.masksToBounds = layer.masksToBounds
-    view.cornerRadius = layer.cornerRadius
-    view.backgroundColor = layer.backgroundColor
-    view.layerTintColor = layer.layerTintColor
-    if let sublayers = layer.sublayers {
-        for sublayer in sublayers {
-            let subtree = makeLayerSubtreeSnapshot(layer: sublayer)
-            if let subtree = subtree {
-                subtree.transform = sublayer.transform
-                subtree.position = sublayer.position
-                subtree.bounds = sublayer.bounds
-                subtree.anchorPoint = sublayer.anchorPoint
-                view.addSublayer(subtree)
-            } else {
-                return nil
+    
+    if let layer = layer as? CAShapeLayer {
+        let view = CAShapeLayer()
+        view.isHidden = layer.isHidden
+        view.opacity = layer.opacity
+        view.contents = layer.contents
+        view.contentsRect = layer.contentsRect
+        view.contentsScale = layer.contentsScale
+        view.contentsCenter = layer.contentsCenter
+        view.contentsGravity = layer.contentsGravity
+        view.masksToBounds = layer.masksToBounds
+        view.cornerRadius = layer.cornerRadius
+        view.backgroundColor = layer.backgroundColor
+        view.layerTintColor = layer.layerTintColor
+        view.path = layer.path
+        view.fillColor = layer.fillColor
+        view.fillRule = layer.fillRule
+        view.strokeColor = layer.strokeColor
+        view.strokeStart = layer.strokeStart
+        view.strokeEnd = layer.strokeEnd
+        view.lineWidth = layer.lineWidth
+        view.miterLimit = layer.miterLimit
+        view.lineCap = layer.lineCap
+        view.lineJoin = layer.lineJoin
+        view.lineDashPhase = layer.lineDashPhase
+        view.lineDashPattern = layer.lineDashPattern
+        
+        if let sublayers = layer.sublayers {
+            for sublayer in sublayers {
+                let subtree = makeLayerSubtreeSnapshot(layer: sublayer)
+                if let subtree = subtree {
+                    subtree.transform = sublayer.transform
+                    subtree.position = sublayer.position
+                    subtree.bounds = sublayer.bounds
+                    subtree.anchorPoint = sublayer.anchorPoint
+                    view.addSublayer(subtree)
+                } else {
+                    return nil
+                }
             }
         }
+        return view
+    } else if let layer = layer as? CAGradientLayer {
+        let view = CAGradientLayer()
+        view.isHidden = layer.isHidden
+        view.opacity = layer.opacity
+        view.contents = layer.contents
+        view.contentsRect = layer.contentsRect
+        view.contentsScale = layer.contentsScale
+        view.contentsCenter = layer.contentsCenter
+        view.contentsGravity = layer.contentsGravity
+        view.masksToBounds = layer.masksToBounds
+        view.cornerRadius = layer.cornerRadius
+        view.backgroundColor = layer.backgroundColor
+        view.layerTintColor = layer.layerTintColor
+        view.colors = layer.colors
+        view.locations = layer.locations
+        view.startPoint = layer.startPoint
+        view.endPoint = layer.endPoint
+        view.type = layer.type
+        
+        if let sublayers = layer.sublayers {
+            for sublayer in sublayers {
+                let subtree = makeLayerSubtreeSnapshot(layer: sublayer)
+                if let subtree = subtree {
+                    subtree.transform = sublayer.transform
+                    subtree.position = sublayer.position
+                    subtree.bounds = sublayer.bounds
+                    subtree.anchorPoint = sublayer.anchorPoint
+                    view.addSublayer(subtree)
+                } else {
+                    return nil
+                }
+            }
+        }
+        return view
+    } else {
+        let view = CALayer()
+        view.isHidden = layer.isHidden
+        view.opacity = layer.opacity
+        view.contents = layer.contents
+        view.contentsRect = layer.contentsRect
+        view.contentsScale = layer.contentsScale
+        view.contentsCenter = layer.contentsCenter
+        view.contentsGravity = layer.contentsGravity
+        view.masksToBounds = layer.masksToBounds
+        view.cornerRadius = layer.cornerRadius
+        view.backgroundColor = layer.backgroundColor
+        view.layerTintColor = layer.layerTintColor
+        if let sublayers = layer.sublayers {
+            for sublayer in sublayers {
+                let subtree = makeLayerSubtreeSnapshot(layer: sublayer)
+                if let subtree = subtree {
+                    subtree.transform = sublayer.transform
+                    subtree.position = sublayer.position
+                    subtree.bounds = sublayer.bounds
+                    subtree.anchorPoint = sublayer.anchorPoint
+                    view.addSublayer(subtree)
+                } else {
+                    return nil
+                }
+            }
+        }
+        return view
     }
-    return view
 }
 
 private func makeLayerSubtreeSnapshotAsView(layer: CALayer) -> UIView? {
@@ -532,12 +711,12 @@ private func makeLayerSubtreeSnapshotAsView(layer: CALayer) -> UIView? {
 
 
 public extension UIView {
-    func snapshotContentTree(unhide: Bool = false, keepTransform: Bool = false) -> UIView? {
+    func snapshotContentTree(unhide: Bool = false, keepPortals: Bool = false, keepTransform: Bool = false) -> UIView? {
         let wasHidden = self.isHidden
         if unhide && wasHidden {
             self.isHidden = false
         }
-        let snapshot = makeSubtreeSnapshot(layer: self.layer, keepTransform: keepTransform)
+        let snapshot = makeSubtreeSnapshot(layer: self.layer, keepPortals: keepPortals, keepTransform: keepTransform)
         if unhide && wasHidden {
             self.isHidden = true
         }
@@ -573,6 +752,20 @@ public extension CALayer {
 }
 
 public extension CALayer {
+    static func blur() -> NSObject? {
+        return makeBlurFilter()
+    }
+    
+    static func luminanceToAlpha() -> NSObject? {
+        return makeLuminanceToAlphaFilter()
+    }
+    
+    static func colorInvert() -> NSObject? {
+        return makeColorInvertFilter()
+    }
+}
+
+public extension CALayer {
     var layerTintColor: CGColor? {
         get {
             if let value = self.value(forKey: "contentsMultiplyColor"), CFGetTypeID(value as CFTypeRef) == CGColor.typeID {
@@ -584,6 +777,16 @@ public extension CALayer {
         } set(value) {
             self.setValue(value, forKey: "contentsMultiplyColor")
         }
+    }
+}
+
+public extension CAEmitterCell {
+    static func createEmitterBehavior(type: String) -> NSObject {
+        let selector = ["behaviorWith", "Type:"].joined(separator: "")
+        let behaviorClass = NSClassFromString(["CA", "Emitter", "Behavior"].joined(separator: "")) as! NSObject.Type
+        let behaviorWithType = behaviorClass.method(for: NSSelectorFromString(selector))!
+        let castedBehaviorWithType = unsafeBitCast(behaviorWithType, to:(@convention(c)(Any?, Selector, Any?) -> NSObject).self)
+        return castedBehaviorWithType(behaviorClass, NSSelectorFromString(selector), type)
     }
 }
 

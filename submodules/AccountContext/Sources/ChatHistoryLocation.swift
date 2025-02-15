@@ -7,11 +7,53 @@ public enum ChatHistoryInitialSearchLocation: Equatable {
     case id(MessageId)
 }
 
+public struct MessageHistoryScrollToSubject: Equatable {
+    public struct Quote: Equatable {
+        public var string: String
+        public var offset: Int?
+        
+        public init(string: String, offset: Int?) {
+            self.string = string
+            self.offset = offset
+        }
+    }
+    
+    public var index: MessageHistoryAnchorIndex
+    public var quote: Quote?
+    public var setupReply: Bool
+    
+    public init(index: MessageHistoryAnchorIndex, quote: Quote?, setupReply: Bool = false) {
+        self.index = index
+        self.quote = quote
+        self.setupReply = setupReply
+    }
+}
+
+public struct MessageHistoryInitialSearchSubject: Equatable {
+    public struct Quote: Equatable {
+        public var string: String
+        public var offset: Int?
+        
+        public init(string: String, offset: Int?) {
+            self.string = string
+            self.offset = offset
+        }
+    }
+    
+    public var location: ChatHistoryInitialSearchLocation
+    public var quote: Quote?
+    
+    public init(location: ChatHistoryInitialSearchLocation, quote: Quote?) {
+        self.location = location
+        self.quote = quote
+    }
+}
+
 public enum ChatHistoryLocation: Equatable {
     case Initial(count: Int)
-    case InitialSearch(location: ChatHistoryInitialSearchLocation, count: Int, highlight: Bool)
+    case InitialSearch(subject: MessageHistoryInitialSearchSubject, count: Int, highlight: Bool, setupReply: Bool)
     case Navigation(index: MessageHistoryAnchorIndex, anchorIndex: MessageHistoryAnchorIndex, count: Int, highlight: Bool)
-    case Scroll(index: MessageHistoryAnchorIndex, anchorIndex: MessageHistoryAnchorIndex, sourceIndex: MessageHistoryAnchorIndex, scrollPosition: ListViewScrollPosition, animated: Bool, highlight: Bool)
+    case Scroll(subject: MessageHistoryScrollToSubject, anchorIndex: MessageHistoryAnchorIndex, sourceIndex: MessageHistoryAnchorIndex, scrollPosition: ListViewScrollPosition, animated: Bool, highlight: Bool, setupReply: Bool)
 }
 
 public struct ChatHistoryLocationInput: Equatable {

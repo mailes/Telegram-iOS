@@ -2,10 +2,10 @@ import Foundation
 import CoreText
 import AVFoundation
 
-extension Character {
+public extension Character {
     var isSimpleEmoji: Bool {
         guard let firstScalar = unicodeScalars.first else { return false }
-        if #available(iOS 10.2, *) {
+        if #available(iOS 10.2, macOS 10.12.2, *) {
             return (firstScalar.properties.isEmoji && firstScalar.value > 0x238C) || firstScalar.isEmoji
         } else {
             return firstScalar.isEmoji
@@ -13,7 +13,7 @@ extension Character {
     }
 
     var isCombinedIntoEmoji: Bool {
-        if #available(iOS 10.2, *) {
+        if #available(iOS 10.2, macOS 10.12.2, *) {
             return self.unicodeScalars.count > 1 && self.unicodeScalars.first?.properties.isEmoji ?? false
         } else {
             return self.unicodeScalars.count > 1 && self.unicodeScalars.first?.isEmoji ?? false
@@ -68,43 +68,20 @@ public extension String {
     
     var isSingleEmoji: Bool {
         return self.count == 1 && self.containsEmoji
-//        return self.emojis.count == 1 && self.containsEmoji
     }
     
     var containsEmoji: Bool {
         return self.contains { $0.isEmoji }
-        //return self.unicodeScalars.contains { $0.isEmoji }
     }
     
     var containsOnlyEmoji: Bool {
         return !self.isEmpty && !self.contains { !$0.isEmoji }
-//        guard !self.isEmpty else {
-//            return false
-//        }
-//        var nextShouldBeVariationSelector = false
-//        for scalar in self.unicodeScalars {
-//            if nextShouldBeVariationSelector {
-//                if scalar == UnicodeScalar.VariationSelector {
-//                    nextShouldBeVariationSelector = false
-//                    continue
-//                } else {
-//                    return false
-//                }
-//            }
-//            if !scalar.isEmoji && scalar.maybeEmoji {
-//                nextShouldBeVariationSelector = true
-//            }
-//            else if !scalar.isEmoji && scalar != UnicodeScalar.ZeroWidthJoiner {
-//                return false
-//            }
-//        }
-//        return !nextShouldBeVariationSelector
     }
     
     var emojis: [String] {
         var emojis: [String] = []
         self.enumerateSubstrings(in: self.startIndex ..< self.endIndex, options: .byComposedCharacterSequences) { substring, _, _, _ in
-            if let substring = substring {
+            if let substring = substring, substring.isSingleEmoji {
                 emojis.append(substring)
             }
         }

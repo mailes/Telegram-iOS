@@ -200,7 +200,7 @@ public final class SearchDisplayController {
                 
         if !self.contentNode.hasDim {
             self.backgroundNode.alpha = 1.0
-            self.backgroundNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.25, timingFunction: CAMediaTimingFunctionName.easeOut.rawValue)
+            self.backgroundNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.2, timingFunction: CAMediaTimingFunctionName.linear.rawValue)
             
             self.backgroundNode.layer.animateScale(from: 0.85, to: 1.0, duration: 0.5, timingFunction: kCAMediaTimingFunctionSpring)
         }
@@ -259,7 +259,7 @@ public final class SearchDisplayController {
     }
     
     public func deactivate(placeholder: SearchBarPlaceholderNode?, animated: Bool = true) {
-        self.searchBar.deactivate()
+        self.searchBar.deactivate(clear: false)
         
         let searchBar = self.searchBar
         if let placeholder = placeholder {
@@ -268,16 +268,20 @@ public final class SearchDisplayController {
                 searchBar?.removeFromSupernode()
             })
         } else {
-            searchBar.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.3, removeOnCompletion: false, completion: { [weak searchBar] _ in
-                searchBar?.removeFromSupernode()
+            searchBar.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.3, removeOnCompletion: false, completion: { [weak searchBar] finished in
+                if finished {
+                    searchBar?.removeFromSupernode()
+                }
             })
         }
         
         let backgroundNode = self.backgroundNode
         let contentNode = self.contentNode
         if animated {
-            backgroundNode.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.3, removeOnCompletion: false, completion: { [weak backgroundNode] _ in
-                backgroundNode?.removeFromSupernode()
+            backgroundNode.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.3, removeOnCompletion: false, completion: { [weak backgroundNode] finished in
+                if finished {
+                    backgroundNode?.removeFromSupernode()
+                }
             })
         } else {
             backgroundNode.removeFromSupernode()

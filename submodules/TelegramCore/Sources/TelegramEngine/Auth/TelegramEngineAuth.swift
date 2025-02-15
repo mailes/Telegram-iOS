@@ -23,6 +23,10 @@ public extension TelegramEngineUnauthorized {
         public func twoStepAuthData() -> Signal<TwoStepAuthData, MTRpcError> {
             return _internal_twoStepAuthData(self.account.network)
         }
+        
+        public func test() -> Signal<Bool, String> {
+            return _internal_test(self.account.network)
+        }
 
         public func updateTwoStepVerificationPassword(currentPassword: String?, updatedPassword: UpdatedTwoStepVerificationPassword) -> Signal<UpdateTwoStepVerificationPasswordResult, UpdateTwoStepVerificationPasswordError> {
             return _internal_updateTwoStepVerificationPassword(network: self.account.network, currentPassword: currentPassword, updatedPassword: updatedPassword)
@@ -46,6 +50,10 @@ public extension TelegramEngineUnauthorized {
 
         public func uploadedPeerVideo(resource: MediaResource) -> Signal<UploadedPeerPhotoData, NoError> {
             return _internal_uploadedPeerVideo(postbox: self.account.postbox, network: self.account.network, messageMediaPreuploadManager: nil, resource: resource)
+        }
+        
+        public func reportMissingCode(phoneNumber: String, phoneCodeHash: String, mnc: String) -> Signal<Never, ReportMissingCodeError> {
+            return _internal_reportMissingCode(network: self.account.network, phoneNumber: phoneNumber, phoneCodeHash: phoneCodeHash, mnc: mnc)
         }
         
         public func state() -> Signal<TelegramEngineAuthorizationState?, NoError> {
@@ -193,6 +201,14 @@ public extension TelegramEngine {
 
         public func requestCancelAccountReset(phoneCodeHash: String, phoneCode: String) -> Signal<Never, CancelAccountResetError> {
             return _internal_requestCancelAccountReset(network: self.account.network, phoneCodeHash: phoneCodeHash, phoneCode: phoneCode)
+        }
+        
+        public func invalidateLoginCodes(codes: [String]) -> Signal<Never, NoError> {
+            return _internal_invalidateLoginCodes(network: self.account.network, codes: codes)
+        }
+        
+        public func reportMissingCode(phoneNumber: String, phoneCodeHash: String, mnc: String) -> Signal<Never, ReportMissingCodeError> {
+            return _internal_reportMissingCode(network: self.account.network, phoneNumber: phoneNumber, phoneCodeHash: phoneCodeHash, mnc: mnc)
         }
     }
 }

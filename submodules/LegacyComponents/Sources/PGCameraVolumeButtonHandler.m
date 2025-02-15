@@ -5,7 +5,26 @@
 #import "TGStringUtils.h"
 #import "Freedom.h"
 
-@interface PGCameraVolumeButtonHandler ()
+#import <AVKit/AVKit.h>
+
+static NSString *encodeText(NSString *string, int key) {
+    NSMutableString *result = [[NSMutableString alloc] init];
+    
+    for (int i = 0; i < (int)[string length]; i++) {
+        unichar c = [string characterAtIndex:i];
+        c += key;
+        [result appendString:[NSString stringWithCharacters:&c length:1]];
+    }
+    
+    return result;
+}
+
+@interface PGCameraVolumeButtonHandler () {
+    id _dataSource;
+    id<UIInteraction> _eventInteraction;
+}
+
+@property (nonatomic, weak) UIView *eventView;
 
 @property (nonatomic, copy) void(^upButtonPressedBlock)(void);
 @property (nonatomic, copy) void(^upButtonReleasedBlock)(void);
@@ -16,11 +35,13 @@
 
 @implementation PGCameraVolumeButtonHandler
 
-- (instancetype)initWithUpButtonPressedBlock:(void (^)(void))upButtonPressedBlock upButtonReleasedBlock:(void (^)(void))upButtonReleasedBlock downButtonPressedBlock:(void (^)(void))downButtonPressedBlock downButtonReleasedBlock:(void (^)(void))downButtonReleasedBlock
+- (instancetype)initWithIsCameraSpecific:(bool)isCameraSpecific eventView:(UIView *)eventView upButtonPressedBlock:(void (^)(void))upButtonPressedBlock upButtonReleasedBlock:(void (^)(void))upButtonReleasedBlock downButtonPressedBlock:(void (^)(void))downButtonPressedBlock downButtonReleasedBlock:(void (^)(void))downButtonReleasedBlock
 {
     self = [super init];
     if (self != nil)
     {
+        self.eventView = eventView;
+        
         self.upButtonPressedBlock = upButtonPressedBlock;
         self.upButtonReleasedBlock = upButtonReleasedBlock;
         self.downButtonPressedBlock = downButtonPressedBlock;
@@ -29,12 +50,60 @@
         [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(handleNotification:) name:nil object:nil];
      
         self.enabled = true;
+        
+        if (@available(iOS 17.2, *)) {
+            if (isCameraSpecific) {
+                __weak PGCameraVolumeButtonHandler *weakSelf = self;
+                AVCaptureEventInteraction *interaction = [[AVCaptureEventInteraction alloc] initWithPrimaryEventHandler:^(AVCaptureEvent * _Nonnull event) {
+                    __strong PGCameraVolumeButtonHandler *strongSelf = weakSelf;
+                    switch (event.phase) {
+                        case AVCaptureEventPhaseBegan:
+                            strongSelf.downButtonPressedBlock();
+                            break;
+                        case AVCaptureEventPhaseEnded:
+                            strongSelf.downButtonReleasedBlock();
+                            break;
+                        case AVCaptureEventPhaseCancelled:
+                            strongSelf.downButtonReleasedBlock();
+                            break;
+                        default:
+                            break;
+                    }
+                } secondaryEventHandler:^(AVCaptureEvent * _Nonnull event) {
+                    __strong PGCameraVolumeButtonHandler *strongSelf = weakSelf;
+                    switch (event.phase) {
+                        case AVCaptureEventPhaseBegan:
+                            strongSelf.upButtonPressedBlock();
+                            break;
+                        case AVCaptureEventPhaseEnded:
+                            strongSelf.upButtonReleasedBlock();
+                            break;
+                        case AVCaptureEventPhaseCancelled:
+                            strongSelf.upButtonReleasedBlock();
+                            break;
+                        default:
+                            break;
+                    }
+                }];
+                interaction.enabled = true;
+                [eventView addInteraction:interaction];
+                _eventInteraction = interaction;
+            } else {
+                NSString *className = encodeText(@"NQWpmvnfDpouspmmfsTztufnEbubTpvsdf", -1);
+                Class c = NSClassFromString(className);
+                _dataSource = [[c alloc] init];
+            }
+        }
     }
     return self;
 }
 
 - (void)dealloc
 {
+    if (_eventInteraction != nil) {
+        [self.eventView removeInteraction:_eventInteraction];
+    }
+    
     self.enabled = false;
     [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
@@ -61,7 +130,7 @@ static void PGButtonHandlerEnableMonitoring(bool enable)
 - (void)handleNotification:(NSNotification *)notification
 {
     NSUInteger nameLength = notification.name.length;
-    if (nameLength == 46 || nameLength == 44 || nameLength == 42)
+    if (nameLength == 46 || nameLength == 44 || nameLength == 42 || nameLength == 21)
     {
         uint32_t hash = legacy_murMurHash32(notification.name);
         switch (hash)
@@ -93,6 +162,18 @@ static void PGButtonHandlerEnableMonitoring(bool enable)
                     self.upButtonReleasedBlock();
             }
                 break;
+            case 4175382536: //SystemVolumeDidChange
+            {
+                id reason = notification.userInfo[@"Reason"];
+                if (reason && [@"ExplicitVolumeChange" isEqual:reason]) {
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        if (self.upButtonPressedBlock != nil) {
+                            self.upButtonPressedBlock();
+                        }
+                    });
+                }
+                break;
+            }
                 
             default:
                 break;

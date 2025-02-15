@@ -38,7 +38,7 @@ private final class WidgetReloadManager {
     init(inForeground: Signal<Bool, NoError>) {
         self.inForegroundDisposable = (inForeground
         |> distinctUntilChanged
-        |> deliverOnMainQueue).start(next: { [weak self] value in
+        |> deliverOnMainQueue).startStrict(next: { [weak self] value in
             guard let strongSelf = self else {
                 return
             }
@@ -228,7 +228,12 @@ final class WidgetDataContext {
                             name = peer.debugDisplayTitle
                         }
                         
-                        result.append(WidgetDataPeer(id: peerId.toInt64(), name: name, lastName: lastName, letters: [], avatarPath: nil, badge: nil, message: WidgetDataPeer.Message(accountPeerId: account.peerId, message: message)))
+                        var isForum = false
+                        if let peer = peer as? TelegramChannel, peer.flags.contains(.isForum) {
+                            isForum = true
+                        }
+                        
+                        result.append(WidgetDataPeer(id: peerId.toInt64(), name: name, lastName: lastName, letters: [], avatarPath: nil, badge: nil, message: WidgetDataPeer.Message(accountPeerId: account.peerId, message: message), isForum: isForum))
                     }
                     result.sort(by: { lhs, rhs in
                         return lhs.id < rhs.id
@@ -250,7 +255,7 @@ final class WidgetDataContext {
             }
         }
         |> distinctUntilChanged
-        |> deliverOnMainQueue).start(next: { [weak self] _ in
+        |> deliverOnMainQueue).startStrict(next: { [weak self] _ in
             self?.reloadManager.requestReload()
         })
         
@@ -281,7 +286,7 @@ final class WidgetDataContext {
                 chatSavedMessages: presentationData.strings.DialogList_SavedMessages
             )
         }
-        |> distinctUntilChanged).start(next: { value in
+        |> distinctUntilChanged).startStrict(next: { value in
             let path = widgetPresentationDataPath(rootPath: basePath)
             if let data = try? JSONEncoder().encode(value) {
                 let _ = try? data.write(to: URL(fileURLWithPath: path), options: [.atomic])
@@ -308,7 +313,7 @@ final class WidgetDataContext {
                 incomingCallString: incomingCallString
             )
         }
-        |> distinctUntilChanged).start(next: { value in
+        |> distinctUntilChanged).startStrict(next: { value in
             let path = notificationsPresentationDataPath(rootPath: basePath)
             if let data = try? JSONEncoder().encode(value) {
                 let _ = try? data.write(to: URL(fileURLWithPath: path), options: [.atomic])

@@ -2,6 +2,7 @@ import Foundation
 import UIKit
 import Display
 import AsyncDisplayKit
+import Postbox
 import TelegramCore
 import SwiftSignalKit
 import TelegramPresentationData
@@ -60,7 +61,7 @@ public enum ItemListAvatarAndNameInfoItemName: Equatable {
         }
     }
     
-    public func composedDisplayTitle(strings: PresentationStrings) -> String {
+    public func composedDisplayTitle(context: AccountContext?, strings: PresentationStrings) -> String {
         switch self {
         case let .personName(firstName, lastName, phone):
             if !firstName.isEmpty {
@@ -72,7 +73,11 @@ public enum ItemListAvatarAndNameInfoItemName: Equatable {
             } else if !lastName.isEmpty {
                 return lastName
             } else if !phone.isEmpty {
-                return formatPhoneNumber("+\(phone)")
+                if let context {
+                    return formatPhoneNumber(context: context, number: "+\(phone)")
+                } else {
+                    return "+\(phone)"
+                }
             } else {
                 return strings.User_DeletedAccount
             }
@@ -127,7 +132,18 @@ public enum ItemListAvatarAndNameInfoItemMode {
 }
 
 public class ItemListAvatarAndNameInfoItem: ListViewItem, ItemListItem {
-    let accountContext: AccountContext
+    public enum ItemContext {
+        case accountContext(AccountContext)
+        case other(accountPeerId: EnginePeer.Id, postbox: Postbox, network: Network)
+        
+        var accountContext: AccountContext? {
+            if case let .accountContext(accountContext) = self {
+                return accountContext
+            }
+            return nil
+        }
+    }
+    let itemContext: ItemContext
     let presentationData: ItemListPresentationData
     let dateTimeFormat: PresentationDateTimeFormat
     let mode: ItemListAvatarAndNameInfoItemMode
@@ -150,8 +166,8 @@ public class ItemListAvatarAndNameInfoItem: ListViewItem, ItemListItem {
     
     public let selectable: Bool
 
-    public init(accountContext: AccountContext, presentationData: ItemListPresentationData, dateTimeFormat: PresentationDateTimeFormat, mode: ItemListAvatarAndNameInfoItemMode, peer: EnginePeer?, presence: EnginePeer.Presence?, label: String? = nil, memberCount: Int?, state: ItemListAvatarAndNameInfoItemState, sectionId: ItemListSectionId, style: ItemListAvatarAndNameInfoItemStyle, editingNameUpdated: @escaping (ItemListAvatarAndNameInfoItemName) -> Void, editingNameCompleted: @escaping () -> Void = {}, avatarTapped: @escaping () -> Void, context: ItemListAvatarAndNameInfoItemContext? = nil, updatingImage: ItemListAvatarAndNameInfoItemUpdatingAvatar? = nil, call: (() -> Void)? = nil, action: (() -> Void)? = nil, longTapAction: (() -> Void)? = nil, tag: ItemListItemTag? = nil) {
-        self.accountContext = accountContext
+    public init(itemContext: ItemContext, presentationData: ItemListPresentationData, dateTimeFormat: PresentationDateTimeFormat, mode: ItemListAvatarAndNameInfoItemMode, peer: EnginePeer?, presence: EnginePeer.Presence?, label: String? = nil, memberCount: Int?, state: ItemListAvatarAndNameInfoItemState, sectionId: ItemListSectionId, style: ItemListAvatarAndNameInfoItemStyle, editingNameUpdated: @escaping (ItemListAvatarAndNameInfoItemName) -> Void, editingNameCompleted: @escaping () -> Void = {}, avatarTapped: @escaping () -> Void, context: ItemListAvatarAndNameInfoItemContext? = nil, updatingImage: ItemListAvatarAndNameInfoItemUpdatingAvatar? = nil, call: (() -> Void)? = nil, action: (() -> Void)? = nil, longTapAction: (() -> Void)? = nil, tag: ItemListItemTag? = nil) {
+        self.itemContext = itemContext
         self.presentationData = presentationData
         self.dateTimeFormat = dateTimeFormat
         self.mode = mode
@@ -358,7 +374,12 @@ public class ItemListAvatarAndNameInfoItemNode: ListViewItemNode, ItemListItemNo
                 updatedTheme = item.presentationData.theme
             }
             
-            let premiumConfiguration = PremiumConfiguration.with(appConfiguration: item.accountContext.currentAppConfiguration.with { $0 })
+            let premiumConfiguration: PremiumConfiguration
+            if case let .accountContext(context) = item.itemContext {
+                premiumConfiguration = PremiumConfiguration.with(appConfiguration: context.currentAppConfiguration.with { $0 })
+            } else {
+                premiumConfiguration = .defaultValue
+            }
             
             var credibilityIconImage: UIImage?
             var credibilityIconOffset: CGFloat = 4.0
@@ -395,7 +416,7 @@ public class ItemListAvatarAndNameInfoItemNode: ListViewItemNode, ItemListItemNo
                 nameMaximumNumberOfLines = 2
             }
             
-            let (nameNodeLayout, nameNodeApply) = layoutNameNode(TextNodeLayoutArguments(attributedString: NSAttributedString(string: displayTitle.composedDisplayTitle(strings: item.presentationData.strings), font: nameFont, textColor: item.presentationData.theme.list.itemPrimaryTextColor), backgroundColor: nil, maximumNumberOfLines: nameMaximumNumberOfLines, truncationType: .end, constrainedSize: CGSize(width: baseWidth - 20 - 94.0 - (item.call != nil ? 36.0 : 0.0) - additionalTitleInset, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
+            let (nameNodeLayout, nameNodeApply) = layoutNameNode(TextNodeLayoutArguments(attributedString: NSAttributedString(string: displayTitle.composedDisplayTitle(context: item.itemContext.accountContext, strings: item.presentationData.strings), font: nameFont, textColor: item.presentationData.theme.list.itemPrimaryTextColor), backgroundColor: nil, maximumNumberOfLines: nameMaximumNumberOfLines, truncationType: .end, constrainedSize: CGSize(width: baseWidth - 20 - 94.0 - (item.call != nil ? 36.0 : 0.0) - additionalTitleInset, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
             
             var statusText: String = ""
             let statusColor: UIColor
@@ -404,7 +425,11 @@ public class ItemListAvatarAndNameInfoItemNode: ListViewItemNode, ItemListItemNo
                 switch item.mode {
                     case .settings:
                         if let phone = peer.phone, !phone.isEmpty {
-                            statusText += formatPhoneNumber(phone)
+                            if let accountContext = item.itemContext.accountContext {
+                                statusText += formatPhoneNumber(context: accountContext, number: phone)
+                            } else {
+                                statusText += formatPhoneNumber(phone)
+                            }
                         }
                         if let username = peer.addressName, !username.isEmpty {
                             if !statusText.isEmpty {
@@ -420,11 +445,15 @@ public class ItemListAvatarAndNameInfoItemNode: ListViewItemNode, ItemListItemNo
                         } else if peer.flags.contains(.isSupport), !servicePeer {
                             statusText = item.presentationData.strings.Bot_GenericSupportStatus
                             statusColor = item.presentationData.theme.list.itemSecondaryTextColor
-                        } else if peer.id.isReplies {
+                        } else if peer.id.isRepliesOrVerificationCodes {
                             statusText = ""
                             statusColor = item.presentationData.theme.list.itemPrimaryTextColor
                         } else if let _ = peer.botInfo {
-                            statusText = item.presentationData.strings.Bot_GenericBotStatus
+                            if let subscriberCount = peer.subscriberCount {
+                                statusText = item.presentationData.strings.Conversation_StatusBotSubscribers(subscriberCount)
+                            } else {
+                                statusText = item.presentationData.strings.Bot_GenericBotStatus
+                            }
                             statusColor = item.presentationData.theme.list.itemSecondaryTextColor
                         } else if case .generic = item.mode, !servicePeer, let presence = item.presence {
                             let timestamp = CFAbsoluteTimeGetCurrent() + NSTimeIntervalSince1970
@@ -669,7 +698,13 @@ public class ItemListAvatarAndNameInfoItemNode: ListViewItemNode, ItemListItemNo
                             overrideImage = .deletedIcon
                         }
                         
-                        strongSelf.avatarNode.setPeer(context: item.accountContext, theme: item.presentationData.theme, peer: peer, overrideImage: overrideImage, emptyColor: ignoreEmpty ? nil : item.presentationData.theme.list.mediaPlaceholderColor, synchronousLoad: synchronousLoads)
+                        switch item.itemContext {
+                        case let .accountContext(context):
+                            strongSelf.avatarNode.setPeer(context: context, theme: item.presentationData.theme, peer: peer, overrideImage: overrideImage, emptyColor: ignoreEmpty ? nil : item.presentationData.theme.list.mediaPlaceholderColor, synchronousLoad: synchronousLoads)
+                        case let .other(accountPeerId, postbox, network):
+                            strongSelf.avatarNode.setPeer(accountPeerId: accountPeerId, postbox: postbox, network: network, contentSettings: .default, theme: item.presentationData.theme, peer: peer, authorOfMessage: nil, overrideImage: overrideImage, emptyColor: ignoreEmpty ? nil : item.presentationData.theme.list.mediaPlaceholderColor, synchronousLoad: synchronousLoads)
+                        }
+                        
                     }
                     
                     let avatarFrame = CGRect(origin: CGPoint(x: params.leftInset + 15.0, y: floor((layout.contentSize.height - 66.0) / 2.0)), size: CGSize(width: 66.0, height: 66.0))
@@ -1116,6 +1151,10 @@ public class ItemListAvatarAndNameInfoItemNode: ListViewItemNode, ItemListItemNo
     
     public func focus() {
         self.inputFirstField?.becomeFirstResponder()
+    }
+    
+    public func selectAll() {
+        self.inputFirstField?.selectAll(nil)
     }
     
     override public func longTapped() {

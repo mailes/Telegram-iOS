@@ -13,6 +13,20 @@ import Cocoa
 import UIKit
 #endif
 
+public enum GraphCurrency : String {
+    case xtr = "XTR"
+    case ton = "TON"
+    
+    var formatter: NumberFormatter {
+        switch self {
+        case .xtr:
+            return BaseConstants.starNumberFormatter
+        case .ton:
+            return BaseConstants.tonNumberFormatter
+        }
+    }
+}
+
 public class StackedBarsChartController: BaseChartController {
     let barsController: BarsComponentController
     let zoomedBarsController: BarsComponentController
@@ -23,14 +37,27 @@ public class StackedBarsChartController: BaseChartController {
         }
     }
     
-    override public init(chartsCollection: ChartsCollection)  {
+    public init(chartsCollection: ChartsCollection, currency: GraphCurrency? = nil, drawCurrency:((CGContext, UIColor, CGPoint)->Void)? = nil, rate: Double = 1.0)  {
         let horizontalScalesRenderer = HorizontalScalesRenderer()
         let verticalScalesRenderer = VerticalScalesRenderer()
+        var secondaryScalesRenderer: VerticalScalesRenderer?
+        if let _ = currency {
+            verticalScalesRenderer.drawCurrency = drawCurrency
+            secondaryScalesRenderer = VerticalScalesRenderer()
+            secondaryScalesRenderer?.isRightAligned = true
+        }
         barsController = BarsComponentController(isZoomed: false,
                                                  mainBarsRenderer: BarChartRenderer(),
                                                  horizontalScalesRenderer: horizontalScalesRenderer,
                                                  verticalScalesRenderer: verticalScalesRenderer,
+                                                 secondaryScalesRenderer: secondaryScalesRenderer,
                                                  previewBarsChartRenderer: BarChartRenderer())
+        if let currency {
+            barsController.currency = currency
+            barsController.conversionRate = rate
+            barsController.verticalLimitsNumberFormatter = currency.formatter
+            barsController.detailsNumberFormatter = currency.formatter
+        }
         zoomedBarsController = BarsComponentController(isZoomed: true,
                                                        mainBarsRenderer: BarChartRenderer(),
                                                        horizontalScalesRenderer: horizontalScalesRenderer,
@@ -67,12 +94,16 @@ public class StackedBarsChartController: BaseChartController {
     }
     
     public override var mainChartRenderers: [ChartViewRenderer] {
-        return [barsController.mainBarsRenderer,
+        var renderers = [barsController.mainBarsRenderer,
                 zoomedBarsController.mainBarsRenderer,
                 barsController.horizontalScalesRenderer,
                 barsController.verticalScalesRenderer,
 //                performanceRenderer
         ]
+        if let secondary = barsController.secondaryScalesRenderer {
+            renderers.append(secondary)
+        }
+        return renderers
     }
     
     public override var navigationRenderers: [ChartViewRenderer] {

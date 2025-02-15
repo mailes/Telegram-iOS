@@ -3,6 +3,7 @@ import UIKit
 import Display
 import WebKit
 import SwiftSignalKit
+import TelegramCore
 
 private let findActiveElementY = """
 function getOffset(el) {
@@ -35,39 +36,122 @@ private class WebViewTouchGestureRecognizer: UITapGestureRecognizer {
     }
 }
 
+private let eventProxySource = "var TelegramWebviewProxyProto = function() {}; " +
+    "TelegramWebviewProxyProto.prototype.postEvent = function(eventName, eventData) { " +
+    "window.webkit.messageHandlers.performAction.postMessage({'eventName': eventName, 'eventData': eventData}); " +
+    "}; " +
+"var TelegramWebviewProxy = new TelegramWebviewProxyProto();"
+
+private let selectionSource = "var css = '*{-webkit-touch-callout:none;} :not(input):not(textarea):not([\"contenteditable\"=\"true\"]){-webkit-user-select:none;}';"
+        + " var head = document.head || document.getElementsByTagName('head')[0];"
+        + " var style = document.createElement('style'); style.type = 'text/css';" +
+        " style.appendChild(document.createTextNode(css)); head.appendChild(style);"
+
+private let videoSource = """
+function tgBrowserDisableWebkitEnterFullscreen(videoElement) {
+  if (videoElement && videoElement.webkitEnterFullscreen) {
+    Object.defineProperty(videoElement, 'webkitEnterFullscreen', {
+      value: undefined
+    });
+  }
+}
+
+function tgBrowserDisableFullscreenOnExistingVideos() {
+  document.querySelectorAll('video').forEach(tgBrowserDisableWebkitEnterFullscreen);
+}
+
+function tgBrowserHandleMutations(mutations) {
+  mutations.forEach((mutation) => {
+    if (mutation.addedNodes && mutation.addedNodes.length > 0) {
+      mutation.addedNodes.forEach((newNode) => {
+        if (newNode.tagName === 'VIDEO') {
+          disableWebkitEnterFullscreen(newNode);
+        }
+        if (newNode.querySelectorAll) {
+          newNode.querySelectorAll('video').forEach(disableWebkitEnterFullscreen);
+        }
+      });
+    }
+  });
+}
+
+tgBrowserDisableFullscreenOnExistingVideos();
+
+const _tgbrowser_observer = new MutationObserver(tgBrowserHandleMutations);
+
+_tgbrowser_observer.observe(document.body, {
+  childList: true,
+  subtree: true
+});
+
+function tgBrowserDisconnectObserver() {
+  _tgbrowser_observer.disconnect();
+}
+"""
+
 final class WebAppWebView: WKWebView {
     var handleScriptMessage: (WKScriptMessage) -> Void = { _ in }
-    
-    init() {
-        let configuration = WKWebViewConfiguration()
-        let userController = WKUserContentController()
+
+    var customInsets: UIEdgeInsets = .zero {
+        didSet {
+            if self.customInsets != oldValue {
+                self.setNeedsLayout()
+            }
+        }
+    }
         
-        let js = "var TelegramWebviewProxyProto = function() {}; " +
-            "TelegramWebviewProxyProto.prototype.postEvent = function(eventName, eventData) { " +
-            "window.webkit.messageHandlers.performAction.postMessage({'eventName': eventName, 'eventData': eventData}); " +
-            "}; " +
-        "var TelegramWebviewProxy = new TelegramWebviewProxyProto();"
-                   
+    override var safeAreaInsets: UIEdgeInsets {
+        return UIEdgeInsets(top: self.customInsets.top, left: self.customInsets.left, bottom: self.customInsets.bottom, right: self.customInsets.right)
+    }
+    
+    init(account: Account) {
+        let configuration = WKWebViewConfiguration()
+                
+        if #available(iOS 17.0, *) {
+            var uuid: UUID?
+            if let current = UserDefaults.standard.object(forKey: "TelegramWebStoreUUID_\(account.id.int64)") as? String {
+                uuid = UUID(uuidString: current)!
+            } else {
+                let mainAccountId: Int64
+                if let current = UserDefaults.standard.object(forKey: "TelegramWebStoreMainAccountId") as? Int64 {
+                    mainAccountId = current
+                } else {
+                    mainAccountId = account.id.int64
+                    UserDefaults.standard.set(mainAccountId, forKey: "TelegramWebStoreMainAccountId")
+                }
+                
+                if account.id.int64 != mainAccountId {
+                    uuid = UUID()
+                    UserDefaults.standard.set(uuid!.uuidString, forKey: "TelegramWebStoreUUID_\(account.id.int64)")
+                }
+            }
+            
+            if let uuid {
+                configuration.websiteDataStore = WKWebsiteDataStore(forIdentifier: uuid)
+            }
+        }
+        
+        let contentController = WKUserContentController()
+                           
         var handleScriptMessageImpl: ((WKScriptMessage) -> Void)?
-        let userScript = WKUserScript(source: js, injectionTime: .atDocumentStart, forMainFrameOnly: false)
-        userController.addUserScript(userScript)
-        userController.add(WeakGameScriptMessageHandler { message in
+        let eventProxyScript = WKUserScript(source: eventProxySource, injectionTime: .atDocumentStart, forMainFrameOnly: false)
+        contentController.addUserScript(eventProxyScript)
+        contentController.add(WeakGameScriptMessageHandler { message in
             handleScriptMessageImpl?(message)
         }, name: "performAction")
         
-        let selectionString = "var css = '*{-webkit-touch-callout:none;} :not(input):not(textarea):not([\"contenteditable\"=\"true\"]){-webkit-user-select:none;}';"
-                + " var head = document.head || document.getElementsByTagName('head')[0];"
-                + " var style = document.createElement('style'); style.type = 'text/css';" +
-                " style.appendChild(document.createTextNode(css)); head.appendChild(style);"
-        let selectionScript: WKUserScript = WKUserScript(source: selectionString, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
-        userController.addUserScript(selectionScript)
+        let selectionScript = WKUserScript(source: selectionSource, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
+        contentController.addUserScript(selectionScript)
         
-        configuration.userContentController = userController
+        let videoScript = WKUserScript(source: videoSource, injectionTime: .atDocumentStart, forMainFrameOnly: false)
+        contentController.addUserScript(videoScript)
+        
+        configuration.userContentController = contentController
         
         configuration.allowsInlineMediaPlayback = true
         configuration.allowsPictureInPictureMediaPlayback = false
-        if #available(iOSApplicationExtension 10.0, iOS 10.0, *) {
-            configuration.mediaTypesRequiringUserActionForPlayback = .all
+        if #available(iOS 10.0, *) {
+            configuration.mediaTypesRequiringUserActionForPlayback = .audio
         } else {
             configuration.mediaPlaybackRequiresUserAction = true
         }
@@ -78,16 +162,19 @@ final class WebAppWebView: WKWebView {
         
         self.isOpaque = false
         self.backgroundColor = .clear
-        if #available(iOSApplicationExtension 9.0, iOS 9.0, *) {
+        if #available(iOS 9.0, *) {
             self.allowsLinkPreview = false
         }
-        if #available(iOSApplicationExtension 11.0, iOS 11.0, *) {
+        if #available(iOS 11.0, *) {
             self.scrollView.contentInsetAdjustmentBehavior = .never
         }
         self.interactiveTransitionGestureRecognizerTest = { point -> Bool in
             return point.x > 30.0
         }
         self.allowsBackForwardNavigationGestures = false
+        if #available(iOS 16.4, *) {
+            self.isInspectable = true
+        } 
         
         handleScriptMessageImpl = { [weak self] message in
             if let strongSelf = self {
@@ -98,6 +185,10 @@ final class WebAppWebView: WKWebView {
     
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+    
+    deinit {
+        print()
     }
     
     override func didMoveToSuperview() {
@@ -119,6 +210,22 @@ final class WebAppWebView: WKWebView {
         }
     }
     
+    func hideScrollIndicators() {
+        var hiddenViews: [UIView] = []
+        for view in self.scrollView.subviews.reversed() {
+            let minSize = min(view.frame.width, view.frame.height)
+            if minSize < 4.0 {
+                view.isHidden = true
+                hiddenViews.append(view)
+            }
+        }
+        Queue.mainQueue().after(2.0) {
+            for view in hiddenViews {
+                view.isHidden = false
+            }
+        }
+    }
+    
     func sendEvent(name: String, data: String?) {
         let script = "window.TelegramGameProxy.receiveEvent(\"\(name)\", \(data ?? "null"))"
         self.evaluateJavaScript(script, completionHandler: { _, _ in
@@ -126,8 +233,11 @@ final class WebAppWebView: WKWebView {
     }
         
     func updateMetrics(height: CGFloat, isExpanded: Bool, isStable: Bool, transition: ContainedViewLayoutTransition) {
-        let data = "{height:\(height), is_expanded:\(isExpanded ? "true" : "false"), is_state_stable:\(isStable ? "true" : "false")}"
-        self.sendEvent(name: "viewport_changed", data: data)
+        let viewportData = "{height:\(height), is_expanded:\(isExpanded ? "true" : "false"), is_state_stable:\(isStable ? "true" : "false")}"
+        self.sendEvent(name: "viewport_changed", data: viewportData)
+        
+        let safeInsetsData = "{top:\(self.customInsets.top), bottom:\(self.customInsets.bottom), left:\(self.customInsets.left), right:\(self.customInsets.right)}"
+        self.sendEvent(name: "safe_area_changed", data: safeInsetsData)
     }
     
     var lastTouchTimestamp: Double?

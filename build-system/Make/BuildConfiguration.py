@@ -35,8 +35,10 @@ class BuildConfiguration:
         self.enable_siri = enable_siri
         self.enable_icloud = enable_icloud
 
-    def write_to_variables_file(self, aps_environment, path):
+    def write_to_variables_file(self, bazel_path, use_xcode_managed_codesigning, aps_environment, path):
         string = ''
+        string += 'telegram_bazel_path = "{}"\n'.format(bazel_path)
+        string += 'telegram_use_xcode_managed_codesigning = {}\n'.format('True' if use_xcode_managed_codesigning else 'False')
         string += 'telegram_bundle_id = "{}"\n'.format(self.bundle_id)
         string += 'telegram_api_id = "{}"\n'.format(self.api_id)
         string += 'telegram_api_hash = "{}"\n'.format(self.api_hash)
@@ -60,7 +62,7 @@ class BuildConfiguration:
 
 def build_configuration_from_json(path):
     if not os.path.exists(path):
-        print('Could not load build configuration from {}'.format(path))
+        print('Could not load build configuration from non-existing path {}'.format(path))
         sys.exit(1)
     with open(path) as file:
         configuration_dict = json.load(file)
@@ -102,7 +104,7 @@ def decrypt_codesigning_directory_recursively(source_base_path, destination_base
         source_path = source_base_path + '/' + file_name
         destination_path = destination_base_path + '/' + file_name
         if os.path.isfile(source_path):
-            os.system('openssl aes-256-cbc -md md5 -k "{password}" -in "{source_path}" -out "{destination_path}" -a -d 2>/dev/null'.format(
+            os.system('ruby build-system/decrypt.rb "{password}" "{source_path}" "{destination_path}"'.format(
                 password=password,
                 source_path=source_path,
                 destination_path=destination_path
@@ -122,13 +124,14 @@ def load_codesigning_data_from_git(working_dir, repo_url, temp_key_path, branch,
 
     encrypted_working_dir = working_dir + '/encrypted'
     if os.path.exists(encrypted_working_dir):
+        original_working_dir = os.getcwd()
+        os.chdir(encrypted_working_dir)
         if always_fetch:
-            original_working_dir = os.getcwd()
-            os.chdir(encrypted_working_dir)
             check_run_system('GIT_SSH_COMMAND="{ssh_command}" git fetch'.format(ssh_command=ssh_command))
-            check_run_system('git checkout "{branch}"'.format(branch=branch))
+        check_run_system('git checkout "{branch}"'.format(branch=branch))
+        if always_fetch:
             check_run_system('GIT_SSH_COMMAND="{ssh_command}" git pull'.format(ssh_command=ssh_command))
-            os.chdir(original_working_dir)
+        os.chdir(original_working_dir)
     else:
         os.makedirs(encrypted_working_dir, exist_ok=True)
         original_working_dir = os.getcwd()
@@ -239,6 +242,9 @@ class CodesigningSource:
         raise Exception('Not implemented')
 
     def resolve_aps_environment(self):
+        raise Exception('Not implemented')
+
+    def use_xcode_managed_codesigning(self):
         raise Exception('Not implemented')        
 
     def copy_certificates_to_destination(self, destination_path):
@@ -279,6 +285,9 @@ class GitCodesigningSource(CodesigningSource):
         source_path = self.working_dir + '/decrypted/profiles/{}'.format(self.codesigning_type)
         return resolve_aps_environment_from_directory(source_path=source_path, team_id=self.team_id, bundle_id=self.bundle_id)
 
+    def use_xcode_managed_codesigning(self):
+        return False
+
     def copy_certificates_to_destination(self, destination_path):
         source_path = None
         if self.codesigning_type in ['adhoc', 'appstore']:
@@ -307,5 +316,28 @@ class DirectoryCodesigningSource(CodesigningSource):
     def resolve_aps_environment(self):
         return resolve_aps_environment_from_directory(source_path=self.directory_path + '/profiles', team_id=self.team_id, bundle_id=self.bundle_id)
 
+    def use_xcode_managed_codesigning(self):
+        return False
+
     def copy_certificates_to_destination(self, destination_path):
         copy_certificates_from_directory(source_path=self.directory_path + '/certs', destination_path=destination_path)
+
+
+class XcodeManagedCodesigningSource(CodesigningSource):
+    def __init__(self):
+        pass
+
+    def load_data(self, working_dir):
+        pass
+
+    def copy_profiles_to_destination(self, destination_path):
+        pass
+
+    def resolve_aps_environment(self):
+        return ""
+
+    def use_xcode_managed_codesigning(self):
+        return True
+
+    def copy_certificates_to_destination(self, destination_path):
+        pass

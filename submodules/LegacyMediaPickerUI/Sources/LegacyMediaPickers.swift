@@ -14,23 +14,15 @@ import MimeTypes
 import LocalMediaResources
 import LegacyUI
 import TextFormat
-import AttachmentUI
 
 public func guessMimeTypeByFileExtension(_ ext: String) -> String {
     return TGMimeTypeMap.mimeType(forExtension: ext) ?? "application/binary"
 }
 
-public func configureLegacyAssetPicker(_ controller: TGMediaAssetsController, context: AccountContext, peer: Peer, chatLocation: ChatLocation, captionsEnabled: Bool = true, storeCreatedAssets: Bool = true, showFileTooltip: Bool = false, initialCaption: NSAttributedString, hasSchedule: Bool, presentWebSearch: (() -> Void)?, presentSelectionLimitExceeded: @escaping () -> Void, presentSchedulePicker: @escaping (Bool, @escaping (Int32) -> Void) -> Void, presentTimerPicker: @escaping (@escaping (Int32) -> Void) -> Void, presentStickers: @escaping (@escaping (TelegramMediaFile, Bool, UIView, CGRect) -> Void) -> TGPhotoPaintStickersScreen?, getCaptionPanelView: @escaping () -> TGCaptionPanelView?) {
+public func configureLegacyAssetPicker(_ controller: TGMediaAssetsController, context: AccountContext, peer: Peer, chatLocation: ChatLocation, captionsEnabled: Bool = true, storeCreatedAssets: Bool = true, showFileTooltip: Bool = false, initialCaption: NSAttributedString, hasSchedule: Bool, presentWebSearch: (() -> Void)?, presentSelectionLimitExceeded: @escaping () -> Void, presentSchedulePicker: @escaping (Bool, @escaping (Int32) -> Void) -> Void, presentTimerPicker: @escaping (@escaping (Int32) -> Void) -> Void, getCaptionPanelView: @escaping () -> TGCaptionPanelView?) {
     let paintStickersContext = LegacyPaintStickersContext(context: context)
     paintStickersContext.captionPanelView = {
         return getCaptionPanelView()
-    }
-    paintStickersContext.presentStickersController = { completion in
-        return presentStickers({ file, animated, view, rect in
-            let coder = PostboxEncoder()
-            coder.encodeRootObject(file)
-            completion?(coder.makeData(), animated, view, rect)
-        })
     }
     
     controller.captionsEnabled = captionsEnabled
@@ -67,66 +59,19 @@ public func configureLegacyAssetPicker(_ controller: TGMediaAssetsController, co
     }
 }
 
-public class LegacyAssetPickerContext: AttachmentMediaPickerContext {
-    private weak var controller: TGMediaAssetsController?
-    
-    public var selectionCount: Signal<Int, NoError> {
-        return Signal { [weak self] subscriber in
-            let disposable = self?.controller?.selectionContext.selectionChangedSignal().start(next: { [weak self] value in
-                subscriber.putNext(Int(self?.controller?.selectionContext.count() ?? 0))
-            }, error: { _ in }, completed: { })
-            return ActionDisposable {
-                disposable?.dispose()
-            }
-        }
-    }
-    
-    public var caption: Signal<NSAttributedString?, NoError> {
-        return Signal { [weak self] subscriber in
-            let disposable = self?.controller?.editingContext.forcedCaption().start(next: { caption in
-                if let caption = caption as? NSAttributedString {
-                    subscriber.putNext(caption)
-                } else {
-                    subscriber.putNext(nil)
-                }
-            }, error: { _ in }, completed: { })
-            return ActionDisposable {
-                disposable?.dispose()
-            }
-        }
-    }
-    
-    public var loadingProgress: Signal<CGFloat?, NoError> {
-        return .single(nil)
-    }
-    
-    public var mainButtonState: Signal<AttachmentMainButtonState?, NoError> {
-        return .single(nil)
-    }
-        
-    public init(controller: TGMediaAssetsController) {
-        self.controller = controller
-    }
-    
-    public func setCaption(_ caption: NSAttributedString) {
-        self.controller?.editingContext.setForcedCaption(caption, skipUpdate: true)
-    }
-    
-    public func send(silently: Bool, mode: AttachmentMediaPickerSendMode) {
-        self.controller?.send(silently)
-    }
-    
-    public func schedule() {
-        self.controller?.schedule(false)
-    }
-    
-    public func mainButtonAction() {
-        
-    }
-}
-
-public func legacyAssetPicker(context: AccountContext, presentationData: PresentationData, editingMedia: Bool, fileMode: Bool, peer: Peer?, saveEditedPhotos: Bool, allowGrouping: Bool, selectionLimit: Int) -> Signal<(LegacyComponentsContext) -> TGMediaAssetsController, Void> {
+public func legacyAssetPicker(context: AccountContext, presentationData: PresentationData, editingMedia: Bool, fileMode: Bool, peer: Peer?, threadTitle: String?, saveEditedPhotos: Bool, allowGrouping: Bool, selectionLimit: Int) -> Signal<(LegacyComponentsContext) -> TGMediaAssetsController, Void> {
     let isSecretChat = (peer?.id.namespace._internalGetInt32Value() ?? 0) == Namespaces.Peer.SecretChat._internalGetInt32Value()
+    
+    let recipientName: String?
+    if let threadTitle {
+        recipientName = threadTitle
+    } else {
+        if peer?.id == context.account.peerId {
+            recipientName = presentationData.strings.DialogList_SavedMessages
+        } else {
+            recipientName = peer.flatMap(EnginePeer.init)?.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
+        }
+    }
     
     return Signal { subscriber in
         let intent = fileMode ? TGMediaAssetsControllerSendFileIntent : TGMediaAssetsControllerSendMediaIntent
@@ -146,7 +91,7 @@ public func legacyAssetPicker(context: AccountContext, presentationData: Present
                     } else {
                         Queue.mainQueue().async {
                             subscriber.putNext({ context in
-                                let controller = TGMediaAssetsController(context: context, assetGroup: group, intent: intent, recipientName: peer.flatMap(EnginePeer.init)?.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder), saveEditedPhotos: !isSecretChat && saveEditedPhotos, allowGrouping: allowGrouping, inhibitSelection: editingMedia, selectionLimit: Int32(selectionLimit))
+                                let controller = TGMediaAssetsController(context: context, assetGroup: group, intent: intent, recipientName: recipientName, saveEditedPhotos: !isSecretChat && saveEditedPhotos, allowGrouping: allowGrouping, inhibitSelection: editingMedia, selectionLimit: Int32(selectionLimit))
                                 return controller!
                             })
                             subscriber.putCompletion()
@@ -155,7 +100,7 @@ public func legacyAssetPicker(context: AccountContext, presentationData: Present
                 })
             } else {
                 subscriber.putNext({ context in
-                    let controller = TGMediaAssetsController(context: context, assetGroup: nil, intent: intent, recipientName: peer.flatMap(EnginePeer.init)?.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder), saveEditedPhotos: !isSecretChat && saveEditedPhotos, allowGrouping: allowGrouping, inhibitSelection: editingMedia, selectionLimit: Int32(selectionLimit))
+                    let controller = TGMediaAssetsController(context: context, assetGroup: nil, intent: intent, recipientName: recipientName, saveEditedPhotos: !isSecretChat && saveEditedPhotos, allowGrouping: allowGrouping, inhibitSelection: editingMedia, selectionLimit: Int32(selectionLimit))
                     return controller!
                 })
                 subscriber.putCompletion()
@@ -188,12 +133,16 @@ private enum LegacyAssetItem {
 private final class LegacyAssetItemWrapper: NSObject {
     let item: LegacyAssetItem
     let timer: Int?
+    let spoiler: Bool?
+    let price: Int64?
     let groupedId: Int64?
     let uniqueId: String?
     
-    init(item: LegacyAssetItem, timer: Int?, groupedId: Int64?, uniqueId: String?) {
+    init(item: LegacyAssetItem, timer: Int?, spoiler: Bool?, price: Int64?, groupedId: Int64?, uniqueId: String?) {
         self.item = item
         self.timer = timer
+        self.spoiler = spoiler
+        self.price = price
         self.groupedId = groupedId
         self.uniqueId = uniqueId
         
@@ -212,6 +161,9 @@ public func legacyAssetPickerItemGenerator() -> ((Any?, NSAttributedString?, Str
                 return nil
             }
         } ?? []
+        
+        let price = dict["price"] as? Int64
+        
         if (dict["type"] as! NSString) == "editedPhoto" || (dict["type"] as! NSString) == "capturedPhoto" {
             let image = dict["image"] as! UIImage
             let thumbnail = dict["previewImage"] as? UIImage
@@ -221,10 +173,10 @@ public func legacyAssetPickerItemGenerator() -> ((Any?, NSAttributedString?, Str
                 let url: String? = (dict["url"] as? String) ?? (dict["url"] as? URL)?.path
                 if let url = url {
                     let dimensions = image.size
-                    result["item" as NSString] = LegacyAssetItemWrapper(item: .video(data: .tempFile(path: url, dimensions: dimensions, duration: 4.0), thumbnail: thumbnail, adjustments: dict["adjustments"] as? TGVideoEditAdjustments, caption: caption, asFile: false, asAnimation: true, stickers: stickers), timer: (dict["timer"] as? NSNumber)?.intValue, groupedId: (dict["groupedId"] as? NSNumber)?.int64Value, uniqueId: uniqueId)
+                    result["item" as NSString] = LegacyAssetItemWrapper(item: .video(data: .tempFile(path: url, dimensions: dimensions, duration: 4.0), thumbnail: thumbnail, adjustments: dict["adjustments"] as? TGVideoEditAdjustments, caption: caption, asFile: false, asAnimation: true, stickers: stickers), timer: (dict["timer"] as? NSNumber)?.intValue, spoiler: (dict["spoiler"] as? NSNumber)?.boolValue, price: price, groupedId: (dict["groupedId"] as? NSNumber)?.int64Value, uniqueId: uniqueId)
                 }
             } else {
-                result["item" as NSString] = LegacyAssetItemWrapper(item: .image(data: .image(image), thumbnail: thumbnail, caption: caption, stickers: stickers), timer: (dict["timer"] as? NSNumber)?.intValue, groupedId: (dict["groupedId"] as? NSNumber)?.int64Value, uniqueId: uniqueId)
+                result["item" as NSString] = LegacyAssetItemWrapper(item: .image(data: .image(image), thumbnail: thumbnail, caption: caption, stickers: stickers), timer: (dict["timer"] as? NSNumber)?.intValue,  spoiler: (dict["spoiler"] as? NSNumber)?.boolValue, price: price, groupedId: (dict["groupedId"] as? NSNumber)?.int64Value, uniqueId: uniqueId)
             }
             return result
         } else if (dict["type"] as! NSString) == "cloudPhoto" {
@@ -245,9 +197,9 @@ public func legacyAssetPickerItemGenerator() -> ((Any?, NSAttributedString?, Str
                     name = customName
                 }
                 
-                result["item" as NSString] = LegacyAssetItemWrapper(item: .file(data: .asset(asset.backingAsset), thumbnail: thumbnail, mimeType: mimeType, name: name, caption: caption), timer: nil, groupedId: (dict["groupedId"] as? NSNumber)?.int64Value, uniqueId: uniqueId)
+                result["item" as NSString] = LegacyAssetItemWrapper(item: .file(data: .asset(asset.backingAsset), thumbnail: thumbnail, mimeType: mimeType, name: name, caption: caption), timer: nil, spoiler: nil, price: price, groupedId: (dict["groupedId"] as? NSNumber)?.int64Value, uniqueId: uniqueId)
             } else {
-                result["item" as NSString] = LegacyAssetItemWrapper(item: .image(data: .asset(asset.backingAsset), thumbnail: thumbnail, caption: caption, stickers: []), timer: (dict["timer"] as? NSNumber)?.intValue, groupedId: (dict["groupedId"] as? NSNumber)?.int64Value, uniqueId: uniqueId)
+                result["item" as NSString] = LegacyAssetItemWrapper(item: .image(data: .asset(asset.backingAsset), thumbnail: thumbnail, caption: caption, stickers: []), timer: (dict["timer"] as? NSNumber)?.intValue, spoiler: (dict["spoiler"] as? NSNumber)?.boolValue, price: price, groupedId: (dict["groupedId"] as? NSNumber)?.int64Value, uniqueId: uniqueId)
             }
             return result
         } else if (dict["type"] as! NSString) == "file" {
@@ -268,12 +220,12 @@ public func legacyAssetPickerItemGenerator() -> ((Any?, NSAttributedString?, Str
                     let dimensions = (dict["dimensions"]! as AnyObject).cgSizeValue!
                     let duration = (dict["duration"]! as AnyObject).doubleValue!
                     
-                    result["item" as NSString] = LegacyAssetItemWrapper(item: .video(data: .tempFile(path: tempFileUrl.path, dimensions: dimensions, duration: duration), thumbnail: thumbnail, adjustments: nil, caption: caption, asFile: false, asAnimation: true, stickers: []), timer: (dict["timer"] as? NSNumber)?.intValue, groupedId: (dict["groupedId"] as? NSNumber)?.int64Value, uniqueId: uniqueId)
+                    result["item" as NSString] = LegacyAssetItemWrapper(item: .video(data: .tempFile(path: tempFileUrl.path, dimensions: dimensions, duration: duration), thumbnail: thumbnail, adjustments: nil, caption: caption, asFile: false, asAnimation: true, stickers: []), timer: (dict["timer"] as? NSNumber)?.intValue, spoiler: (dict["spoiler"] as? NSNumber)?.boolValue, price: price, groupedId: (dict["groupedId"] as? NSNumber)?.int64Value, uniqueId: uniqueId)
                     return result
                 }
                 
                 var result: [AnyHashable: Any] = [:]
-                result["item" as NSString] = LegacyAssetItemWrapper(item: .file(data: .tempFile(tempFileUrl.path), thumbnail: thumbnail, mimeType: mimeType, name: name, caption: caption), timer: (dict["timer"] as? NSNumber)?.intValue, groupedId: (dict["groupedId"] as? NSNumber)?.int64Value, uniqueId: uniqueId)
+                result["item" as NSString] = LegacyAssetItemWrapper(item: .file(data: .tempFile(tempFileUrl.path), thumbnail: thumbnail, mimeType: mimeType, name: name, caption: caption), timer: (dict["timer"] as? NSNumber)?.intValue, spoiler: (dict["spoiler"] as? NSNumber)?.boolValue, price: price,  groupedId: (dict["groupedId"] as? NSNumber)?.int64Value, uniqueId: uniqueId)
                 return result
             }
         } else if (dict["type"] as! NSString) == "video" {
@@ -285,13 +237,13 @@ public func legacyAssetPickerItemGenerator() -> ((Any?, NSAttributedString?, Str
             
             if let asset = dict["asset"] as? TGMediaAsset {
                 var result: [AnyHashable: Any] = [:]
-                result["item" as NSString] = LegacyAssetItemWrapper(item: .video(data: .asset(asset), thumbnail: thumbnail, adjustments: dict["adjustments"] as? TGVideoEditAdjustments, caption: caption, asFile: asFile, asAnimation: false, stickers: stickers), timer: (dict["timer"] as? NSNumber)?.intValue, groupedId: (dict["groupedId"] as? NSNumber)?.int64Value, uniqueId: uniqueId)
+                result["item" as NSString] = LegacyAssetItemWrapper(item: .video(data: .asset(asset), thumbnail: thumbnail, adjustments: dict["adjustments"] as? TGVideoEditAdjustments, caption: caption, asFile: asFile, asAnimation: false, stickers: stickers), timer: (dict["timer"] as? NSNumber)?.intValue, spoiler: (dict["spoiler"] as? NSNumber)?.boolValue, price: price, groupedId: (dict["groupedId"] as? NSNumber)?.int64Value, uniqueId: uniqueId)
                 return result
             } else if let url = (dict["url"] as? String) ?? (dict["url"] as? URL)?.absoluteString {
                 let dimensions = (dict["dimensions"]! as AnyObject).cgSizeValue!
                 let duration = (dict["duration"]! as AnyObject).doubleValue!
                 var result: [AnyHashable: Any] = [:]
-                result["item" as NSString] = LegacyAssetItemWrapper(item: .video(data: .tempFile(path: url, dimensions: dimensions, duration: duration), thumbnail: thumbnail, adjustments: dict["adjustments"] as? TGVideoEditAdjustments, caption: caption, asFile: asFile, asAnimation: false, stickers: stickers), timer: (dict["timer"] as? NSNumber)?.intValue, groupedId: (dict["groupedId"] as? NSNumber)?.int64Value, uniqueId: uniqueId)
+                result["item" as NSString] = LegacyAssetItemWrapper(item: .video(data: .tempFile(path: url, dimensions: dimensions, duration: duration), thumbnail: thumbnail, adjustments: dict["adjustments"] as? TGVideoEditAdjustments, caption: caption, asFile: asFile, asAnimation: false, stickers: stickers), timer: (dict["timer"] as? NSNumber)?.intValue, spoiler: (dict["spoiler"] as? NSNumber)?.boolValue, price: price, groupedId: (dict["groupedId"] as? NSNumber)?.int64Value, uniqueId: uniqueId)
                 return result
             }
         } else if (dict["type"] as! NSString) == "cameraVideo" {
@@ -307,7 +259,7 @@ public func legacyAssetPickerItemGenerator() -> ((Any?, NSAttributedString?, Str
                 let dimensions = previewImage.pixelSize()
                 let duration = (dict["duration"]! as AnyObject).doubleValue!
                 var result: [AnyHashable: Any] = [:]
-                result["item" as NSString] = LegacyAssetItemWrapper(item: .video(data: .tempFile(path: url, dimensions: dimensions, duration: duration), thumbnail: thumbnail, adjustments: dict["adjustments"] as? TGVideoEditAdjustments, caption: caption, asFile: asFile, asAnimation: false, stickers: stickers), timer: (dict["timer"] as? NSNumber)?.intValue, groupedId: (dict["groupedId"] as? NSNumber)?.int64Value, uniqueId: uniqueId)
+                result["item" as NSString] = LegacyAssetItemWrapper(item: .video(data: .tempFile(path: url, dimensions: dimensions, duration: duration), thumbnail: thumbnail, adjustments: dict["adjustments"] as? TGVideoEditAdjustments, caption: caption, asFile: asFile, asAnimation: false, stickers: stickers), timer: (dict["timer"] as? NSNumber)?.intValue, spoiler: (dict["spoiler"] as? NSNumber)?.boolValue, price: price, groupedId: (dict["groupedId"] as? NSNumber)?.int64Value, uniqueId: uniqueId)
                 return result
             }
         }
@@ -326,7 +278,7 @@ public func legacyEnqueueGifMessage(account: Account, data: Data, correlationId:
             if let thumbnailData = thumbnailImage.jpegData(compressionQuality: 0.4) {
                 let resource = LocalFileMediaResource(fileId: Int64.random(in: Int64.min ... Int64.max))
                 account.postbox.mediaBox.storeResourceData(resource.id, data: thumbnailData)
-                previewRepresentations.append(TelegramMediaImageRepresentation(dimensions: PixelDimensions(thumbnailSize), resource: resource, progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false))
+                previewRepresentations.append(TelegramMediaImageRepresentation(dimensions: PixelDimensions(thumbnailSize), resource: resource, progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false, isPersonal: false))
             }
             
             var randomId: Int64 = 0
@@ -342,12 +294,12 @@ public func legacyEnqueueGifMessage(account: Account, data: Data, correlationId:
             let finalDimensions = TGMediaVideoConverter.dimensions(for: dimensions, adjustments: nil, preset: TGMediaVideoConversionPresetAnimation)
             
             var fileAttributes: [TelegramMediaFileAttribute] = []
-            fileAttributes.append(.Video(duration: Int(0), size: PixelDimensions(finalDimensions), flags: [.supportsStreaming]))
+            fileAttributes.append(.Video(duration: 0.0, size: PixelDimensions(finalDimensions), flags: [.supportsStreaming], preloadSize: nil, coverTime: nil, videoCodec: nil))
             fileAttributes.append(.FileName(fileName: fileName))
             fileAttributes.append(.Animated)
             
-            let media = TelegramMediaFile(fileId: MediaId(namespace: Namespaces.Media.LocalFile, id: Int64.random(in: Int64.min ... Int64.max)), partialReference: nil, resource: resource, previewRepresentations: previewRepresentations, videoThumbnails: [], immediateThumbnailData: nil, mimeType: "video/mp4", size: nil, attributes: fileAttributes)
-            subscriber.putNext(.message(text: "", attributes: [], inlineStickers: [:], mediaReference: .standalone(media: media), replyToMessageId: nil, localGroupingKey: nil, correlationId: correlationId, bubbleUpEmojiOrStickersets: []))
+            let media = TelegramMediaFile(fileId: MediaId(namespace: Namespaces.Media.LocalFile, id: Int64.random(in: Int64.min ... Int64.max)), partialReference: nil, resource: resource, previewRepresentations: previewRepresentations, videoThumbnails: [], immediateThumbnailData: nil, mimeType: "video/mp4", size: nil, attributes: fileAttributes, alternativeRepresentations: [])
+            subscriber.putNext(.message(text: "", attributes: [], inlineStickers: [:], mediaReference: .standalone(media: media), threadId: nil, replyToMessageId: nil, replyToStoryId: nil, localGroupingKey: nil, correlationId: correlationId, bubbleUpEmojiOrStickersets: []))
             subscriber.putCompletion()
         } else {
             subscriber.putError(Void())
@@ -368,7 +320,7 @@ public func legacyEnqueueVideoMessage(account: Account, data: Data, correlationI
             if let thumbnailData = thumbnailImage.jpegData(compressionQuality: 0.4) {
                 let resource = LocalFileMediaResource(fileId: Int64.random(in: Int64.min ... Int64.max))
                 account.postbox.mediaBox.storeResourceData(resource.id, data: thumbnailData)
-                previewRepresentations.append(TelegramMediaImageRepresentation(dimensions: PixelDimensions(thumbnailSize), resource: resource, progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false))
+                previewRepresentations.append(TelegramMediaImageRepresentation(dimensions: PixelDimensions(thumbnailSize), resource: resource, progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false, isPersonal: false))
             }
             
             var randomId: Int64 = 0
@@ -384,12 +336,12 @@ public func legacyEnqueueVideoMessage(account: Account, data: Data, correlationI
             let finalDimensions = TGMediaVideoConverter.dimensions(for: dimensions, adjustments: nil, preset: TGMediaVideoConversionPresetAnimation)
             
             var fileAttributes: [TelegramMediaFileAttribute] = []
-            fileAttributes.append(.Video(duration: Int(0), size: PixelDimensions(finalDimensions), flags: [.supportsStreaming]))
+            fileAttributes.append(.Video(duration: 0.0, size: PixelDimensions(finalDimensions), flags: [.supportsStreaming], preloadSize: nil, coverTime: nil, videoCodec: nil))
             fileAttributes.append(.FileName(fileName: fileName))
             fileAttributes.append(.Animated)
             
-            let media = TelegramMediaFile(fileId: MediaId(namespace: Namespaces.Media.LocalFile, id: Int64.random(in: Int64.min ... Int64.max)), partialReference: nil, resource: resource, previewRepresentations: previewRepresentations, videoThumbnails: [], immediateThumbnailData: nil, mimeType: "video/mp4", size: nil, attributes: fileAttributes)
-            subscriber.putNext(.message(text: "", attributes: [], inlineStickers: [:], mediaReference: .standalone(media: media), replyToMessageId: nil, localGroupingKey: nil, correlationId: correlationId, bubbleUpEmojiOrStickersets: []))
+            let media = TelegramMediaFile(fileId: MediaId(namespace: Namespaces.Media.LocalFile, id: Int64.random(in: Int64.min ... Int64.max)), partialReference: nil, resource: resource, previewRepresentations: previewRepresentations, videoThumbnails: [], immediateThumbnailData: nil, mimeType: "video/mp4", size: nil, attributes: fileAttributes, alternativeRepresentations: [])
+            subscriber.putNext(.message(text: "", attributes: [], inlineStickers: [:], mediaReference: .standalone(media: media), threadId: nil, replyToMessageId: nil, replyToStoryId: nil, localGroupingKey: nil, correlationId: correlationId, bubbleUpEmojiOrStickersets: []))
             subscriber.putCompletion()
         } else {
             subscriber.putError(Void())
@@ -405,10 +357,19 @@ public struct LegacyAssetPickerEnqueueMessage {
     public var isFile: Bool
 }
 
-public func legacyAssetPickerEnqueueMessages(account: Account, signals: [Any]) -> Signal<[LegacyAssetPickerEnqueueMessage], Void> {
+public func legacyAssetPickerEnqueueMessages(context: AccountContext, account: Account, signals: [Any]) -> Signal<[LegacyAssetPickerEnqueueMessage], Void> {
     return Signal { subscriber in
         let disposable = SSignal.combineSignals(signals).start(next: { anyValues in
             var messages: [LegacyAssetPickerEnqueueMessage] = []
+                    
+            struct EnqueuePaidMessage {
+                var price: Int64
+                var text: String
+                var entities: [MessageTextEntity]
+                var media: [Media]
+            }
+            
+            var paidMessage: EnqueuePaidMessage?
             
             outer: for item in (anyValues as! NSArray) {
                 if let item = (item as? NSDictionary)?.object(forKey: "item") as? LegacyAssetItemWrapper {
@@ -421,7 +382,7 @@ public func legacyAssetPickerEnqueueMessages(account: Account, signals: [Any]) -
                                 let thumbnailImage = TGScaleImageToPixelSize(thumbnail, thumbnailSize)!
                                 if let thumbnailData = thumbnailImage.jpegData(compressionQuality: 0.4) {
                                     account.postbox.mediaBox.storeResourceData(resource.id, data: thumbnailData)
-                                    representations.append(TelegramMediaImageRepresentation(dimensions: PixelDimensions(thumbnailSize), resource: resource, progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false))
+                                    representations.append(TelegramMediaImageRepresentation(dimensions: PixelDimensions(thumbnailSize), resource: resource, progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false, isPersonal: false))
                                 }
                             }
                             switch data {
@@ -431,11 +392,15 @@ public func legacyAssetPickerEnqueueMessages(account: Account, signals: [Any]) -
                                     let tempFilePath = NSTemporaryDirectory() + "\(randomId).jpeg"
                                     let scaledSize = image.size.aspectFittedOrSmaller(CGSize(width: 1280.0, height: 1280.0))
                                     if let scaledImage = TGScaleImageToPixelSize(image, scaledSize) {
-                                        if let scaledImageData = compressImageToJPEG(scaledImage, quality: 0.6) {
+                                        let tempFile = TempBox.shared.tempFile(fileName: "file")
+                                        defer {
+                                            TempBox.shared.dispose(tempFile)
+                                        }
+                                        if let scaledImageData = compressImageToJPEG(scaledImage, quality: 0.6, tempFilePath: tempFile.path) {
                                             let _ = try? scaledImageData.write(to: URL(fileURLWithPath: tempFilePath))
 
                                             let resource = LocalFileReferenceMediaResource(localFilePath: tempFilePath, randomId: randomId)
-                                            representations.append(TelegramMediaImageRepresentation(dimensions: PixelDimensions(scaledSize), resource: resource, progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false))
+                                            representations.append(TelegramMediaImageRepresentation(dimensions: PixelDimensions(scaledSize), resource: resource, progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false, isPersonal: false))
                                             
                                             var imageFlags: TelegramMediaImageFlags = []
                                                                                         
@@ -453,8 +418,11 @@ public func legacyAssetPickerEnqueueMessages(account: Account, signals: [Any]) -
                                             }
 
                                             let media = TelegramMediaImage(imageId: MediaId(namespace: Namespaces.Media.LocalImage, id: randomId), representations: representations, immediateThumbnailData: nil, reference: nil, partialReference: nil, flags: imageFlags)
-                                            if let timer = item.timer, timer > 0 && timer <= 60 {
+                                            if let timer = item.timer, timer > 0 && (timer <= 60 || timer == viewOnceTimeout) {
                                                 attributes.append(AutoremoveTimeoutMessageAttribute(timeout: Int32(timer), countdownBeginTime: nil))
+                                            }
+                                            if let spoiler = item.spoiler, spoiler {
+                                                attributes.append(MediaSpoilerMessageAttribute())
                                             }
                                                                                         
                                             let text = trimChatInputText(convertMarkdownToAttributes(caption ?? NSAttributedString()))
@@ -482,51 +450,187 @@ public func legacyAssetPickerEnqueueMessages(account: Account, signals: [Any]) -
                                                     }
                                                 }
                                             }
-                                            messages.append(LegacyAssetPickerEnqueueMessage(message: .message(text: text.string, attributes: attributes, inlineStickers: [:], mediaReference: .standalone(media: media), replyToMessageId: nil, localGroupingKey: item.groupedId, correlationId: nil, bubbleUpEmojiOrStickersets: bubbleUpEmojiOrStickersets), uniqueId: item.uniqueId, isFile: false))
+                                            
+                                            if let price = item.price {
+                                                if var current = paidMessage {
+                                                    if current.text.isEmpty && !text.string.isEmpty {
+                                                        current.text = text.string
+                                                        current.entities = entities
+                                                    }
+                                                    current.media.append(media)
+                                                    paidMessage = current
+                                                } else {
+                                                    paidMessage = EnqueuePaidMessage(
+                                                        price: price,
+                                                        text: text.string,
+                                                        entities: entities,
+                                                        media: [media]
+                                                    )
+                                                }
+                                            } else {
+                                                messages.append(LegacyAssetPickerEnqueueMessage(message: .message(text: text.string, attributes: attributes, inlineStickers: [:], mediaReference: .standalone(media: media), threadId: nil, replyToMessageId: nil, replyToStoryId: nil, localGroupingKey: item.groupedId, correlationId: nil, bubbleUpEmojiOrStickersets: bubbleUpEmojiOrStickersets), uniqueId: item.uniqueId, isFile: false))
+                                            }
                                         }
                                     }
                                 case let .asset(asset):
-                                    var randomId: Int64 = 0
-                                    arc4random_buf(&randomId, 8)
-                                    let size = CGSize(width: CGFloat(asset.pixelWidth), height: CGFloat(asset.pixelHeight))
-                                    let scaledSize = size.aspectFittedOrSmaller(CGSize(width: 1280.0, height: 1280.0))
-                                    let resource = PhotoLibraryMediaResource(localIdentifier: asset.localIdentifier, uniqueId: Int64.random(in: Int64.min ... Int64.max))
-                                    representations.append(TelegramMediaImageRepresentation(dimensions: PixelDimensions(scaledSize), resource: resource, progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false))
-                                    
-                                    let media = TelegramMediaImage(imageId: MediaId(namespace: Namespaces.Media.LocalImage, id: randomId), representations: representations, immediateThumbnailData: nil, reference: nil, partialReference: nil, flags: [])
-                                    var attributes: [MessageAttribute] = []
-                                    if let timer = item.timer, timer > 0 && timer <= 60 {
-                                        attributes.append(AutoremoveTimeoutMessageAttribute(timeout: Int32(timer), countdownBeginTime: nil))
-                                    }
-                                    
-                                    let text = trimChatInputText(convertMarkdownToAttributes(caption ?? NSAttributedString()))
-                                    let entities = generateTextEntities(text.string, enabledTypes: .all, currentEntities: generateChatInputTextEntities(text))
-                                    if !entities.isEmpty {
-                                        attributes.append(TextEntitiesMessageAttribute(entities: entities))
-                                    }
-                                
-                                    var bubbleUpEmojiOrStickersetsById: [Int64: ItemCollectionId] = [:]
-                                    text.enumerateAttribute(ChatTextInputAttributes.customEmoji, in: NSRange(location: 0, length: text.length), using: { value, _, _ in
-                                        if let value = value as? ChatTextInputTextCustomEmojiAttribute {
-                                            if let file = value.file {
-                                                if let packId = value.interactivelySelectedFromPackId {
-                                                    bubbleUpEmojiOrStickersetsById[file.fileId.id] = packId
+                                    if context.sharedContext.immediateExperimentalUISettings.storiesJpegExperiment {
+                                        let sizes: [Int32] = [2048, 1280]
+                                        let formats: [MediaImageFormat] = [.jxl, .jpeg]
+                                        let qualities: [Int32: [Int32]] = [
+                                            MediaImageFormat.jxl.rawValue: [
+                                                50,
+                                                75
+                                            ],
+                                            MediaImageFormat.jpeg.rawValue: [
+                                                75
+                                            ]
+                                        ]
+                                        for sizeSide in sizes {
+                                            for format in formats {
+                                                for quality in qualities[format.rawValue]! {
+                                                    var randomId: Int64 = 0
+                                                    arc4random_buf(&randomId, 8)
+                                                    let resource = PhotoLibraryMediaResource(
+                                                        localIdentifier: asset.localIdentifier,
+                                                        uniqueId: Int64.random(in: Int64.min ... Int64.max),
+                                                        width: sizeSide,
+                                                        height: sizeSide,
+                                                        format: format,
+                                                        quality: quality
+                                                    )
+                                                    
+                                                    let size = CGSize(width: CGFloat(asset.pixelWidth), height: CGFloat(asset.pixelHeight))
+                                                    let scaledSize = size.aspectFittedOrSmaller(CGSize(width: CGFloat(sizeSide), height: CGFloat(sizeSide)))
+                                                    
+                                                    let media: Media
+                                                    media = TelegramMediaFile(fileId: MediaId(namespace: Namespaces.Media.LocalFile, id: Int64.random(in: Int64.min ... Int64.max)), partialReference: nil, resource: resource, previewRepresentations: [], videoThumbnails: [], immediateThumbnailData: nil, mimeType: format == .jxl ? "image/jxl" : "image/jpeg", size: nil, attributes: [
+                                                        .FileName(fileName: format == .jxl ? "image\(sizeSide)-q\(quality).jxl" : "image\(sizeSide)-q\(quality).jpg"),
+                                                        .ImageSize(size: PixelDimensions(scaledSize))
+                                                    ], alternativeRepresentations: [])
+                                                    
+                                                    var attributes: [MessageAttribute] = []
+                                                    if let timer = item.timer, timer > 0 && (timer <= 60 || timer == viewOnceTimeout) {
+                                                        attributes.append(AutoremoveTimeoutMessageAttribute(timeout: Int32(timer), countdownBeginTime: nil))
+                                                    }
+                                                    if let spoiler = item.spoiler, spoiler {
+                                                        attributes.append(MediaSpoilerMessageAttribute())
+                                                    }
+                                                    
+                                                    let text = trimChatInputText(convertMarkdownToAttributes(caption ?? NSAttributedString()))
+                                                    let entities = generateTextEntities(text.string, enabledTypes: .all, currentEntities: generateChatInputTextEntities(text))
+                                                    if !entities.isEmpty {
+                                                        attributes.append(TextEntitiesMessageAttribute(entities: entities))
+                                                    }
+                                                    
+                                                    var bubbleUpEmojiOrStickersetsById: [Int64: ItemCollectionId] = [:]
+                                                    text.enumerateAttribute(ChatTextInputAttributes.customEmoji, in: NSRange(location: 0, length: text.length), using: { value, _, _ in
+                                                        if let value = value as? ChatTextInputTextCustomEmojiAttribute {
+                                                            if let file = value.file {
+                                                                if let packId = value.interactivelySelectedFromPackId {
+                                                                    bubbleUpEmojiOrStickersetsById[file.fileId.id] = packId
+                                                                }
+                                                            }
+                                                        }
+                                                    })
+                                                    var bubbleUpEmojiOrStickersets: [ItemCollectionId] = []
+                                                    for entity in entities {
+                                                        if case let .CustomEmoji(_, fileId) = entity.type {
+                                                            if let packId = bubbleUpEmojiOrStickersetsById[fileId] {
+                                                                if !bubbleUpEmojiOrStickersets.contains(packId) {
+                                                                    bubbleUpEmojiOrStickersets.append(packId)
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    
+                                                    if let price = item.price {
+                                                        if var current = paidMessage {
+                                                            if current.text.isEmpty && !text.string.isEmpty {
+                                                                current.text = text.string
+                                                                current.entities = entities
+                                                            }
+                                                            current.media.append(media)
+                                                            paidMessage = current
+                                                        } else {
+                                                            paidMessage = EnqueuePaidMessage(
+                                                                price: price,
+                                                                text: text.string,
+                                                                entities: entities,
+                                                                media: [media]
+                                                            )
+                                                        }
+                                                    } else {
+                                                        messages.append(LegacyAssetPickerEnqueueMessage(message: .message(text: text.string, attributes: attributes, inlineStickers: [:], mediaReference: .standalone(media: media), threadId: nil, replyToMessageId: nil, replyToStoryId: nil, localGroupingKey: item.groupedId, correlationId: nil, bubbleUpEmojiOrStickersets: bubbleUpEmojiOrStickersets), uniqueId: item.uniqueId, isFile: false))
+                                                    }
                                                 }
                                             }
                                         }
-                                    })
-                                    var bubbleUpEmojiOrStickersets: [ItemCollectionId] = []
-                                    for entity in entities {
-                                        if case let .CustomEmoji(_, fileId) = entity.type {
-                                            if let packId = bubbleUpEmojiOrStickersetsById[fileId] {
-                                                if !bubbleUpEmojiOrStickersets.contains(packId) {
-                                                    bubbleUpEmojiOrStickersets.append(packId)
+                                    } else {
+                                        var randomId: Int64 = 0
+                                        arc4random_buf(&randomId, 8)
+                                        let size = CGSize(width: CGFloat(asset.pixelWidth), height: CGFloat(asset.pixelHeight))
+                                        let scaledSize = size.aspectFittedOrSmaller(CGSize(width: 1280.0, height: 1280.0))
+                                        let resource = PhotoLibraryMediaResource(localIdentifier: asset.localIdentifier, uniqueId: Int64.random(in: Int64.min ... Int64.max))
+                                    
+                                        let media: Media
+                                        representations.append(TelegramMediaImageRepresentation(dimensions: PixelDimensions(scaledSize), resource: resource, progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false, isPersonal: false))
+                                        media = TelegramMediaImage(imageId: MediaId(namespace: Namespaces.Media.LocalImage, id: randomId), representations: representations, immediateThumbnailData: nil, reference: nil, partialReference: nil, flags: [])
+                                    
+                                        var attributes: [MessageAttribute] = []
+                                        if let timer = item.timer, timer > 0 && (timer <= 60 || timer == viewOnceTimeout) {
+                                            attributes.append(AutoremoveTimeoutMessageAttribute(timeout: Int32(timer), countdownBeginTime: nil))
+                                        }
+                                        if let spoiler = item.spoiler, spoiler {
+                                            attributes.append(MediaSpoilerMessageAttribute())
+                                        }
+                                    
+                                        let text = trimChatInputText(convertMarkdownToAttributes(caption ?? NSAttributedString()))
+                                        let entities = generateTextEntities(text.string, enabledTypes: .all, currentEntities: generateChatInputTextEntities(text))
+                                        if !entities.isEmpty {
+                                            attributes.append(TextEntitiesMessageAttribute(entities: entities))
+                                        }
+                                    
+                                        var bubbleUpEmojiOrStickersetsById: [Int64: ItemCollectionId] = [:]
+                                        text.enumerateAttribute(ChatTextInputAttributes.customEmoji, in: NSRange(location: 0, length: text.length), using: { value, _, _ in
+                                            if let value = value as? ChatTextInputTextCustomEmojiAttribute {
+                                                if let file = value.file {
+                                                    if let packId = value.interactivelySelectedFromPackId {
+                                                        bubbleUpEmojiOrStickersetsById[file.fileId.id] = packId
+                                                    }
+                                                }
+                                            }
+                                        })
+                                        var bubbleUpEmojiOrStickersets: [ItemCollectionId] = []
+                                        for entity in entities {
+                                            if case let .CustomEmoji(_, fileId) = entity.type {
+                                                if let packId = bubbleUpEmojiOrStickersetsById[fileId] {
+                                                    if !bubbleUpEmojiOrStickersets.contains(packId) {
+                                                        bubbleUpEmojiOrStickersets.append(packId)
+                                                    }
                                                 }
                                             }
                                         }
+                                        
+                                        if let price = item.price {
+                                            if var current = paidMessage {
+                                                if current.text.isEmpty && !text.string.isEmpty {
+                                                    current.text = text.string
+                                                    current.entities = entities
+                                                }
+                                                current.media.append(media)
+                                                paidMessage = current
+                                            } else {
+                                                paidMessage = EnqueuePaidMessage(
+                                                    price: price,
+                                                    text: text.string,
+                                                    entities: entities,
+                                                    media: [media]
+                                                )
+                                            }
+                                        } else {
+                                            messages.append(LegacyAssetPickerEnqueueMessage(message: .message(text: text.string, attributes: attributes, inlineStickers: [:], mediaReference: .standalone(media: media), threadId: nil, replyToMessageId: nil, replyToStoryId: nil, localGroupingKey: item.groupedId, correlationId: nil, bubbleUpEmojiOrStickersets: bubbleUpEmojiOrStickersets), uniqueId: item.uniqueId, isFile: false))
+                                        }
                                     }
-                                    
-                                    messages.append(LegacyAssetPickerEnqueueMessage(message: .message(text: text.string, attributes: attributes, inlineStickers: [:], mediaReference: .standalone(media: media), replyToMessageId: nil, localGroupingKey: item.groupedId, correlationId: nil, bubbleUpEmojiOrStickersets: bubbleUpEmojiOrStickersets), uniqueId: item.uniqueId, isFile: false))
                                 case .tempFile:
                                     break
                             }
@@ -540,14 +644,14 @@ public func legacyAssetPickerEnqueueMessages(account: Account, signals: [Any]) -
                                         let thumbnailImage = TGScaleImageToPixelSize(thumbnail, thumbnailSize)!
                                         if let thumbnailData = thumbnailImage.jpegData(compressionQuality: 0.4) {
                                             account.postbox.mediaBox.storeResourceData(resource.id, data: thumbnailData)
-                                            previewRepresentations.append(TelegramMediaImageRepresentation(dimensions: PixelDimensions(thumbnailSize), resource: resource, progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false))
+                                            previewRepresentations.append(TelegramMediaImageRepresentation(dimensions: PixelDimensions(thumbnailSize), resource: resource, progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false, isPersonal: false))
                                         }
                                     }
                                     
                                     var randomId: Int64 = 0
                                     arc4random_buf(&randomId, 8)
                                     let resource = LocalFileReferenceMediaResource(localFilePath: path, randomId: randomId)
-                                    let media = TelegramMediaFile(fileId: MediaId(namespace: Namespaces.Media.LocalFile, id: randomId), partialReference: nil, resource: resource, previewRepresentations: previewRepresentations, videoThumbnails: [], immediateThumbnailData: nil, mimeType: mimeType, size: nil, attributes: [.FileName(fileName: name)])
+                                    let media = TelegramMediaFile(fileId: MediaId(namespace: Namespaces.Media.LocalFile, id: randomId), partialReference: nil, resource: resource, previewRepresentations: previewRepresentations, videoThumbnails: [], immediateThumbnailData: nil, mimeType: mimeType, size: fileSize(path), attributes: [.FileName(fileName: name)], alternativeRepresentations: [])
                                     
                                     var attributes: [MessageAttribute] = []
                                     let text = trimChatInputText(convertMarkdownToAttributes(caption ?? NSAttributedString()))
@@ -577,12 +681,30 @@ public func legacyAssetPickerEnqueueMessages(account: Account, signals: [Any]) -
                                         }
                                     }
                                     
-                                    messages.append(LegacyAssetPickerEnqueueMessage(message: .message(text: text.string, attributes: attributes, inlineStickers: [:], mediaReference: .standalone(media: media), replyToMessageId: nil, localGroupingKey: item.groupedId, correlationId: nil, bubbleUpEmojiOrStickersets: bubbleUpEmojiOrStickersets), uniqueId: item.uniqueId, isFile: true))
+                                    if let price = item.price {
+                                        if var current = paidMessage {
+                                            if current.text.isEmpty && !text.string.isEmpty {
+                                                current.text = text.string
+                                                current.entities = entities
+                                            }
+                                            current.media.append(media)
+                                            paidMessage = current
+                                        } else {
+                                            paidMessage = EnqueuePaidMessage(
+                                                price: price,
+                                                text: text.string,
+                                                entities: entities,
+                                                media: [media]
+                                            )
+                                        }
+                                    } else {
+                                        messages.append(LegacyAssetPickerEnqueueMessage(message: .message(text: text.string, attributes: attributes, inlineStickers: [:], mediaReference: .standalone(media: media), threadId: nil, replyToMessageId: nil, replyToStoryId: nil, localGroupingKey: item.groupedId, correlationId: nil, bubbleUpEmojiOrStickersets: bubbleUpEmojiOrStickersets), uniqueId: item.uniqueId, isFile: true))
+                                    }
                                 case let .asset(asset):
                                     var randomId: Int64 = 0
                                     arc4random_buf(&randomId, 8)
                                     let resource = PhotoLibraryMediaResource(localIdentifier: asset.localIdentifier, uniqueId: Int64.random(in: Int64.min ... Int64.max))
-                                    let media = TelegramMediaFile(fileId: MediaId(namespace: Namespaces.Media.LocalFile, id: randomId), partialReference: nil, resource: resource, previewRepresentations: [], videoThumbnails: [], immediateThumbnailData: nil, mimeType: mimeType, size: nil, attributes: [.FileName(fileName: name)])
+                                    let media = TelegramMediaFile(fileId: MediaId(namespace: Namespaces.Media.LocalFile, id: randomId), partialReference: nil, resource: resource, previewRepresentations: [], videoThumbnails: [], immediateThumbnailData: nil, mimeType: mimeType, size: nil, attributes: [.FileName(fileName: name)], alternativeRepresentations: [])
                                     
                                     var attributes: [MessageAttribute] = []
                                     let text = trimChatInputText(convertMarkdownToAttributes(caption ?? NSAttributedString()))
@@ -612,7 +734,25 @@ public func legacyAssetPickerEnqueueMessages(account: Account, signals: [Any]) -
                                         }
                                     }
                                     
-                                    messages.append(LegacyAssetPickerEnqueueMessage(message: .message(text: text.string, attributes: attributes, inlineStickers: [:], mediaReference: .standalone(media: media), replyToMessageId: nil, localGroupingKey: item.groupedId, correlationId: nil, bubbleUpEmojiOrStickersets: bubbleUpEmojiOrStickersets), uniqueId: item.uniqueId, isFile: true))
+                                    if let price = item.price {
+                                        if var current = paidMessage {
+                                            if current.text.isEmpty && !text.string.isEmpty {
+                                                current.text = text.string
+                                                current.entities = entities
+                                            }
+                                            current.media.append(media)
+                                            paidMessage = current
+                                        } else {
+                                            paidMessage = EnqueuePaidMessage(
+                                                price: price,
+                                                text: text.string,
+                                                entities: entities,
+                                                media: [media]
+                                            )
+                                        }
+                                    } else {
+                                        messages.append(LegacyAssetPickerEnqueueMessage(message: .message(text: text.string, attributes: attributes, inlineStickers: [:], mediaReference: .standalone(media: media), threadId: nil, replyToMessageId: nil, replyToStoryId: nil, localGroupingKey: item.groupedId, correlationId: nil, bubbleUpEmojiOrStickersets: bubbleUpEmojiOrStickersets), uniqueId: item.uniqueId, isFile: true))
+                                    }
                                 default:
                                     break
                             }
@@ -644,9 +784,9 @@ public func legacyAssetPickerEnqueueMessages(account: Account, signals: [Any]) -
                                     finalDuration = duration
                             }
                             
-                            if !asAnimation {
+                            /*if !asAnimation {
                                 finalDimensions = TGFitSize(finalDimensions, CGSize(width: 848.0, height: 848.0))
-                            }
+                            }*/
                             
                             var previewRepresentations: [TelegramMediaImageRepresentation] = []
                             if let thumbnail = thumbnail {
@@ -655,13 +795,17 @@ public func legacyAssetPickerEnqueueMessages(account: Account, signals: [Any]) -
                                 let thumbnailImage = TGScaleImageToPixelSize(thumbnail, thumbnailSize)!
                                 if let thumbnailData = thumbnailImage.jpegData(compressionQuality: 0.4) {
                                     account.postbox.mediaBox.storeResourceData(resource.id, data: thumbnailData)
-                                    previewRepresentations.append(TelegramMediaImageRepresentation(dimensions: PixelDimensions(thumbnailSize), resource: resource, progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false))
+                                    previewRepresentations.append(TelegramMediaImageRepresentation(dimensions: PixelDimensions(thumbnailSize), resource: resource, progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false, isPersonal: false))
                                 }
                             }
+                            
+                            let defaultPreset = TGMediaVideoConversionPreset(rawValue: UInt32(UserDefaults.standard.integer(forKey: "TG_preferredVideoPreset_v0")))
                             
                             var preset: TGMediaVideoConversionPreset = TGMediaVideoConversionPresetCompressedMedium
                             if let selectedPreset = adjustments?.preset {
                                 preset = selectedPreset
+                            } else if preset == TGMediaVideoConversionPresetCompressedDefault && defaultPreset != TGMediaVideoConversionPresetCompressedDefault {
+                                preset = defaultPreset
                             }
                             if asAnimation {
                                 preset = TGMediaVideoConversionPresetAnimation
@@ -677,9 +821,11 @@ public func legacyAssetPickerEnqueueMessages(account: Account, signals: [Any]) -
                                     finalDuration = adjustments.trimEndValue - adjustments.trimStartValue
                                 }
                                 
-                                let adjustmentsData = MemoryBuffer(data: NSKeyedArchiver.archivedData(withRootObject: adjustments.dictionary()!))
-                                let digest = MemoryBuffer(data: adjustmentsData.md5Digest())
-                                resourceAdjustments = VideoMediaResourceAdjustments(data: adjustmentsData, digest: digest)
+                                if let dict = adjustments.dictionary(), let data = try? NSKeyedArchiver.archivedData(withRootObject: dict, requiringSecureCoding: false) {
+                                    let adjustmentsData = MemoryBuffer(data: data)
+                                    let digest = MemoryBuffer(data: adjustmentsData.md5Digest())
+                                    resourceAdjustments = VideoMediaResourceAdjustments(data: adjustmentsData, digest: digest, isStory: false)
+                                }
                             }
                             
                             let resource: TelegramMediaResource
@@ -711,16 +857,26 @@ public func legacyAssetPickerEnqueueMessages(account: Account, signals: [Any]) -
                                 fileAttributes.append(.Animated)
                             }
                             if !asFile {
-                                fileAttributes.append(.Video(duration: Int(finalDuration), size: PixelDimensions(finalDimensions), flags: [.supportsStreaming]))
+                                fileAttributes.append(.Video(duration: finalDuration, size: PixelDimensions(finalDimensions), flags: [.supportsStreaming], preloadSize: nil, coverTime: nil, videoCodec: nil))
                                 if let adjustments = adjustments {
                                     if adjustments.sendAsGif {
                                         fileAttributes.append(.Animated)
                                     }
                                 }
+                                
+                                if estimatedSize > 10 * 1024 * 1024 {
+                                    fileAttributes.append(.hintFileIsLarge)
+                                }
+                            } else {
+                                if case let .asset(asset) = data, let phAsset = asset.backingAsset, let resource = PHAssetResource.assetResources(for: phAsset).last, let sizeValue = resource.value(forKey: "fileSize") as? CLong, sizeValue > 0 {
+                                    let size = Int64(bitPattern: UInt64(sizeValue))
+                                    
+                                    if size > 10 * 1024 * 1024 {
+                                        fileAttributes.append(.hintFileIsLarge)
+                                    }
+                                }
                             }
-                            if estimatedSize > 10 * 1024 * 1024 {
-                                fileAttributes.append(.hintFileIsLarge)
-                            }
+                            
                             
                             var attributes: [MessageAttribute] = []
                             
@@ -735,10 +891,13 @@ public func legacyAssetPickerEnqueueMessages(account: Account, signals: [Any]) -
                                 fileAttributes.append(.HasLinkedStickers)
                             }
                             
-                            let media = TelegramMediaFile(fileId: MediaId(namespace: Namespaces.Media.LocalFile, id: Int64.random(in: Int64.min ... Int64.max)), partialReference: nil, resource: resource, previewRepresentations: previewRepresentations, videoThumbnails: [], immediateThumbnailData: nil, mimeType: "video/mp4", size: nil, attributes: fileAttributes)
+                            let media = TelegramMediaFile(fileId: MediaId(namespace: Namespaces.Media.LocalFile, id: Int64.random(in: Int64.min ... Int64.max)), partialReference: nil, resource: resource, previewRepresentations: previewRepresentations, videoThumbnails: [], immediateThumbnailData: nil, mimeType: "video/mp4", size: nil, attributes: fileAttributes, alternativeRepresentations: [])
 
-                            if let timer = item.timer, timer > 0 && timer <= 60 {
+                            if let timer = item.timer, timer > 0 && (timer <= 60 || timer == viewOnceTimeout) {
                                 attributes.append(AutoremoveTimeoutMessageAttribute(timeout: Int32(timer), countdownBeginTime: nil))
+                            }
+                            if let spoiler = item.spoiler, spoiler {
+                                attributes.append(MediaSpoilerMessageAttribute())
                             }
                             
                             let text = trimChatInputText(convertMarkdownToAttributes(caption ?? NSAttributedString()))
@@ -768,9 +927,56 @@ public func legacyAssetPickerEnqueueMessages(account: Account, signals: [Any]) -
                                 }
                             }
                             
-                            messages.append(LegacyAssetPickerEnqueueMessage(message: .message(text: text.string, attributes: attributes, inlineStickers: [:], mediaReference: .standalone(media: media), replyToMessageId: nil, localGroupingKey: item.groupedId, correlationId: nil, bubbleUpEmojiOrStickersets: bubbleUpEmojiOrStickersets), uniqueId: item.uniqueId, isFile: asFile))
+                            if let price = item.price {
+                                if var current = paidMessage {
+                                    if current.text.isEmpty && !text.string.isEmpty {
+                                        current.text = text.string
+                                        current.entities = entities
+                                    }
+                                    current.media.append(media)
+                                    paidMessage = current
+                                } else {
+                                    paidMessage = EnqueuePaidMessage(
+                                        price: price,
+                                        text: text.string,
+                                        entities: entities,
+                                        media: [media]
+                                    )
+                                }
+                            } else {
+                                messages.append(LegacyAssetPickerEnqueueMessage(message: .message(text: text.string, attributes: attributes, inlineStickers: [:], mediaReference: .standalone(media: media), threadId: nil, replyToMessageId: nil, replyToStoryId: nil, localGroupingKey: item.groupedId, correlationId: nil, bubbleUpEmojiOrStickersets: bubbleUpEmojiOrStickersets), uniqueId: item.uniqueId, isFile: asFile))
+                            }
                     }
                 }
+            }
+            
+            if let paidMessage {
+                var attributes: [MessageAttribute] = []
+                if !paidMessage.entities.isEmpty {
+                    attributes.append(TextEntitiesMessageAttribute(entities: paidMessage.entities))
+                }
+                messages.append(
+                    LegacyAssetPickerEnqueueMessage(
+                        message: .message(
+                            text: paidMessage.text,
+                            attributes: attributes,
+                            inlineStickers: [:],
+                            mediaReference: .standalone(
+                                media: TelegramMediaPaidContent(
+                                    amount: paidMessage.price,
+                                    extendedMedia: paidMessage.media.map { .full(media: $0) }
+                                )),
+                            threadId: nil,
+                            replyToMessageId: nil,
+                            replyToStoryId: nil,
+                            localGroupingKey: nil,
+                            correlationId: nil,
+                            bubbleUpEmojiOrStickersets: []
+                        ),
+                        uniqueId: nil,
+                        isFile: false
+                    )
+                )
             }
             
             subscriber.putNext(messages)

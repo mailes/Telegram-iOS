@@ -37,6 +37,7 @@ public protocol ItemListItemNode {
 
 public protocol ItemListItemFocusableNode {
     func focus()
+    func selectAll()
 }
 
 public enum ItemListInsetWithOtherSection {
@@ -121,6 +122,10 @@ public func itemListNeighborsPlainInsets(_ neighbors: ItemListNeighbors) -> UIEd
 }
 
 public func itemListNeighborsGroupedInsets(_ neighbors: ItemListNeighbors, _ params: ListViewItemLayoutParams) -> UIEdgeInsets {
+    if params.isStandalone {
+        return UIEdgeInsets()
+    }
+    
     let topInset: CGFloat
     switch neighbors.top {
     case .none:
@@ -159,11 +164,15 @@ public final class ItemListPresentationData: Equatable {
     public let theme: PresentationTheme
     public let fontSize: PresentationFontSize
     public let strings: PresentationStrings
+    public let nameDisplayOrder: PresentationPersonNameOrder
+    public let dateTimeFormat: PresentationDateTimeFormat
     
-    public init(theme: PresentationTheme, fontSize: PresentationFontSize, strings: PresentationStrings) {
+    public init(theme: PresentationTheme, fontSize: PresentationFontSize, strings: PresentationStrings, nameDisplayOrder: PresentationPersonNameOrder, dateTimeFormat: PresentationDateTimeFormat) {
         self.theme = theme
         self.fontSize = fontSize
         self.strings = strings
+        self.nameDisplayOrder = nameDisplayOrder
+        self.dateTimeFormat = dateTimeFormat
     }
     
     public static func ==(lhs: ItemListPresentationData, rhs: ItemListPresentationData) -> Bool {
@@ -174,6 +183,12 @@ public final class ItemListPresentationData: Equatable {
             return false
         }
         if lhs.fontSize != rhs.fontSize {
+            return false
+        }
+        if lhs.nameDisplayOrder != rhs.nameDisplayOrder {
+            return false
+        }
+        if lhs.dateTimeFormat != rhs.dateTimeFormat {
             return false
         }
         return true
@@ -226,6 +241,6 @@ public extension PresentationFontSize {
 
 public extension ItemListPresentationData {
     convenience init(_ presentationData: PresentationData) {
-        self.init(theme: presentationData.theme, fontSize: presentationData.listsFontSize, strings: presentationData.strings)
+        self.init(theme: presentationData.theme, fontSize: presentationData.listsFontSize, strings: presentationData.strings, nameDisplayOrder: presentationData.nameDisplayOrder, dateTimeFormat: presentationData.dateTimeFormat)
     }
 }

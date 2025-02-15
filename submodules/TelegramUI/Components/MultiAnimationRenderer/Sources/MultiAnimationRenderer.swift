@@ -9,6 +9,7 @@ public protocol MultiAnimationRenderer: AnyObject {
     func add(target: MultiAnimationRenderTarget, cache: AnimationCache, itemId: String, unique: Bool, size: CGSize, fetch: @escaping (AnimationCacheFetchOptions) -> Disposable) -> Disposable
     func loadFirstFrameSynchronously(target: MultiAnimationRenderTarget, cache: AnimationCache, itemId: String, size: CGSize) -> Bool
     func loadFirstFrame(target: MultiAnimationRenderTarget, cache: AnimationCache, itemId: String, size: CGSize, fetch: ((AnimationCacheFetchOptions) -> Disposable)?, completion: @escaping (Bool, Bool) -> Void) -> Disposable
+    func loadFirstFrameAsImage(cache: AnimationCache, itemId: String, size: CGSize, fetch: ((AnimationCacheFetchOptions) -> Disposable)?, completion: @escaping (CGImage?) -> Void) -> Disposable
     func setFrameIndex(itemId: String, size: CGSize, frameIndex: Int, placeholder: UIImage)
 }
 
@@ -16,6 +17,7 @@ private var nextRenderTargetId: Int64 = 1
 
 open class MultiAnimationRenderTarget: SimpleLayer {
     public let id: Int64
+    public var numFrames: Int?
     
     let deinitCallbacks = Bag<() -> Void>()
     let updateStateCallbacks = Bag<() -> Void>()
@@ -106,7 +108,9 @@ private final class ItemAnimationContext {
             
             switch frame.format {
             case let .rgba(data, width, height, bytesPerRow):
-                let context = DrawingContext(size: CGSize(width: CGFloat(width), height: CGFloat(height)), scale: 1.0, opaque: false, bytesPerRow: bytesPerRow)
+                guard let context = DrawingContext(size: CGSize(width: CGFloat(width), height: CGFloat(height)), scale: 1.0, opaque: false, bytesPerRow: bytesPerRow) else {
+                    return nil
+                }
                     
                 data.withUnsafeBytes { bytes -> Void in
                     memcpy(context.bytes, bytes.baseAddress!, height * bytesPerRow)
@@ -133,7 +137,9 @@ private final class ItemAnimationContext {
             case let .rgba(data, width, height, bytesPerRow):
                 let blurredWidth = 12
                 let blurredHeight = 12
-                let context = DrawingContext(size: CGSize(width: CGFloat(blurredWidth), height: CGFloat(blurredHeight)), scale: 1.0, opaque: true, bytesPerRow: bytesPerRow)
+                guard let context = DrawingContext(size: CGSize(width: CGFloat(blurredWidth), height: CGFloat(blurredHeight)), scale: 1.0, opaque: true, bytesPerRow: bytesPerRow) else {
+                    return nil
+                }
                 
                 let size = CGSize(width: CGFloat(blurredWidth), height: CGFloat(blurredHeight))
                 
@@ -527,7 +533,7 @@ public final class MultiAnimationRendererImpl: MultiAnimationRenderer {
                 if itemContext.targets.isEmpty {
                     strongSelf.itemContexts.removeValue(forKey: itemKey)
                 }
-            }
+            }.strict()
         }
         
         func loadFirstFrameSynchronously(target: MultiAnimationRenderTarget, cache: AnimationCache, itemId: String, size: CGSize) -> Bool {
@@ -540,6 +546,7 @@ public final class MultiAnimationRendererImpl: MultiAnimationRenderer {
                 }
                 
                 target.contents = loadedFrame.image.cgImage
+                target.numFrames = item.numFrames
                 
                 if let blurredRepresentationTarget = target.blurredRepresentationTarget {
                     blurredRepresentationTarget.contents = loadedFrame.blurredRepresentation(color: target.blurredRepresentationBackgroundColor)?.cgImage
@@ -575,6 +582,7 @@ public final class MultiAnimationRendererImpl: MultiAnimationRenderer {
                         completion(false, true)
                         return
                     }
+                    target.numFrames = item.numFrames
                     if let loadedFrame = loadedFrame {
                         if let cgImage = loadedFrame.image.cgImage {
                             if hadIntermediateUpdate {
@@ -593,7 +601,35 @@ public final class MultiAnimationRendererImpl: MultiAnimationRenderer {
                         completion(false, true)
                     }
                 }
-            })
+            }).strict()
+        }
+        
+        func loadFirstFrameAsImage(cache: AnimationCache, itemId: String, size: CGSize, fetch: ((AnimationCacheFetchOptions) -> Disposable)?, completion: @escaping (CGImage?) -> Void) -> Disposable {
+            return cache.getFirstFrame(queue: self.firstFrameQueue, sourceId: itemId, size: size, fetch: fetch, completion: { item in
+                guard let item = item.item else {
+                    Queue.mainQueue().async {
+                        completion(nil)
+                    }
+                    return
+                }
+                
+                let loadedFrame: ItemAnimationContext.Frame?
+                if let frame = item.advance(advance: .frames(1), requestedFormat: .rgba) {
+                    loadedFrame = ItemAnimationContext.Frame(frame: frame.frame)
+                } else {
+                    loadedFrame = nil
+                }
+                
+                Queue.mainQueue().async {
+                    if let loadedFrame = loadedFrame {
+                        if let cgImage = loadedFrame.image.cgImage {
+                            completion(cgImage)
+                        }
+                    } else {
+                        completion(nil)
+                    }
+                }
+            }).strict()
         }
         
         func setFrameIndex(itemId: String, size: CGSize, frameIndex: Int, placeholder: UIImage) {
@@ -696,7 +732,7 @@ public final class MultiAnimationRendererImpl: MultiAnimationRenderer {
         
         return ActionDisposable {
             disposable.dispose()
-        }
+        }.strict()
     }
     
     public func loadFirstFrameSynchronously(target: MultiAnimationRenderTarget, cache: AnimationCache, itemId: String, size: CGSize) -> Bool {
@@ -730,7 +766,24 @@ public final class MultiAnimationRendererImpl: MultiAnimationRenderer {
             self.groupContext = groupContext
         }
         
-        return groupContext.loadFirstFrame(target: target, cache: cache, itemId: itemId, size: size, fetch: fetch, completion: completion)
+        return groupContext.loadFirstFrame(target: target, cache: cache, itemId: itemId, size: size, fetch: fetch, completion: completion).strict()
+    }
+    
+    public func loadFirstFrameAsImage(cache: AnimationCache, itemId: String, size: CGSize, fetch: ((AnimationCacheFetchOptions) -> Disposable)?, completion: @escaping (CGImage?) -> Void) -> Disposable {
+        let groupContext: GroupContext
+        if let current = self.groupContext {
+            groupContext = current
+        } else {
+            groupContext = GroupContext(firstFrameQueue: MultiAnimationRendererImpl.firstFrameQueue, stateUpdated: { [weak self] in
+                guard let strongSelf = self else {
+                    return
+                }
+                strongSelf.updateIsPlaying()
+            })
+            self.groupContext = groupContext
+        }
+        
+        return groupContext.loadFirstFrameAsImage(cache: cache, itemId: itemId, size: size, fetch: fetch, completion: completion).strict()
     }
     
     public func setFrameIndex(itemId: String, size: CGSize, frameIndex: Int, placeholder: UIImage) {

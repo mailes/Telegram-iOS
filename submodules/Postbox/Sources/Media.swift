@@ -71,6 +71,7 @@ public struct MediaId: Hashable, PostboxCoding, CustomStringConvertible, Codable
 public protocol Media: AnyObject, PostboxCoding {
     var id: MediaId? { get }
     var peerIds: [PeerId] { get }
+    var storyIds: [StoryId] { get }
     
     var indexableText: String? { get }
     
@@ -82,12 +83,30 @@ public protocol Media: AnyObject, PostboxCoding {
     func isSemanticallyEqual(to other: Media) -> Bool
 }
 
+public extension Media {
+    var storyIds: [StoryId] {
+        return []
+    }
+}
+
 public func areMediaArraysEqual(_ lhs: [Media], _ rhs: [Media]) -> Bool {
     if lhs.count != rhs.count {
         return false
     }
     for i in 0 ..< lhs.count {
         if !lhs[i].isEqual(to: rhs[i]) {
+            return false
+        }
+    }
+    return true
+}
+
+public func areMediaArraysSemanticallyEqual(_ lhs: [Media], _ rhs: [Media]) -> Bool {
+    if lhs.count != rhs.count {
+        return false
+    }
+    for i in 0 ..< lhs.count {
+        if !lhs[i].isSemanticallyEqual(to: rhs[i]) {
             return false
         }
     }

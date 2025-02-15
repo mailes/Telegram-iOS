@@ -120,13 +120,28 @@ class ChatListRecentPeersListItemNode: ListViewItemNode {
                         peersNode = currentPeersNode
                         peersNode.updateThemeAndStrings(theme: item.theme, strings: item.strings)
                     } else {
-                        peersNode = ChatListSearchRecentPeersNode(context: item.context, theme: item.theme, mode: .list(compact: false), strings: item.strings, peerSelected: { peer in
-                            self?.item?.peerSelected(peer)
-                        }, peerContextAction: { peer, node, gesture, location in
-                            self?.item?.peerContextAction(peer, node, gesture, location)
-                        }, isPeerSelected: { _ in
-                            return false
-                        })
+                        peersNode = ChatListSearchRecentPeersNode(
+                            accountPeerId: item.context.account.peerId,
+                            postbox: item.context.account.postbox,
+                            network: item.context.account.network,
+                            energyUsageSettings: item.context.sharedContext.energyUsageSettings,
+                            contentSettings: item.context.currentContentSettings.with { $0 },
+                            animationCache: item.context.animationCache,
+                            animationRenderer: item.context.animationRenderer,
+                            resolveInlineStickers: item.context.engine.stickers.resolveInlineStickers,
+                            theme: item.theme,
+                            mode: .list(compact: false),
+                            strings: item.strings,
+                            peerSelected: { peer in
+                                self?.item?.peerSelected(peer)
+                            },
+                            peerContextAction: { peer, node, gesture, location in
+                                self?.item?.peerContextAction(peer, node, gesture, location)
+                            },
+                            isPeerSelected: { _ in
+                                return false
+                            }
+                        )
                         strongSelf.ready.set(peersNode.isReady)
                         strongSelf.peersNode = peersNode
                         strongSelf.addSubnode(peersNode)
@@ -144,7 +159,7 @@ class ChatListRecentPeersListItemNode: ListViewItemNode {
         }
     }
     
-    override func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
+    override func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: duration * 0.5)
     }
     

@@ -86,10 +86,28 @@
 - (void)setTimer:(NSNumber *)timer forItem:(NSObject<TGMediaEditableItem> *)item;
 - (SSignal *)timersUpdatedSignal;
 
+- (bool)spoilerForItem:(NSObject<TGMediaEditableItem> *)item;
+- (SSignal *)spoilerSignalForItem:(NSObject<TGMediaEditableItem> *)item;
+- (SSignal *)spoilerSignalForIdentifier:(NSString *)identifier;
+- (void)setSpoiler:(bool)spoiler forItem:(NSObject<TGMediaEditableItem> *)item;
+- (SSignal *)spoilersUpdatedSignal;
+
+- (NSNumber *)priceForItem:(NSObject<TGMediaEditableItem> *)item;
+- (SSignal *)priceSignalForItem:(NSObject<TGMediaEditableItem> *)item;
+- (SSignal *)priceSignalForIdentifier:(NSString *)identifier;
+- (void)setPrice:(NSNumber *)price forItem:(NSObject<TGMediaEditableItem> *)item;
+- (SSignal *)pricesUpdatedSignal;
+
 - (UIImage *)paintingImageForItem:(NSObject<TGMediaEditableItem> *)item;
 - (UIImage *)stillPaintingImageForItem:(NSObject<TGMediaEditableItem> *)item;
-- (bool)setPaintingData:(NSData *)data image:(UIImage *)image stillImage:(UIImage *)image forItem:(NSObject<TGMediaEditableItem> *)item dataUrl:(NSURL **)dataOutUrl imageUrl:(NSURL **)imageOutUrl forVideo:(bool)video;
+- (bool)setPaintingData:(NSData *)data entitiesData:(NSData *)entitiesData image:(UIImage *)image stillImage:(UIImage *)stillImage forItem:(NSObject<TGMediaEditableItem> *)item dataUrl:(NSURL **)dataOutUrl entitiesDataUrl:(NSURL **)entitiesDataOutUrl imageUrl:(NSURL **)imageOutUrl forVideo:(bool)video;
 - (void)clearPaintingData;
+
+
+- (bool)isCaptionAbove;
+- (SSignal *)captionAbove;
+- (void)setCaptionAbove:(bool)captionAbove;
+
 
 - (SSignal *)facesForItem:(NSObject<TGMediaEditableItem> *)item;
 - (void)setFaces:(NSArray *)faces forItem:(NSObject<TGMediaEditableItem> *)item;

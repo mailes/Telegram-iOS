@@ -4,6 +4,38 @@ public protocol Disposable: AnyObject {
     func dispose()
 }
 
+public final class StrictDisposable: Disposable {
+    private let disposable: Disposable
+    private let file: String
+    private let line: Int
+    private let isDisposed = Atomic<Bool>(value: false)
+    
+    public init(_ disposable: Disposable, file: String, line: Int) {
+        self.disposable = disposable
+        self.file = file
+        self.line = line
+    }
+    
+    deinit {
+        #if DEBUG
+        if !self.isDisposed.with({ $0 }) {
+            assertionFailure("Leaked disposable \(self.disposable) from \(self.file):\(self.line)")
+        }
+        #endif
+    }
+    
+    public func dispose() {
+        let _ = self.isDisposed.swap(true)
+        self.disposable.dispose()
+    }
+}
+
+public extension Disposable {
+    func strict(file: String = #file, line: Int = #line) -> Disposable {
+        return StrictDisposable(self, file: file, line: line)
+    }
+}
+
 final class _EmptyDisposable: Disposable {
     func dispose() {
     }
@@ -155,6 +187,12 @@ public final class DisposableSet : Disposable {
         if let index = self.disposables.firstIndex(where: { $0 === disposable }) {
             self.disposables.remove(at: index)
         }
+        pthread_mutex_unlock(&self.lock)
+    }
+    
+    public func removeLast() {
+        pthread_mutex_lock(&self.lock)
+        self.disposables.removeLast()
         pthread_mutex_unlock(&self.lock)
     }
     

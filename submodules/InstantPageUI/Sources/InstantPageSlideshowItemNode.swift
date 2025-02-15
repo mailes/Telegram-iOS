@@ -6,6 +6,7 @@ import Display
 import TelegramPresentationData
 import AccountContext
 import TelegramUIPreferences
+import ContextUI
 
 private final class InstantPageSlideshowItemNode: ASDisplayNode {
     private var _index: Int?
@@ -62,13 +63,15 @@ private final class InstantPageSlideshowItemNode: ASDisplayNode {
     }
 }
 
-private final class InstantPageSlideshowPagerNode: ASDisplayNode, UIScrollViewDelegate {
+private final class InstantPageSlideshowPagerNode: ASDisplayNode, ASScrollViewDelegate {
     private let context: AccountContext
-    private let sourcePeerType: MediaAutoDownloadPeerType
+    private let sourceLocation: InstantPageSourceLocation
     private let theme: InstantPageTheme
     private let webPage: TelegramMediaWebpage
     private let openMedia: (InstantPageMedia) -> Void
     private let longPressMedia: (InstantPageMedia) -> Void
+    private let activatePinchPreview: ((PinchSourceContainerNode) -> Void)?
+    private let pinchPreviewFinished: ((InstantPageNode) -> Void)?
     private let pageGap: CGFloat
     
     private let scrollView: UIScrollView
@@ -98,13 +101,15 @@ private final class InstantPageSlideshowPagerNode: ASDisplayNode, UIScrollViewDe
         }
     }
     
-    init(context: AccountContext, sourcePeerType: MediaAutoDownloadPeerType, theme: InstantPageTheme, webPage: TelegramMediaWebpage, openMedia: @escaping (InstantPageMedia) -> Void, longPressMedia: @escaping (InstantPageMedia) -> Void, pageGap: CGFloat = 0.0) {
+    init(context: AccountContext, sourceLocation: InstantPageSourceLocation, theme: InstantPageTheme, webPage: TelegramMediaWebpage, openMedia: @escaping (InstantPageMedia) -> Void, longPressMedia: @escaping (InstantPageMedia) -> Void, activatePinchPreview: ((PinchSourceContainerNode) -> Void)?, pinchPreviewFinished: ((InstantPageNode) -> Void)?, pageGap: CGFloat = 0.0) {
         self.context = context
-        self.sourcePeerType = sourcePeerType
+        self.sourceLocation = sourceLocation
         self.theme = theme
         self.webPage = webPage
         self.openMedia = openMedia
         self.longPressMedia = longPressMedia
+        self.activatePinchPreview = activatePinchPreview
+        self.pinchPreviewFinished = pinchPreviewFinished
         self.pageGap = pageGap
         self.scrollView = UIScrollView()
         if #available(iOSApplicationExtension 11.0, iOS 11.0, *) {
@@ -118,7 +123,7 @@ private final class InstantPageSlideshowPagerNode: ASDisplayNode, UIScrollViewDe
         self.scrollView.alwaysBounceHorizontal = !pageGap.isZero
         self.scrollView.bounces = !pageGap.isZero
         self.scrollView.isPagingEnabled = true
-        self.scrollView.delegate = self
+        self.scrollView.delegate = self.wrappedScrollViewDelegate
         self.scrollView.clipsToBounds = false
         self.scrollView.scrollsToTop = false
         self.view.addSubview(self.scrollView)
@@ -181,9 +186,9 @@ private final class InstantPageSlideshowPagerNode: ASDisplayNode, UIScrollViewDe
     private func makeNodeForItem(at index: Int) -> InstantPageSlideshowItemNode {
         let media = self.items[index]
         let contentNode: ASDisplayNode
-        if let _ = media.media as? TelegramMediaImage {
-            contentNode = InstantPageImageNode(context: self.context, sourcePeerType: self.sourcePeerType, theme: self.theme, webPage: self.webPage, media: media, attributes: [], interactive: true, roundCorners: false, fit: false, openMedia: self.openMedia, longPressMedia: self.longPressMedia, activatePinchPreview: nil, pinchPreviewFinished: nil)
-        } else if let _ = media.media as? TelegramMediaFile {
+        if case .image = media.media {
+            contentNode = InstantPageImageNode(context: self.context, sourceLocation: self.sourceLocation, theme: self.theme, webPage: self.webPage, media: media, attributes: [], interactive: true, roundCorners: false, fit: false, openMedia: self.openMedia, longPressMedia: self.longPressMedia, activatePinchPreview: self.activatePinchPreview, pinchPreviewFinished: self.pinchPreviewFinished, getPreloadedResource: { _ in return nil })
+        } else if case .file = media.media {
             contentNode = ASDisplayNode()
         } else {
             contentNode = ASDisplayNode()
@@ -381,10 +386,10 @@ final class InstantPageSlideshowNode: ASDisplayNode, InstantPageNode {
     private let pagerNode: InstantPageSlideshowPagerNode
     private let pageControlNode: PageControlNode
     
-    init(context: AccountContext, sourcePeerType: MediaAutoDownloadPeerType, theme: InstantPageTheme, webPage: TelegramMediaWebpage, medias: [InstantPageMedia], openMedia: @escaping (InstantPageMedia) -> Void, longPressMedia: @escaping (InstantPageMedia) -> Void) {
+    init(context: AccountContext, sourceLocation: InstantPageSourceLocation, theme: InstantPageTheme, webPage: TelegramMediaWebpage, medias: [InstantPageMedia], openMedia: @escaping (InstantPageMedia) -> Void, longPressMedia: @escaping (InstantPageMedia) -> Void, activatePinchPreview: ((PinchSourceContainerNode) -> Void)?, pinchPreviewFinished: ((InstantPageNode) -> Void)?) {
         self.medias = medias
         
-        self.pagerNode = InstantPageSlideshowPagerNode(context: context, sourcePeerType: sourcePeerType, theme: theme, webPage: webPage, openMedia: openMedia, longPressMedia: longPressMedia)
+        self.pagerNode = InstantPageSlideshowPagerNode(context: context, sourceLocation: sourceLocation, theme: theme, webPage: webPage, openMedia: openMedia, longPressMedia: longPressMedia, activatePinchPreview: activatePinchPreview, pinchPreviewFinished: pinchPreviewFinished)
         self.pagerNode.replaceItems(medias, centralItemIndex: nil)
         
         self.pageControlNode = PageControlNode(dotColor: .white, inactiveDotColor: UIColor(white: 1.0, alpha: 0.5))
@@ -410,7 +415,7 @@ final class InstantPageSlideshowNode: ASDisplayNode, InstantPageNode {
         super.layout()
         
         self.pagerNode.frame = self.bounds
-        self.pagerNode.containerLayoutUpdated(ContainerViewLayout(size: self.bounds.size, metrics: LayoutMetrics(), deviceMetrics: .unknown(screenSize: CGSize(), statusBarHeight: 0.0, onScreenNavigationHeight: nil), intrinsicInsets: UIEdgeInsets(), safeInsets: UIEdgeInsets(), additionalInsets: UIEdgeInsets(), statusBarHeight: nil, inputHeight: nil, inputHeightIsInteractivellyChanging: false, inVoiceOver: false), transition: .immediate)
+        self.pagerNode.containerLayoutUpdated(ContainerViewLayout(size: self.bounds.size, metrics: LayoutMetrics(), deviceMetrics: .unknown(screenSize: CGSize(), statusBarHeight: 0.0, onScreenNavigationHeight: nil, screenCornerRadius: 0.0), intrinsicInsets: UIEdgeInsets(), safeInsets: UIEdgeInsets(), additionalInsets: UIEdgeInsets(), statusBarHeight: nil, inputHeight: nil, inputHeightIsInteractivellyChanging: false, inVoiceOver: false), transition: .immediate)
         
         self.pageControlNode.layer.transform = CATransform3DIdentity
         self.pageControlNode.frame = CGRect(origin: CGPoint(x: 0.0, y: self.bounds.size.height - 20.0), size: CGSize(width: self.bounds.size.width, height: 20.0))

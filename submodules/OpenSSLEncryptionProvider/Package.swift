@@ -7,7 +7,7 @@ import PackageDescription
 let package = Package(
     name: "OpenSSLEncryption",
     platforms: [
-        .macOS(.v10_12)
+        .macOS(.v10_13)
     ],
     products: [
         .library(
@@ -23,10 +23,8 @@ let package = Package(
             publicHeadersPath: "PublicHeaders",
             cSettings: [
                 .headerSearchPath("PublicHeaders"),
-                .unsafeFlags([
-                    "-I../../../../core-xprojects/openssl/build/openssl/include",
-                    "-I../EncryptionProvider/PublicHeaders"
-                ])
+                .headerSearchPath("SharedHeaders/openssl/include"),
+                .headerSearchPath("SharedHeaders/EncryptionProvider"),
             ]),
     ]
 )

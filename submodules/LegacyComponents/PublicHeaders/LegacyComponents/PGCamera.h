@@ -48,7 +48,7 @@ typedef enum
 @class PGCameraDeviceAngleSampler;
 @class TGCameraPreviewView;
 
-@interface PGCamera : NSObject
+@interface PGCamera : NSObject <AVCapturePhotoCaptureDelegate>
 
 @property (readonly, nonatomic) PGCameraCaptureSession *captureSession;
 @property (readonly, nonatomic) PGCameraDeviceAngleSampler *deviceAngleSampler;
@@ -85,6 +85,8 @@ typedef enum
 @property (nonatomic, assign) CGFloat zoomLevel;
 @property (nonatomic, readonly) CGFloat minZoomLevel;
 @property (nonatomic, readonly) CGFloat maxZoomLevel;
+@property (nonatomic, readonly) int32_t maxMarkZoomValue;
+@property (nonatomic, readonly) int32_t secondMarkZoomValue;
 
 - (void)setZoomLevel:(CGFloat)zoomLevel animated:(bool)animated;
 

@@ -35,7 +35,10 @@ public func fetchCompressedLottieFirstFrameAJpeg(data: Data, size: CGSize, fitzM
                         return
                     }
                     
-                    let context = DrawingContext(size: size, scale: 1.0, clear: true)
+                    guard let context = DrawingContext(size: size, scale: 1.0, clear: true) else {
+                        subscriber.putCompletion()
+                        return
+                    }
                     player.renderFrame(with: 0, into: context.bytes.assumingMemoryBound(to: UInt8.self), width: Int32(size.width), height: Int32(size.height), bytesPerRow: Int32(context.bytesPerRow))
                     
                     let yuvaPixelsPerAlphaRow = (Int(size.width) + 1) & (~1)
@@ -49,11 +52,13 @@ public func fetchCompressedLottieFirstFrameAJpeg(data: Data, size: CGSize, fitzM
                         free(yuvaFrameData)
                     }
                     
-                    encodeRGBAToYUVA(yuvaFrameData.assumingMemoryBound(to: UInt8.self), context.bytes.assumingMemoryBound(to: UInt8.self), Int32(size.width), Int32(size.height), Int32(context.bytesPerRow), true)
+                    encodeRGBAToYUVA(yuvaFrameData.assumingMemoryBound(to: UInt8.self), context.bytes.assumingMemoryBound(to: UInt8.self), Int32(size.width), Int32(size.height), Int32(context.bytesPerRow), true, true)
                     decodeYUVAToRGBA(yuvaFrameData.assumingMemoryBound(to: UInt8.self), context.bytes.assumingMemoryBound(to: UInt8.self), Int32(size.width), Int32(size.height), Int32(context.bytesPerRow))
                     
                     if let colorSourceImage = context.generateImage(), let alphaImage = generateGrayscaleAlphaMaskImage(image: colorSourceImage) {
-                        let colorContext = DrawingContext(size: size, scale: 1.0, clear: false)
+                        guard let colorContext = DrawingContext(size: size, scale: 1.0, clear: false) else {
+                            return
+                        }
                         colorContext.withFlippedContext { c in
                             c.setFillColor(UIColor.black.cgColor)
                             c.fill(CGRect(origin: CGPoint(), size: size))
@@ -67,8 +72,8 @@ public func fetchCompressedLottieFirstFrameAJpeg(data: Data, size: CGSize, fitzM
                         let alphaData = NSMutableData()
                         
                         if let colorDestination = CGImageDestinationCreateWithData(colorData as CFMutableData, kUTTypeJPEG, 1, nil), let alphaDestination = CGImageDestinationCreateWithData(alphaData as CFMutableData, kUTTypeJPEG, 1, nil) {
-                            CGImageDestinationSetProperties(colorDestination, [:] as CFDictionary)
-                            CGImageDestinationSetProperties(alphaDestination, [:] as CFDictionary)
+                            CGImageDestinationSetProperties(colorDestination, NSDictionary() as CFDictionary)
+                            CGImageDestinationSetProperties(alphaDestination, NSDictionary() as CFDictionary)
                             
                             let colorQuality: Float
                             let alphaQuality: Float
@@ -201,7 +206,7 @@ public func cacheAnimatedStickerFrames(data: Data, size: CGSize, fitzModifier: E
                         
                         let appendStartTime = CACurrentMediaTime()
                         
-                        encodeRGBAToYUVA(yuvaFrameData.assumingMemoryBound(to: UInt8.self), currentFrameData.assumingMemoryBound(to: UInt8.self), Int32(size.width), Int32(size.height), Int32(bytesPerRow), true)
+                        encodeRGBAToYUVA(yuvaFrameData.assumingMemoryBound(to: UInt8.self), currentFrameData.assumingMemoryBound(to: UInt8.self), Int32(size.width), Int32(size.height), Int32(bytesPerRow), true, true)
                         
                         appendingTime += CACurrentMediaTime() - appendStartTime
                         
@@ -244,12 +249,6 @@ public func cacheAnimatedStickerFrames(data: Data, size: CGSize, fitzModifier: E
                                         
                     subscriber.putNext(.tempFile(tempFile))
                     subscriber.putCompletion()
-                    /*print("animation render time \(CACurrentMediaTime() - startTime)")
-                    print("of which drawing time \(drawingTime)")
-                    print("of which appending time \(appendingTime)")
-                    print("of which delta time \(deltaTime)")
-                    
-                    print("of which compression time \(compressionTime)")*/
                 }
             }
         }))
@@ -388,18 +387,12 @@ public func cacheVideoStickerFrames(path: String, size: CGSize, cacheKey: String
             }
             
             if frameCount > 0 {
-                file.seek(position: 4)
+                let _ = file.seek(position: 4)
                 let _ = file.write(&frameCount, count: 4)
             }
             
             subscriber.putNext(.tempFile(tempFile))
             subscriber.putCompletion()
-            /*print("animation render time \(CACurrentMediaTime() - startTime)")
-            print("of which drawing time \(drawingTime)")
-            print("of which appending time \(appendingTime)")
-            print("of which delta time \(deltaTime)")
-            
-            print("of which compression time \(compressionTime)")*/
         }))
                                           
         return ActionDisposable {

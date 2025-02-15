@@ -10,7 +10,6 @@ import ItemListUI
 import PresentationDataUtils
 import PhoneInputNode
 import CountrySelectionUI
-import CoreTelephony
 
 private func generateCountryButtonBackground(color: UIColor, strokeColor: UIColor) -> UIImage? {
     return generateImage(CGSize(width: 56, height: 44.0 + 6.0), rotatedContext: { size, context in
@@ -188,13 +187,13 @@ class DeleteAccountPhoneItemNode: ListViewItemNode, ItemListItemNode {
                 let localizedName: String = AuthorizationSequenceCountrySelectionController.lookupCountryNameById(country.id, strings: item.strings) ?? country.name
                 strongSelf.countryButton.setTitle("\(flagString) \(localizedName)", with: Font.regular(17.0), with: item.theme.list.itemPrimaryTextColor, for: [])
                 
-                let maskFont = Font.with(size: 20.0, design: .regular, traits: [.monospacedNumbers])
+                let maskFont = Font.with(size: 17.0, design: .regular, traits: [.monospacedNumbers])
                 if let mask = AuthorizationSequenceCountrySelectionController.lookupPatternByNumber(number, preferredCountries: strongSelf.preferredCountryIdForCode).flatMap({ NSAttributedString(string: $0, font: maskFont, textColor: item.theme.list.itemPlaceholderTextColor) }) {
                     strongSelf.phoneInputNode.numberField.textField.attributedPlaceholder = nil
                     strongSelf.phoneInputNode.mask = mask
                 } else {
                     strongSelf.phoneInputNode.mask = nil
-                    strongSelf.phoneInputNode.numberField.textField.attributedPlaceholder = NSAttributedString(string: item.strings.Login_PhonePlaceholder, font: Font.regular(20.0), textColor: item.theme.list.itemPlaceholderTextColor)
+                    strongSelf.phoneInputNode.numberField.textField.attributedPlaceholder = NSAttributedString(string: item.strings.Login_PhonePlaceholder, font: Font.regular(17.0), textColor: item.theme.list.itemPlaceholderTextColor)
                 }
                 return true
             } else {
@@ -234,18 +233,9 @@ class DeleteAccountPhoneItemNode: ListViewItemNode, ItemListItemNode {
             }
         }
         
-        var countryId: String? = nil
-        let networkInfo = CTTelephonyNetworkInfo()
-        if let carrier = networkInfo.subscriberCellularProvider {
-            countryId = carrier.isoCountryCode
-        }
-        
-        if countryId == nil {
-            countryId = (Locale.current as NSLocale).object(forKey: .countryCode) as? String
-        }
-        
+        let countryId = (Locale.current as NSLocale).object(forKey: .countryCode) as? String
+   
         var countryCodeAndId: (Int32, String) = (1, "US")
-        
         if let countryId = countryId {
             let normalizedId = countryId.uppercased()
             for (code, idAndName) in countryCodeToIdAndName {
@@ -267,6 +257,10 @@ class DeleteAccountPhoneItemNode: ListViewItemNode, ItemListItemNode {
     
     var phoneNumber: String {
         return self.phoneInputNode.number
+    }
+    
+    var codeNumberAndFullNumber: (String, String, String) {
+        return self.phoneInputNode.codeNumberAndFullNumber
     }
     
     func updateCountryCode() {
@@ -397,13 +391,13 @@ class DeleteAccountPhoneItemNode: ListViewItemNode, ItemListItemNode {
                     strongSelf.phoneInputNode.frame = phoneInputFrame
                     strongSelf.phoneInputNode.countryCodeField.frame = countryCodeFrame.offsetBy(dx: -phoneInputFrame.minX, dy: -phoneInputFrame.minY)
                     strongSelf.phoneInputNode.numberField.frame = numberFrame.offsetBy(dx: -phoneInputFrame.minX, dy: -phoneInputFrame.minY)
-                    strongSelf.phoneInputNode.placeholderNode.frame = placeholderFrame.offsetBy(dx: -phoneInputFrame.minX, dy: -phoneInputFrame.minY)
+                    strongSelf.phoneInputNode.placeholderNode.frame = placeholderFrame.offsetBy(dx: -phoneInputFrame.minX, dy: -phoneInputFrame.minY + 4.0 + UIScreenPixel)
                 }
             })
         }
     }
     
-    override func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
+    override func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.4)
     }
     

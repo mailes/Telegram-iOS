@@ -8,8 +8,18 @@ public struct Namespaces {
         public static let SecretIncoming: Int32 = 2
         public static let ScheduledCloud: Int32 = 3
         public static let ScheduledLocal: Int32 = 4
+        public static let QuickReplyCloud: Int32 = 5
+        public static let QuickReplyLocal: Int32 = 6
         
         public static let allScheduled: Set<Int32> = Set([Namespaces.Message.ScheduledCloud, Namespaces.Message.ScheduledLocal])
+        public static let allQuickReply: Set<Int32> = Set([Namespaces.Message.QuickReplyCloud, Namespaces.Message.QuickReplyLocal])
+        public static let allNonRegular: Set<Int32> = Set([Namespaces.Message.ScheduledCloud, Namespaces.Message.ScheduledLocal, Namespaces.Message.QuickReplyCloud, Namespaces.Message.QuickReplyLocal])
+        public static let allLocal: [Int32] = [
+            Namespaces.Message.Local,
+            Namespaces.Message.SecretIncoming,
+            Namespaces.Message.ScheduledLocal,
+            Namespaces.Message.QuickReplyLocal
+        ]
     }
     
     public struct Media {
@@ -51,6 +61,7 @@ public struct Namespaces {
         public static let CloudEmojiGenericAnimations: Int32 = 9
         public static let CloudIconStatusEmoji: Int32 = 10
         public static let CloudIconTopicEmoji: Int32 = 11
+        public static let CloudIconChannelStatusEmoji: Int32 = 12
     }
     
     public struct OrderedItemList {
@@ -75,6 +86,15 @@ public struct Namespaces {
         public static let CloudFeaturedStatusEmoji: Int32 = 18
         public static let CloudRecentReactions: Int32 = 19
         public static let CloudTopReactions: Int32 = 20
+        public static let CloudEmojiCategories: Int32 = 21
+        public static let CloudEmojiStatusCategories: Int32 = 22
+        public static let CloudFeaturedProfilePhotoEmoji: Int32 = 23
+        public static let CloudFeaturedGroupPhotoEmoji: Int32 = 24
+        public static let NewSessionReviews: Int32 = 25
+        public static let CloudFeaturedBackgroundIconEmoji: Int32 = 26
+        public static let CloudFeaturedChannelStatusEmoji: Int32 = 27
+        public static let CloudDisabledChannelStatusEmoji: Int32 = 28
+        public static let CloudDefaultTagReactions: Int32 = 29
     }
     
     public struct CachedItemCollection {
@@ -100,6 +120,24 @@ public struct Namespaces {
         public static let notificationSoundList: Int8 = 22
         public static let attachMenuBots: Int8 = 23
         public static let featuredStickersConfiguration: Int8 = 24
+        public static let emojiSearchCategories: Int8 = 25
+        public static let cachedEmojiQueryResults: Int8 = 26
+        public static let cachedPeerStoryListHeads: Int8 = 27
+        public static let displayedStoryNotifications: Int8 = 28
+        public static let storySendAsPeerIds: Int8 = 29
+        public static let cachedChannelBoosts: Int8 = 31
+        public static let displayedMessageNotifications: Int8 = 32
+        public static let recommendedChannels: Int8 = 33
+        public static let peerColorOptions: Int8 = 34
+        public static let savedMessageTags: Int8 = 35
+        public static let applicationIcons: Int8 = 36
+        public static let availableMessageEffects: Int8 = 37
+        public static let cachedStarsRevenueStats: Int8 = 38
+        public static let cachedRevenueStats: Int8 = 39
+        public static let recommendedApps: Int8 = 40
+        public static let starsReactionDefaultToPrivate: Int8 = 41
+        public static let cachedPremiumGiftCodeOptions: Int8 = 42
+        public static let cachedProfileGifts: Int8 = 43
     }
     
     public struct UnorderedItemList {
@@ -149,6 +187,7 @@ public extension PendingMessageActionType {
     static let updateReaction = PendingMessageActionType(rawValue: 1)
     static let sendScheduledMessageImmediately = PendingMessageActionType(rawValue: 2)
     static let readReaction = PendingMessageActionType(rawValue: 3)
+    static let sendStarsReaction = PendingMessageActionType(rawValue: 4)
 }
 
 public let peerIdNamespacesWithInitialCloudMessageHoles = [Namespaces.Peer.CloudUser, Namespaces.Peer.CloudGroup, Namespaces.Peer.CloudChannel]
@@ -177,6 +216,10 @@ public struct OperationLogTags {
     public static let SynchronizeChatListFilters = PeerOperationLogTag(value: 20)
     public static let SynchronizeMarkAllUnseenReactions = PeerOperationLogTag(value: 21)
     public static let SynchronizeInstalledEmoji = PeerOperationLogTag(value: 22)
+    public static let SynchronizeAutosaveItems = PeerOperationLogTag(value: 23)
+    public static let SynchronizeViewStories = PeerOperationLogTag(value: 24)
+    public static let SynchronizePeerStories = PeerOperationLogTag(value: 25)
+    public static let SynchronizePinnedSavedChats = PeerOperationLogTag(value: 26)
 }
 
 public struct LegacyPeerSummaryCounterTags: OptionSet, Sequence, Hashable {
@@ -239,7 +282,6 @@ private enum PreferencesKeyValues: Int32 {
     case appConfiguration = 14
     case searchBotsConfiguration = 15
     case contactsSettings = 16
-    case walletCollection = 18
     case contentSettings = 19
     case chatListFilters = 20
     case peersNearby = 21
@@ -247,6 +289,20 @@ private enum PreferencesKeyValues: Int32 {
     case secretChatSettings = 23
     case reactionSettings = 24
     case premiumPromo = 26
+    case globalMessageAutoremoveTimeoutSettings = 27
+    case accountSpecificCacheStorageSettings = 28
+    case linksConfiguration = 29
+    case chatListFilterUpdates = 30
+    case globalPrivacySettings = 31
+    case storiesConfiguration = 32
+    case audioTranscriptionTrialState = 33
+    case didCacheSavedMessageTagsPrefix = 34
+    case displaySavedChatsAsTopics = 35
+    case shortcutMessages = 37
+    case timezoneList = 38
+    case botBiometricsState = 39
+    case businessLinks = 40
+    case starGifts = 41
 }
 
 public func applicationSpecificPreferencesKey(_ value: Int32) -> ValueBoxKey {
@@ -339,13 +395,7 @@ public struct PreferencesKeys {
         key.setInt32(0, value: PreferencesKeyValues.secretChatSettings.rawValue)
         return key
     }()
-    
-    public static let walletCollection: ValueBoxKey = {
-        let key = ValueBoxKey(length: 4)
-        key.setInt32(0, value: PreferencesKeyValues.walletCollection.rawValue)
-        return key
-    }()
-    
+        
     public static let contentSettings: ValueBoxKey = {
         let key = ValueBoxKey(length: 4)
         key.setInt32(0, value: PreferencesKeyValues.contentSettings.rawValue)
@@ -381,6 +431,108 @@ public struct PreferencesKeys {
         key.setInt32(0, value: PreferencesKeyValues.premiumPromo.rawValue)
         return key
     }()
+    
+    public static let globalMessageAutoremoveTimeoutSettings: ValueBoxKey = {
+        let key = ValueBoxKey(length: 4)
+        key.setInt32(0, value: PreferencesKeyValues.globalMessageAutoremoveTimeoutSettings.rawValue)
+        return key
+    }()
+    
+    public static let accountSpecificCacheStorageSettings: ValueBoxKey = {
+        let key = ValueBoxKey(length: 4)
+        key.setInt32(0, value: PreferencesKeyValues.accountSpecificCacheStorageSettings.rawValue)
+        return key
+    }()
+    
+    public static let linksConfiguration: ValueBoxKey = {
+        let key = ValueBoxKey(length: 4)
+        key.setInt32(0, value: PreferencesKeyValues.linksConfiguration.rawValue)
+        return key
+    }()
+    
+    public static let chatListFilterUpdates: ValueBoxKey = {
+        let key = ValueBoxKey(length: 4)
+        key.setInt32(0, value: PreferencesKeyValues.chatListFilterUpdates.rawValue)
+        return key
+    }()
+    
+    public static let globalPrivacySettings: ValueBoxKey = {
+        let key = ValueBoxKey(length: 4)
+        key.setInt32(0, value: PreferencesKeyValues.globalPrivacySettings.rawValue)
+        return key
+    }()
+    
+    public static let storiesConfiguration: ValueBoxKey = {
+        let key = ValueBoxKey(length: 4)
+        key.setInt32(0, value: PreferencesKeyValues.storiesConfiguration.rawValue)
+        return key
+    }()
+    
+    public static let audioTranscriptionTrialState: ValueBoxKey = {
+        let key = ValueBoxKey(length: 4)
+        key.setInt32(0, value: PreferencesKeyValues.audioTranscriptionTrialState.rawValue)
+        return key
+    }()
+    
+    public static func didCacheSavedMessageTags(threadId: Int64?) -> ValueBoxKey {
+        let key = ValueBoxKey(length: 4 + 8)
+        key.setInt32(0, value: PreferencesKeyValues.didCacheSavedMessageTagsPrefix.rawValue)
+        key.setInt64(4, value: threadId ?? 0)
+        return key
+    }
+    
+    public static func displaySavedChatsAsTopics() -> ValueBoxKey {
+        let key = ValueBoxKey(length: 4)
+        key.setInt32(0, value: PreferencesKeyValues.displaySavedChatsAsTopics.rawValue)
+        return key
+    }
+    
+    public static func shortcutMessages() -> ValueBoxKey {
+        let key = ValueBoxKey(length: 4)
+        key.setInt32(0, value: PreferencesKeyValues.shortcutMessages.rawValue)
+        return key
+    }
+    
+    public static func timezoneList() -> ValueBoxKey {
+        let key = ValueBoxKey(length: 4)
+        key.setInt32(0, value: PreferencesKeyValues.timezoneList.rawValue)
+        return key
+    }
+    
+    static func botBiometricsStatePrefix() -> ValueBoxKey {
+        let key = ValueBoxKey(length: 4)
+        key.setInt32(0, value: PreferencesKeyValues.botBiometricsState.rawValue)
+        return key
+    }
+    
+    static func extractBotBiometricsStatePeerId(key: ValueBoxKey) -> PeerId? {
+        if key.length != 4 + 8 {
+            return nil
+        }
+        if key.getInt32(0) != PreferencesKeyValues.botBiometricsState.rawValue {
+            return nil
+        }
+        return PeerId(key.getInt64(4))
+    }
+    
+    public static func botBiometricsState(peerId: PeerId) -> ValueBoxKey {
+        let key = ValueBoxKey(length: 4 + 8)
+        key.setInt32(0, value: PreferencesKeyValues.botBiometricsState.rawValue)
+        key.setInt64(4, value: peerId.toInt64())
+        return key
+    }
+    
+    public static func businessLinks() -> ValueBoxKey {
+        let key = ValueBoxKey(length: 4)
+        key.setInt32(0, value: PreferencesKeyValues.businessLinks.rawValue)
+        return key
+    }
+    
+    public static func starGifts() -> ValueBoxKey {
+        let key = ValueBoxKey(length: 4)
+        key.setInt32(0, value: PreferencesKeyValues.starGifts.rawValue)
+        return key
+    }
 }
 
 private enum SharedDataKeyValues: Int32 {

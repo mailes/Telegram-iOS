@@ -9,6 +9,9 @@
 #import "TGPhotoPaintStickerEntity.h"
 #import "TGPhotoPaintTextEntity.h"
 
+#import "PGTintTool.h"
+#import "PGCurvesTool.h"
+
 const NSTimeInterval TGVideoEditMinimumTrimmableDuration = 1.5;
 const NSTimeInterval TGVideoEditMaximumGifDuration = 30.5;
 
@@ -76,33 +79,8 @@ const NSTimeInterval TGVideoEditMaximumGifDuration = 30.5;
     }
     if (dictionary[@"originalSize"])
         adjustments->_originalSize = [dictionary[@"originalSize"] CGSizeValue];
-    if (dictionary[@"entities"]) {
-        NSMutableArray *entities = [[NSMutableArray alloc] init];
-        
-        for (NSDictionary *dict in dictionary[@"entities"]) {
-            if ([dict[@"type"] isEqualToString:@"sticker"]) {
-                TGPhotoPaintStickerEntity *entity = [[TGPhotoPaintStickerEntity alloc] initWithDocument:dict[@"data"] baseSize:[dict[@"baseSize"] CGSizeValue] animated:[dict[@"animated"] boolValue]];
-                entity.uuid = [dict[@"uuid"] integerValue];
-                entity.position = [dict[@"position"] CGPointValue];
-                entity.scale = [dict[@"scale"] floatValue];
-                entity.angle = [dict[@"angle"] floatValue];
-                entity.mirrored = [dict[@"mirrored"] boolValue];
-                [entities addObject:entity];
-            } else if ([dict[@"type"] isEqualToString:@"text"]) {
-                UIImage *renderImage = [[UIImage alloc] initWithData:dict[@"data"]];
-                if (renderImage != nil) {
-                    TGPhotoPaintTextEntity *entity = [[TGPhotoPaintTextEntity alloc] initWithText:nil font:nil swatch:nil baseFontSize:0.0 maxWidth:0.0 style:TGPhotoPaintTextEntityStyleRegular];
-                    entity.uuid = [dict[@"uuid"] integerValue];
-                    entity.position = [dict[@"position"] CGPointValue];
-                    entity.scale = [dict[@"scale"] floatValue];
-                    entity.angle = [dict[@"angle"] floatValue];
-                    entity.renderImage = renderImage;
-                    [entities addObject:entity];
-                }
-            }
-        }
-       
-        adjustments->_paintingData = [TGPaintingData dataWithPaintingImagePath:dictionary[@"paintingImagePath"] entities:entities];
+    if (dictionary[@"entitiesData"]) {
+        adjustments->_paintingData = [TGPaintingData dataWithPaintingImagePath:dictionary[@"paintingImagePath"] entitiesData:dictionary[@"entitiesData"] hasAnimation:[dictionary[@"hasAnimation"] boolValue] stickers:dictionary[@"stickersData"]];
     } else if (dictionary[@"paintingImagePath"]) {
         adjustments->_paintingData = [TGPaintingData dataWithPaintingImagePath:dictionary[@"paintingImagePath"]];
     }
@@ -116,6 +94,18 @@ const NSTimeInterval TGVideoEditMaximumGifDuration = 30.5;
             id value = dictionary[@"tools"][key];
             if ([value isKindOfClass:[NSNumber class]]) {
                 tools[key] = value;
+            } else if ([value isKindOfClass:[NSDictionary class]]) {
+                if ([key isEqualToString:@"tint"]) {
+                    PGTintToolValue *tintValue = [[PGTintToolValue alloc] initWithDictionary:value];
+                    if (tintValue != nil) {
+                        tools[key] = tintValue;
+                    }
+                } else if ([key isEqualToString:@"curves"]) {
+                    PGCurvesToolValue *curvesValues = [[PGCurvesToolValue alloc] initWithDictionary:value];
+                    if (curvesValues != nil) {
+                        tools[key] = curvesValues;
+                    }
+                }
             }
         }
         adjustments->_toolValues = tools;
@@ -151,6 +141,50 @@ const NSTimeInterval TGVideoEditMaximumGifDuration = 30.5;
     adjustments->_paintingData = [values.paintingData dataForAnimation];
     adjustments->_sendAsGif = true;
     adjustments->_preset = preset;
+    
+    return adjustments;
+}
+
++ (instancetype)editAdjustmentsWithPhotoEditorValues:(PGPhotoEditorValues *)values preset:(TGMediaVideoConversionPreset)preset documentId:(int64_t)documentId colors:(NSArray *)colors {
+    TGVideoEditAdjustments *adjustments = [[[self class] alloc] init];
+    adjustments->_originalSize = values.originalSize;
+    CGRect cropRect = values.cropRect;
+    if (CGRectIsEmpty(cropRect)) {
+        cropRect = CGRectMake(0.0f, 0.0f, values.originalSize.width, values.originalSize.height);
+    }
+    adjustments->_cropRect = cropRect;
+    adjustments->_cropOrientation = values.cropOrientation;
+    adjustments->_cropRotation = values.cropRotation;
+    adjustments->_cropLockedAspectRatio = values.cropLockedAspectRatio;
+    adjustments->_cropMirrored = values.cropMirrored;
+    adjustments->_paintingData = [values.paintingData dataForAnimation];
+    adjustments->_sendAsGif = true;
+    adjustments->_preset = preset;
+    adjustments->_documentId = documentId;
+    adjustments->_colors = colors;
+    
+    return adjustments;
+}
+
++ (instancetype)editAdjustmentsWithPhotoEditorValues:(PGPhotoEditorValues *)values preset:(TGMediaVideoConversionPreset)preset stickerPackId:(int64_t)stickerPackId stickerPackAccessHash:(int64_t)stickerPackAccessHash documentId:(int64_t)documentId colors:(NSArray *)colors {
+    TGVideoEditAdjustments *adjustments = [[[self class] alloc] init];
+    adjustments->_originalSize = values.originalSize;
+    CGRect cropRect = values.cropRect;
+    if (CGRectIsEmpty(cropRect)) {
+        cropRect = CGRectMake(0.0f, 0.0f, values.originalSize.width, values.originalSize.height);
+    }
+    adjustments->_cropRect = cropRect;
+    adjustments->_cropOrientation = values.cropOrientation;
+    adjustments->_cropRotation = values.cropRotation;
+    adjustments->_cropLockedAspectRatio = values.cropLockedAspectRatio;
+    adjustments->_cropMirrored = values.cropMirrored;
+    adjustments->_paintingData = [values.paintingData dataForAnimation];
+    adjustments->_sendAsGif = true;
+    adjustments->_preset = preset;
+    adjustments->_stickerPackId = stickerPackId;
+    adjustments->_stickerPackAccessHash = stickerPackAccessHash;
+    adjustments->_documentId = documentId;
+    adjustments->_colors = colors;
     
     return adjustments;
 }
@@ -231,6 +265,10 @@ const NSTimeInterval TGVideoEditMaximumGifDuration = 30.5;
             id value = self.toolValues[key];
             if ([value isKindOfClass:[NSNumber class]]) {
                 tools[key] = value;
+            } else if ([value isKindOfClass:[PGTintToolValue class]]) {
+                tools[key] = ((PGTintToolValue *)value).dictionary;
+            } else if ([value isKindOfClass:[PGCurvesToolValue class]]) {
+                tools[key] = ((PGCurvesToolValue *)value).dictionary;
             }
         }
         dict[@"tools"] = tools;
@@ -240,42 +278,9 @@ const NSTimeInterval TGVideoEditMaximumGifDuration = 30.5;
         if (self.paintingData.imagePath != nil) {
                dict[@"paintingImagePath"] = self.paintingData.imagePath;
         }
-        
-        NSMutableArray *entities = [[NSMutableArray alloc] init];
-        
-        if (self.paintingData.entities != nil) {
-            for (TGPhotoPaintEntity *entity in self.paintingData.entities) {
-                if ([entity isKindOfClass:[TGPhotoPaintStickerEntity class]]) {
-                    TGPhotoPaintStickerEntity *stickerEntity = (TGPhotoPaintStickerEntity *)entity;
-                    NSMutableDictionary *sticker = [[NSMutableDictionary alloc] init];
-                    sticker[@"type"] = @"sticker";
-                    sticker[@"baseSize"] = [NSValue valueWithCGSize:stickerEntity.baseSize];
-                    sticker[@"uuid"] = @(stickerEntity.uuid);
-                    sticker[@"data"] = stickerEntity.document;
-                    sticker[@"position"] = [NSValue valueWithCGPoint:stickerEntity.position];
-                    sticker[@"scale"] = @(stickerEntity.scale);
-                    sticker[@"angle"] = @(stickerEntity.angle);
-                    sticker[@"mirrored"] = @(stickerEntity.mirrored);
-                    sticker[@"animated"] = @(stickerEntity.animated);
-                    [entities addObject:sticker];
-                } else if ([entity isKindOfClass:[TGPhotoPaintTextEntity class]]) {
-                    TGPhotoPaintTextEntity *textEntity = (TGPhotoPaintTextEntity *)entity;
-                    NSMutableDictionary *text = [[NSMutableDictionary alloc] init];
-                    if (textEntity.renderImage != nil) {
-                        text[@"type"] = @"text";
-                        text[@"uuid"] = @(textEntity.uuid);
-                        text[@"data"] = UIImagePNGRepresentation(textEntity.renderImage);
-                        text[@"position"] = [NSValue valueWithCGPoint:textEntity.position];
-                        text[@"scale"] = @(textEntity.scale);
-                        text[@"angle"] = @(textEntity.angle);
-                        [entities addObject:text];
-                    }
-                }
-            }
-        }
-        
-        if (entities.count > 0) {
-            dict[@"entities"] = entities;
+        if (self.paintingData.entitiesData != nil) {
+            dict[@"entitiesData"] = self.paintingData.entitiesData;
+            dict[@"hasAnimation"] = @(self.paintingData.hasAnimation);
         }
     }
     
@@ -330,6 +335,70 @@ const NSTimeInterval TGVideoEditMaximumGifDuration = 30.5;
 - (CMTimeRange)trimTimeRange
 {
     return CMTimeRangeMake(CMTimeMakeWithSeconds(self.trimStartValue , NSEC_PER_SEC), CMTimeMakeWithSeconds((self.trimEndValue - self.trimStartValue), NSEC_PER_SEC));
+}
+
+- (NSDictionary *)tintValue {
+    PGTintToolValue *tintValue = self.toolValues[@"tint"];
+    if (tintValue != nil) {
+        return @{
+            @"shadowsColor": tintValue.shadowsColor,
+            @"shadowsIntensity": @(tintValue.shadowsIntensity),
+            @"highlightsColor": tintValue.highlightsColor,
+            @"highlightsIntensity": @(tintValue.highlightsIntensity)
+        };
+    } else {
+        return nil;
+    }
+}
+
+- (NSDictionary *)curvesValue {
+    PGCurvesToolValue *curvesValue = self.toolValues[@"curves"];
+    if (curvesValue != nil) {
+        NSMutableDictionary *result = [[NSMutableDictionary alloc] init];
+        PGCurvesValue *luminanceCurve = curvesValue.luminanceCurve;
+        if (luminanceCurve != nil) {
+            result[@"luminance"] = @{
+                @"blacks": @(luminanceCurve.blacksLevel),
+                @"shadows": @(luminanceCurve.shadowsLevel),
+                @"midtones": @(luminanceCurve.midtonesLevel),
+                @"highlights": @(luminanceCurve.highlightsLevel),
+                @"whites": @(luminanceCurve.whitesLevel)
+            };
+        }
+        PGCurvesValue *redCurve = curvesValue.redCurve;
+        if (redCurve != nil) {
+            result[@"red"] = @{
+                @"blacks": @(redCurve.blacksLevel),
+                @"shadows": @(redCurve.shadowsLevel),
+                @"midtones": @(redCurve.midtonesLevel),
+                @"highlights": @(redCurve.highlightsLevel),
+                @"whites": @(redCurve.whitesLevel)
+            };
+        }
+        PGCurvesValue *greenCurve = curvesValue.greenCurve;
+        if (greenCurve != nil) {
+            result[@"green"] = @{
+                @"blacks": @(greenCurve.blacksLevel),
+                @"shadows": @(greenCurve.shadowsLevel),
+                @"midtones": @(greenCurve.midtonesLevel),
+                @"highlights": @(greenCurve.highlightsLevel),
+                @"whites": @(greenCurve.whitesLevel)
+            };
+        }
+        PGCurvesValue *blueCurve = curvesValue.blueCurve;
+        if (blueCurve != nil) {
+            result[@"blue"] = @{
+                @"blacks": @(blueCurve.blacksLevel),
+                @"shadows": @(blueCurve.shadowsLevel),
+                @"midtones": @(blueCurve.midtonesLevel),
+                @"highlights": @(blueCurve.highlightsLevel),
+                @"whites": @(blueCurve.whitesLevel)
+            };
+        }
+        return result;
+    } else {
+        return nil;
+    }
 }
 
 - (bool)toolsApplied

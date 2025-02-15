@@ -184,7 +184,6 @@ class WebSearchControllerNode: ASDisplayNode {
     var cancel: (() -> Void)?
     var dismissInput: (() -> Void)?
     
-    var presentStickers: ((@escaping (TelegramMediaFile, Bool, UIView, CGRect) -> Void) -> TGPhotoPaintStickersScreen?)?
     var getCaptionPanelView: () -> TGCaptionPanelView? = { return nil }
     
     init(controller: WebSearchController, context: AccountContext, presentationData: PresentationData, controllerInteraction: WebSearchControllerInteraction, peer: EnginePeer?, chatLocation: ChatLocation?, mode: WebSearchMode, attachment: Bool) {
@@ -246,9 +245,9 @@ class WebSearchControllerNode: ASDisplayNode {
         self.addSubnode(self.segmentedContainerNode)
         self.segmentedContainerNode.addSubnode(self.segmentedBackgroundNode)
         self.segmentedContainerNode.addSubnode(self.segmentedSeparatorNode)
-        if case .media = mode {
-            self.segmentedContainerNode.addSubnode(self.segmentedControlNode)
-        }
+//        if case .media = mode {
+//            self.segmentedContainerNode.addSubnode(self.segmentedControlNode)
+//        }
         if !attachment {
             self.addSubnode(self.toolbarBackgroundNode)
             self.addSubnode(self.toolbarSeparatorNode)
@@ -290,7 +289,7 @@ class WebSearchControllerNode: ASDisplayNode {
                         entries.append(WebSearchRecentQueryEntry(index: i, query: queries[i]))
                     }
                     
-                    let header = ChatListSearchItemHeader(type: .recentPeers, theme: interfaceState.presentationData.theme, strings: interfaceState.presentationData.strings, actionTitle: interfaceState.presentationData.strings.WebSearch_RecentSectionClear, action: {
+                    let header = ChatListSearchItemHeader(type: .recentPeers, theme: interfaceState.presentationData.theme, strings: interfaceState.presentationData.strings, actionTitle: interfaceState.presentationData.strings.WebSearch_RecentSectionClear, action: { _ in
                         let _ = clearRecentWebSearchQueries(engine: strongSelf.context.engine).start()
                     })
                     
@@ -630,7 +629,7 @@ class WebSearchControllerNode: ASDisplayNode {
                         existingIds.insert(result.id)
                     }
                 }
-                let mergedResults = ChatContextResultCollection(botId: currentProcessedResults.botId, peerId: currentProcessedResults.peerId, query: currentProcessedResults.query, geoPoint: currentProcessedResults.geoPoint, queryId: nextResults.results.queryId, nextOffset: nextResults.results.nextOffset, presentation: currentProcessedResults.presentation, switchPeer: currentProcessedResults.switchPeer, results: results, cacheTimeout: currentProcessedResults.cacheTimeout)
+                let mergedResults = ChatContextResultCollection(botId: currentProcessedResults.botId, peerId: currentProcessedResults.peerId, query: currentProcessedResults.query, geoPoint: currentProcessedResults.geoPoint, queryId: nextResults.results.queryId, nextOffset: nextResults.results.nextOffset, presentation: currentProcessedResults.presentation, switchPeer: currentProcessedResults.switchPeer, webView: currentProcessedResults.webView, results: results, cacheTimeout: currentProcessedResults.cacheTimeout)
                 strongSelf.currentProcessedResults = mergedResults
                 strongSelf.results.set(mergedResults)
             }))
@@ -718,7 +717,7 @@ class WebSearchControllerNode: ASDisplayNode {
     }
     
     @objc private func sendPressed() {
-        self.controllerInteraction.sendSelected(nil, false, nil)
+        self.controllerInteraction.sendSelected(nil, false, nil, nil)
         
         self.cancel?()
     }
@@ -733,7 +732,7 @@ class WebSearchControllerNode: ASDisplayNode {
         if self.controllerInteraction.selectionState != nil {
             if let state = self.webSearchInterfaceState.state, state.scope == .images {
                 if let results = self.currentProcessedResults?.results {
-                    presentLegacyWebSearchGallery(context: self.context, peer: self.peer, chatLocation: self.chatLocation, presentationData: self.presentationData, results: results, current: currentResult, selectionContext: self.controllerInteraction.selectionState, editingContext: self.controllerInteraction.editingState, updateHiddenMedia: { [weak self] id in
+                    presentLegacyWebSearchGallery(context: self.context, peer: self.peer, threadTitle: nil, chatLocation: self.chatLocation, presentationData: self.presentationData, results: results, current: currentResult, selectionContext: self.controllerInteraction.selectionState, editingContext: self.controllerInteraction.editingState, updateHiddenMedia: { [weak self] id in
                         self?.hiddenMediaId.set(.single(id))
                     }, initialLayout: self.containerLayout?.0, transitionHostView: { [weak self] in
                         return self?.gridNode.view
@@ -741,10 +740,10 @@ class WebSearchControllerNode: ASDisplayNode {
                         return self?.transitionNode(for: result)?.transitionView()
                     }, completed: { [weak self] result in
                         if let strongSelf = self {
-                            strongSelf.controllerInteraction.sendSelected(result, false, nil)
+                            strongSelf.controllerInteraction.sendSelected(result, false, nil, nil)
                             strongSelf.cancel?()
                         }
-                    }, presentStickers: self.presentStickers, getCaptionPanelView: self.getCaptionPanelView, present: present)
+                    }, getCaptionPanelView: self.getCaptionPanelView, present: present)
                 }
             } else {
                 if let results = self.currentProcessedResults?.results {
@@ -761,7 +760,7 @@ class WebSearchControllerNode: ASDisplayNode {
                         
                     }, baseNavigationController: nil, sendCurrent: { [weak self] result in
                         if let strongSelf = self {
-                            strongSelf.controllerInteraction.sendSelected(result, false, nil)
+                            strongSelf.controllerInteraction.sendSelected(result, false, nil, nil)
                             strongSelf.cancel?()
                         }
                     })
@@ -792,18 +791,29 @@ class WebSearchControllerNode: ASDisplayNode {
                 }
             }
         } else {
-            presentLegacyWebSearchEditor(context: self.context, theme: self.theme, result: currentResult, initialLayout: self.containerLayout?.0, updateHiddenMedia: { [weak self] id in
-                self?.hiddenMediaId.set(.single(id))
-            }, transitionHostView: { [weak self] in
-                return self?.gridNode.view
-            }, transitionView: { [weak self] result in
-                return self?.transitionNode(for: result)?.transitionView()
-            }, completed: { [weak self] result in
-                if let strongSelf = self {
-                    strongSelf.controllerInteraction.avatarCompleted(result)
-                    strongSelf.cancel?()
+            if let mode = self.controller?.mode, case let .editor(completion) = mode {
+                if let item = legacyWebSearchItem(account: self.context.account, result: currentResult) {
+                    let _ = (item.originalImage
+                    |> deliverOnMainQueue).start(next: { image in
+                        if !image.degraded() {
+                            completion(image)
+                        }
+                    })
                 }
-            }, present: present)
+            } else {
+                presentLegacyWebSearchEditor(context: self.context, theme: self.theme, result: currentResult, initialLayout: self.containerLayout?.0, updateHiddenMedia: { [weak self] id in
+                    self?.hiddenMediaId.set(.single(id))
+                }, transitionHostView: { [weak self] in
+                    return self?.gridNode.view
+                }, transitionView: { [weak self] result in
+                    return self?.transitionNode(for: result)?.transitionView()
+                }, completed: { [weak self] result in
+                    if let strongSelf = self {
+                        strongSelf.controllerInteraction.avatarCompleted(result)
+                        strongSelf.cancel?()
+                    }
+                }, present: present)
+            }
         }
     }
     

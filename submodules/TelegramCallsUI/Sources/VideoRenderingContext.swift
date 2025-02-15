@@ -14,6 +14,7 @@ protocol VideoRenderingView: UIView {
     func getAspect() -> CGFloat
     func setOnIsMirroredUpdated(_ f: @escaping (Bool) -> Void)
     func updateIsEnabled(_ isEnabled: Bool)
+    func updateLayout(size: CGSize, transition: ContainedViewLayoutTransition)
 }
 
 class VideoRenderingContext {
@@ -53,6 +54,10 @@ class VideoRenderingContext {
             return SampleBufferVideoRenderingView(input: input)
         }
         #endif
+    }
+    
+    func makeBlurView(input: Signal<OngoingGroupCallContext.VideoFrameData, NoError>, mainView: VideoRenderingView?, forceSampleBufferDisplayLayer: Bool = false) -> VideoRenderingView? {
+        return self.makeView(input: input, blur: true, forceSampleBufferDisplayLayer: forceSampleBufferDisplayLayer)
     }
 
     func updateVisibility(isVisible: Bool) {

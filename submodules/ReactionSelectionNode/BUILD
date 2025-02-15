@@ -25,6 +25,7 @@ swift_library(
         "//submodules/AppBundle:AppBundle",
         "//submodules/AvatarNode:AvatarNode",
         "//submodules/ComponentFlow:ComponentFlow",
+        "//submodules/Components/PagerComponent:PagerComponent",
         "//submodules/TelegramUI/Components/EmojiStatusSelectionComponent:EmojiStatusSelectionComponent",
         "//submodules/TelegramUI/Components/EntityKeyboard:EntityKeyboard",
         "//submodules/TelegramUI/Components/AnimationCache:AnimationCache",
@@ -34,6 +35,10 @@ swift_library(
         "//submodules/TextFormat:TextFormat",
         "//submodules/GZip:GZip",
         "//submodules/ShimmerEffect:ShimmerEffect",
+        "//submodules/TelegramUI/Components/Utils/GenerateStickerPlaceholderImage",
+        "//submodules/Components/BalancedTextComponent",
+        "//submodules/Markdown",
+        "//submodules/TelegramUI/Components/Premium/PremiumStarComponent",
     ],
     visibility = [
         "//visibility:public",

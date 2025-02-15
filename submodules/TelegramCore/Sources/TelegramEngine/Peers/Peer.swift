@@ -6,52 +6,46 @@ public enum EnginePeer: Equatable {
 
     public struct Presence: Equatable {
         public enum Status: Comparable {
+            private struct SortKey: Comparable {
+                var major: Int
+                var minor: Int32
+                
+                init(major: Int, minor: Int32) {
+                    self.major = major
+                    self.minor = minor
+                }
+                
+                static func <(lhs: SortKey, rhs: SortKey) -> Bool {
+                    if lhs.major != rhs.major {
+                        return lhs.major < rhs.major
+                    }
+                    return lhs.minor < rhs.minor
+                }
+            }
+            
             case present(until: Int32)
-            case recently
-            case lastWeek
-            case lastMonth
+            case recently(isHidden: Bool)
+            case lastWeek(isHidden: Bool)
+            case lastMonth(isHidden: Bool)
             case longTimeAgo
+            
+            private var sortKey: SortKey {
+                switch self {
+                case let .present(until):
+                    return SortKey(major: 6, minor: until)
+                case .recently:
+                    return SortKey(major: 4, minor: 0)
+                case .lastWeek:
+                    return SortKey(major: 3, minor: 0)
+                case .lastMonth:
+                    return SortKey(major: 2, minor: 0)
+                case .longTimeAgo:
+                    return SortKey(major: 1, minor: 0)
+                }
+            }
 
             public static func <(lhs: Status, rhs: Status) -> Bool {
-                switch lhs {
-                case .longTimeAgo:
-                    switch rhs {
-                    case .longTimeAgo:
-                        return false
-                    case .lastMonth, .lastWeek, .recently, .present:
-                        return true
-                    }
-                case let .present(until):
-                    switch rhs {
-                    case .longTimeAgo:
-                        return false
-                    case let .present(rhsUntil):
-                        return until < rhsUntil
-                    case .lastWeek, .lastMonth, .recently:
-                        return false
-                    }
-                case .recently:
-                    switch rhs {
-                    case .longTimeAgo, .lastWeek, .lastMonth, .recently:
-                        return false
-                    case .present:
-                        return true
-                    }
-                case .lastWeek:
-                    switch rhs {
-                    case .longTimeAgo, .lastMonth, .lastWeek:
-                        return false
-                    case .present, .recently:
-                        return true
-                    }
-                case .lastMonth:
-                    switch rhs {
-                    case .longTimeAgo, .lastMonth:
-                        return false
-                    case .present, .recently, lastWeek:
-                        return true
-                    }
-                }
+                return lhs.sortKey < rhs.sortKey
             }
         }
 
@@ -84,19 +78,24 @@ public enum EnginePeer: Equatable {
             case show
             case hide
         }
+        
+        public typealias StorySettigs = PeerStoryNotificationSettings
 
         public var muteState: MuteState
         public var messageSound: MessageSound
         public var displayPreviews: DisplayPreviews
+        public var storySettings: StorySettigs
 
         public init(
             muteState: MuteState,
             messageSound: MessageSound,
-            displayPreviews: DisplayPreviews
+            displayPreviews: DisplayPreviews,
+            storySettings: StorySettigs
         ) {
             self.muteState = muteState
             self.messageSound = messageSound
             self.displayPreviews = displayPreviews
+            self.storySettings = storySettings
         }
     }
     
@@ -216,10 +215,26 @@ public struct EngineGlobalNotificationSettings: Equatable {
         public var enabled: Bool
         public var displayPreviews: Bool
         public var sound: EnginePeer.NotificationSettings.MessageSound
+        public var storySettings: EnginePeer.NotificationSettings.StorySettigs
         
-        public init(enabled: Bool, displayPreviews: Bool, sound: EnginePeer.NotificationSettings.MessageSound) {
+        public init(enabled: Bool, displayPreviews: Bool, sound: EnginePeer.NotificationSettings.MessageSound, storySettings: EnginePeer.NotificationSettings.StorySettigs) {
             self.enabled = enabled
             self.displayPreviews = displayPreviews
+            self.sound = sound
+            self.storySettings = storySettings
+        }
+    }
+    
+    public struct ReactionSettings: Equatable {
+        public var messages: PeerReactionNotificationSettings.Sources
+        public var stories: PeerReactionNotificationSettings.Sources
+        public var hideSender: PeerReactionNotificationSettings.HideSender
+        public var sound: EnginePeer.NotificationSettings.MessageSound
+        
+        public init(messages: PeerReactionNotificationSettings.Sources, stories: PeerReactionNotificationSettings.Sources, hideSender: PeerReactionNotificationSettings.HideSender, sound: EnginePeer.NotificationSettings.MessageSound) {
+            self.messages = messages
+            self.stories = stories
+            self.hideSender = hideSender
             self.sound = sound
         }
     }
@@ -227,17 +242,20 @@ public struct EngineGlobalNotificationSettings: Equatable {
     public var privateChats: CategorySettings
     public var groupChats: CategorySettings
     public var channels: CategorySettings
+    public var reactionSettings: ReactionSettings
     public var contactsJoined: Bool
     
     public init(
         privateChats: CategorySettings,
         groupChats: CategorySettings,
         channels: CategorySettings,
+        reactionSettings: ReactionSettings,
         contactsJoined: Bool
     ) {
         self.privateChats = privateChats
         self.groupChats = groupChats
         self.channels = channels
+        self.reactionSettings = reactionSettings
         self.contactsJoined = contactsJoined
     }
 }
@@ -327,7 +345,8 @@ public extension EnginePeer.NotificationSettings {
         self.init(
             muteState: MuteState(notificationSettings.muteState),
             messageSound: MessageSound(notificationSettings.messageSound),
-            displayPreviews: DisplayPreviews(notificationSettings.displayPreviews)
+            displayPreviews: DisplayPreviews(notificationSettings.displayPreviews),
+            storySettings: notificationSettings.storySettings
         )
     }
 
@@ -335,7 +354,8 @@ public extension EnginePeer.NotificationSettings {
         return TelegramPeerNotificationSettings(
             muteState: self.muteState._asMuteState(),
             messageSound: self.messageSound._asMessageSound(),
-            displayPreviews: self.displayPreviews._asDisplayPreviews()
+            displayPreviews: self.displayPreviews._asDisplayPreviews(),
+            storySettings: self.storySettings
         )
     }
 }
@@ -361,12 +381,12 @@ public extension EnginePeer.Presence {
                 mappedStatus = .longTimeAgo
             case let .present(until):
                 mappedStatus = .present(until: until)
-            case .recently:
-                mappedStatus = .recently
-            case .lastWeek:
-                mappedStatus = .lastWeek
-            case .lastMonth:
-                mappedStatus = .lastMonth
+            case let .recently(isHidden):
+                mappedStatus = .recently(isHidden: isHidden)
+            case let .lastWeek(isHidden):
+                mappedStatus = .lastWeek(isHidden: isHidden)
+            case let .lastMonth(isHidden):
+                mappedStatus = .lastMonth(isHidden: isHidden)
             }
 
             self.init(status: mappedStatus, lastActivity: presence.lastActivity)
@@ -382,12 +402,12 @@ public extension EnginePeer.Presence {
             mappedStatus = .none
         case let .present(until):
             mappedStatus = .present(until: until)
-        case .recently:
-            mappedStatus = .recently
-        case .lastWeek:
-            mappedStatus = .lastWeek
-        case .lastMonth:
-            mappedStatus = .lastMonth
+        case let .recently(isHidden):
+            mappedStatus = .recently(isHidden: isHidden)
+        case let .lastWeek(isHidden):
+            mappedStatus = .lastWeek(isHidden: isHidden)
+        case let .lastMonth(isHidden):
+            mappedStatus = .lastMonth(isHidden: isHidden)
         }
         return TelegramUserPresence(status: mappedStatus, lastActivity: self.lastActivity)
     }
@@ -415,6 +435,10 @@ public extension EnginePeer.IndexName {
     func matchesByTokens(_ other: String) -> Bool {
         return self._asIndexName().matchesByTokens(other)
     }
+    
+    func matchesByTokens(_ other: [ValueBoxKey]) -> Bool {
+        return self._asIndexName().matchesByTokens(other)
+    }
 
     func stringRepresentation(lastNameFirst: Bool) -> String {
         switch self {
@@ -437,6 +461,10 @@ public extension EnginePeer {
 
     var addressName: String? {
         return self._asPeer().addressName
+    }
+    
+    var usernames: [TelegramPeerUsername] {
+        return self._asPeer().usernames
     }
 
     var indexName: EnginePeer.IndexName {
@@ -486,15 +514,46 @@ public extension EnginePeer {
     var isPremium: Bool {
         return self._asPeer().isPremium
     }
+    
+    var isSubscription: Bool {
+        return self._asPeer().isSubscription
+    }
 
     var isService: Bool {
         if case let .user(peer) = self {
             if peer.id.isReplies {
                 return true
             }
+            if peer.id.isVerificationCodes {
+                return true
+            }
             return (peer.id.namespace == Namespaces.Peer.CloudUser && (peer.id.id._internalGetInt64Value() == 777000 || peer.id.id._internalGetInt64Value() == 333000))
         }
         return false
+    }
+    
+    var nameColor: PeerNameColor? {
+        return self._asPeer().nameColor
+    }
+    
+    var verificationIconFileId: Int64? {
+        return self._asPeer().verificationIconFileId
+    }
+    
+    var profileColor: PeerNameColor? {
+        return self._asPeer().profileColor
+    }
+    
+    var emojiStatus: PeerEmojiStatus? {
+        return self._asPeer().emojiStatus
+    }
+    
+    var backgroundEmojiId: Int64? {
+        return self._asPeer().backgroundEmojiId
+    }
+    
+    var profileBackgroundEmojiId: Int64? {
+        return self._asPeer().profileBackgroundEmojiId
     }
 }
 
@@ -594,7 +653,8 @@ public extension EngineGlobalNotificationSettings.CategorySettings {
         self.init(
             enabled: categorySettings.enabled,
             displayPreviews: categorySettings.displayPreviews,
-            sound: EnginePeer.NotificationSettings.MessageSound(categorySettings.sound)
+            sound: EnginePeer.NotificationSettings.MessageSound(categorySettings.sound),
+            storySettings: categorySettings.storySettings
         )
     }
     
@@ -602,6 +662,27 @@ public extension EngineGlobalNotificationSettings.CategorySettings {
         return MessageNotificationSettings(
             enabled: self.enabled,
             displayPreviews: self.displayPreviews,
+            sound: self.sound._asMessageSound(),
+            storySettings: self.storySettings
+        )
+    }
+}
+
+public extension EngineGlobalNotificationSettings.ReactionSettings {
+    init(_ reactionSettings: PeerReactionNotificationSettings) {
+        self.init(
+            messages: reactionSettings.messages,
+            stories: reactionSettings.stories,
+            hideSender: reactionSettings.hideSender,
+            sound: EnginePeer.NotificationSettings.MessageSound(reactionSettings.sound)
+        )
+    }
+    
+    func _asReactionSettings() -> PeerReactionNotificationSettings {
+        return PeerReactionNotificationSettings(
+            messages: self.messages,
+            stories: self.stories,
+            hideSender: self.hideSender,
             sound: self.sound._asMessageSound()
         )
     }
@@ -613,7 +694,18 @@ public extension EngineGlobalNotificationSettings {
             privateChats: CategorySettings(globalNotificationSettings.privateChats),
             groupChats: CategorySettings(globalNotificationSettings.groupChats),
             channels: CategorySettings(globalNotificationSettings.channels),
+            reactionSettings: ReactionSettings(globalNotificationSettings.reactionSettings),
             contactsJoined: globalNotificationSettings.contactsJoined
+        )
+    }
+    
+    func _asGlobalNotificationSettings() -> GlobalNotificationSettingsSet {
+        return GlobalNotificationSettingsSet(
+            privateChats: self.privateChats._asMessageNotificationSettings(),
+            groupChats: self.groupChats._asMessageNotificationSettings(),
+            channels: self.channels._asMessageNotificationSettings(),
+            reactionSettings: self.reactionSettings._asReactionSettings(),
+            contactsJoined: self.contactsJoined
         )
     }
 }

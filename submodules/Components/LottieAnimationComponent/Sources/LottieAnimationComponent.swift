@@ -4,6 +4,7 @@ import Lottie
 import AppBundle
 import HierarchyTrackingLayer
 import Display
+import GZip
 
 public final class LottieAnimationComponent: Component {
     public struct AnimationItem: Equatable {
@@ -20,10 +21,34 @@ public final class LottieAnimationComponent: Component {
         
         public var name: String
         public var mode: Mode
+        public var range: (CGFloat, CGFloat)?
+        public var speed: CGFloat
+        public var waitForCompletion: Bool
         
-        public init(name: String, mode: Mode) {
+        public init(name: String, mode: Mode, range: (CGFloat, CGFloat)? = nil, speed: CGFloat = 1.0, waitForCompletion: Bool = true) {
             self.name = name
             self.mode = mode
+            self.range = range
+            self.speed = speed
+            self.waitForCompletion = waitForCompletion
+        }
+        
+        public static func == (lhs: LottieAnimationComponent.AnimationItem, rhs: LottieAnimationComponent.AnimationItem) -> Bool {
+            if lhs.name != rhs.name {
+                return false
+            }
+            if lhs.mode != rhs.mode {
+                return false
+            }
+            if lhs.speed != rhs.speed {
+                return false
+            }
+            if let lhsRange = lhs.range, let rhsRange = rhs.range, lhsRange != rhsRange {
+                return false
+            } else if (lhs.range == nil) != (rhs.range == nil) {
+                return false
+            }
+            return true
         }
     }
     
@@ -108,18 +133,25 @@ public final class LottieAnimationComponent: Component {
         }
         
         public func playOnce() {
-            guard let animationView = self.animationView else {
+            guard let animationView = self.animationView, let component = self.component else {
                 return
             }
 
             animationView.stop()
             animationView.loopMode = .playOnce
-            animationView.play { [weak self] _ in
-                self?.currentCompletion?()
+            
+            if let range = component.animation.range {
+                animationView.play(fromProgress: range.0, toProgress: range.1, completion: { [weak self] _ in
+                    self?.currentCompletion?()
+                })
+            } else {
+                animationView.play { [weak self] _ in
+                    self?.currentCompletion?()
+                }
             }
         }
         
-        func update(component: LottieAnimationComponent, availableSize: CGSize, transition: Transition) -> CGSize {
+        func update(component: LottieAnimationComponent, availableSize: CGSize, transition: ComponentTransition) -> CGSize {
             var updatePlayback = false
             var updateColors = false
             
@@ -140,7 +172,7 @@ public final class LottieAnimationComponent: Component {
                     }
                 }
                 
-                if let animationView = self.animationView, animationView.isAnimationPlaying {
+                if let animationView = self.animationView, animationView.isAnimationPlaying && component.animation.waitForCompletion {
                     updateComponent = false
                     self.currentCompletion = { [weak self] in
                         guard let strongSelf = self else {
@@ -157,7 +189,14 @@ public final class LottieAnimationComponent: Component {
                     self.didPlayToCompletion = false
                     self.currentCompletion = nil
                     
-                    if let url = getAppBundle().url(forResource: component.animation.name, withExtension: "json"), let animation = Animation.filepath(url.path) {
+                    var animation: Animation?
+                    if let url = getAppBundle().url(forResource: component.animation.name, withExtension: "json"), let maybeAnimation = Animation.filepath(url.path) {
+                        animation = maybeAnimation
+                    } else if let url = getAppBundle().url(forResource: component.animation.name, withExtension: "tgs"), let data = try? Data(contentsOf: URL(fileURLWithPath: url.path)), let unpackedData = TGGUnzipData(data, 5 * 1024 * 1024) {
+                        animation = try? Animation.from(data: unpackedData, strategy: .codable)
+                    }
+                    
+                    if let animation {
                         let view = AnimationView(animation: animation, configuration: LottieConfiguration(renderingEngine: .mainThread, decodingStrategy: .codable))
                         switch component.animation.mode {
                         case .still, .animateTransitionFromPrevious:
@@ -169,7 +208,7 @@ public final class LottieAnimationComponent: Component {
                                 view.loopMode = .playOnce
                             }
                         }
-                        view.animationSpeed = 1.0
+                        view.animationSpeed = component.animation.speed
                         view.backgroundColor = .clear
                         view.isOpaque = false
                         
@@ -190,6 +229,9 @@ public final class LottieAnimationComponent: Component {
             
             if updateColors, let animationView = self.animationView {
                 if let value = component.colors["__allcolors__"] {
+                    for keypath in animationView.allKeypaths(predicate: { $0.keys.last == "Colors" }) {
+                        animationView.setValueProvider(GradientValueProvider([value.lottieColorValue, value.lottieColorValue]), keypath: AnimationKeypath(keypath: keypath))
+                    }
                     for keypath in animationView.allKeypaths(predicate: { $0.keys.last == "Color" }) {
                         animationView.setValueProvider(ColorValueProvider(value.lottieColorValue), keypath: AnimationKeypath(keypath: keypath))
                     }
@@ -248,8 +290,14 @@ public final class LottieAnimationComponent: Component {
                 if updatePlayback {
                     if case .animating = component.animation.mode {
                         if !animationView.isAnimationPlaying {
-                            animationView.play { [weak self] _ in
-                                self?.currentCompletion?()
+                            if let range = component.animation.range {
+                                animationView.play(fromProgress: range.0, toProgress: range.1, completion: { [weak self] _ in
+                                    self?.currentCompletion?()
+                                })
+                            } else {
+                                animationView.play { [weak self] _ in
+                                    self?.currentCompletion?()
+                                }
                             }
                         }
                     } else {
@@ -276,7 +324,7 @@ public final class LottieAnimationComponent: Component {
         return View(frame: CGRect())
     }
     
-    public func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: Transition) -> CGSize {
+    public func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: ComponentTransition) -> CGSize {
         return view.update(component: self, availableSize: availableSize, transition: transition)
     }
 }

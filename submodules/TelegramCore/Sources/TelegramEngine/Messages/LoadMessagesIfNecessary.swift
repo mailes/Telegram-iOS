@@ -4,13 +4,21 @@ import SwiftSignalKit
 import TelegramApi
 import MtProtoKit
 
+public enum GetMessagesResult {
+    case progress
+    case result([Message])
+}
 
 public enum GetMessagesStrategy  {
     case local
     case cloud(skipLocal: Bool)
 }
 
-func _internal_getMessagesLoadIfNecessary(_ messageIds: [MessageId], postbox: Postbox, network: Network, accountPeerId: PeerId, strategy: GetMessagesStrategy = .cloud(skipLocal: false)) -> Signal <[Message], NoError> {
+public enum GetMessagesError {
+    case privateChannel
+}
+
+func _internal_getMessagesLoadIfNecessary(_ messageIds: [MessageId], postbox: Postbox, network: Network, accountPeerId: PeerId, strategy: GetMessagesStrategy = .cloud(skipLocal: false)) -> Signal<GetMessagesResult, GetMessagesError> {
     let postboxSignal = postbox.transaction { transaction -> ([Message], Set<MessageId>, SimpleDictionary<PeerId, Peer>) in
         var ids = messageIds
         
@@ -46,9 +54,9 @@ func _internal_getMessagesLoadIfNecessary(_ messageIds: [MessageId], postbox: Po
     
     if case .cloud = strategy {
         return postboxSignal
+        |> castError(GetMessagesError.self)
         |> mapToSignal { (existMessages, missingMessageIds, supportPeers) in
-            
-            var signals: [Signal<([Api.Message], [Api.Chat], [Api.User]), NoError>] = []
+            var signals: [Signal<(Peer, [Api.Message], [Api.Chat], [Api.User]), GetMessagesError>] = []
             for (peerId, messageIds) in messagesIdsGroupedByPeerId(missingMessageIds) {
                 if let peer = supportPeers[peerId] {
                     var signal: Signal<Api.messages.Messages, MTRpcError>?
@@ -63,53 +71,44 @@ func _internal_getMessagesLoadIfNecessary(_ messageIds: [MessageId], postbox: Po
                         signals.append(signal |> map { result in
                             switch result {
                                 case let .messages(messages, chats, users):
-                                    return (messages, chats, users)
+                                    return (peer, messages, chats, users)
                                 case let .messagesSlice(_, _, _, _, messages, chats, users):
-                                    return (messages, chats, users)
-                                case let .channelMessages(_, _, _, _, messages, chats, users):
-                                    return (messages, chats, users)
+                                    return (peer, messages, chats, users)
+                                case let .channelMessages(_, _, _, _, messages, apiTopics, chats, users):
+                                    let _ = apiTopics
+                                    return (peer, messages, chats, users)
                                 case .messagesNotModified:
-                                    return ([], [], [])
+                                    return (peer, [], [], [])
                             }
-                            } |> `catch` { _ in
-                                return Signal<([Api.Message], [Api.Chat], [Api.User]), NoError>.single(([], [], []))
+                            } |> `catch` { error in
+                                if error.errorDescription == "CHANNEL_PRIVATE" {
+                                    return .fail(.privateChannel)
+                                } else {
+                                    return Signal<(Peer, [Api.Message], [Api.Chat], [Api.User]), GetMessagesError>.single((peer, [], [], []))
+                                }
                             })
                     }
                 }
             }
             
-            return combineLatest(signals) |> mapToSignal { results -> Signal<[Message], NoError> in
-                return postbox.transaction { transaction -> [Message] in
-                    
-                    for (messages, chats, users) in results {
+            return .single(.progress) 
+            |> castError(GetMessagesError.self)
+            |> then(combineLatest(signals) |> mapToSignal { results -> Signal<GetMessagesResult, GetMessagesError> in
+                return postbox.transaction { transaction -> GetMessagesResult in
+                    for (peer, messages, chats, users) in results {
                         if !messages.isEmpty {
                             var storeMessages: [StoreMessage] = []
                             
                             for message in messages {
-                                if let message = StoreMessage(apiMessage: message) {
+                                if let message = StoreMessage(apiMessage: message, accountPeerId: accountPeerId, peerIsForum: peer.isForum) {
                                     storeMessages.append(message)
                                 }
                             }
                             _ = transaction.addMessages(storeMessages, location: .Random)
                         }
                         
-                        var peers: [Peer] = []
-                        var peerPresences: [PeerId: Api.User] = [:]
-                        for chat in chats {
-                            if let groupOrChannel = parseTelegramGroupOrChannel(chat: chat) {
-                                peers.append(groupOrChannel)
-                            }
-                        }
-                        for user in users {
-                            let telegramUser = TelegramUser(user: user)
-                            peers.append(telegramUser)
-                            peerPresences[telegramUser.id] = user
-                        }
-                        
-                        updatePeers(transaction: transaction, peers: peers, update: { _, updated -> Peer in
-                            return updated
-                        })
-                        updatePeerPresences(transaction: transaction, accountPeerId: accountPeerId, peerPresences: peerPresences)
+                        let parsedPeers = AccumulatedPeers(transaction: transaction, chats: chats, users: users)
+                        updatePeers(transaction: transaction, accountPeerId: accountPeerId, peers: parsedPeers)
                     }
                     var loadedMessages:[Message] = []
                     for messageId in missingMessageIds {
@@ -118,13 +117,16 @@ func _internal_getMessagesLoadIfNecessary(_ messageIds: [MessageId], postbox: Po
                         }
                     }
                     
-                    return existMessages + loadedMessages
+                    return .result(existMessages + loadedMessages)
                 }
-            }
-            
+                |> castError(GetMessagesError.self)
+            })
         }
     } else {
-        return postboxSignal |> map {$0.0}
+        return postboxSignal
+        |> castError(GetMessagesError.self)
+        |> map {
+            return .result($0.0)
+        }
     }
-    
 }

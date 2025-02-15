@@ -16,11 +16,12 @@ import TelegramCallsUI
 import TelegramBaseController
 import AsyncDisplayKit
 import PresentationDataUtils
-import MeshAnimationCache
 import FetchManagerImpl
 import InAppPurchaseManager
 import AnimationCache
 import MultiAnimationRenderer
+import AppBundle
+import DirectMediaImageCache
 
 private final class DeviceSpecificContactImportContext {
     let disposable = MetaDisposable()
@@ -126,6 +127,7 @@ public final class AccountContextImpl: AccountContext {
     public let wallpaperUploadManager: WallpaperUploadManager?
     private let themeUpdateManager: ThemeUpdateManager?
     public let inAppPurchaseManager: InAppPurchaseManager?
+    public let starsContext: StarsContext?
     
     public let peerChannelMemberCategoriesContextsManager = PeerChannelMemberCategoriesContextsManager()
     
@@ -147,12 +149,19 @@ public final class AccountContextImpl: AccountContext {
         return self._appConfiguration.get()
     }
     
+    public var currentCountriesConfiguration: Atomic<CountriesConfiguration>
+    private let _countriesConfiguration = Promise<CountriesConfiguration>()
+    public var countriesConfiguration: Signal<CountriesConfiguration, NoError> {
+        return self._countriesConfiguration.get()
+    }
+    
     public var watchManager: WatchManager?
     
     private var storedPassword: (String, CFAbsoluteTime, SwiftSignalKit.Timer)?
     private var limitsConfigurationDisposable: Disposable?
     private var contentSettingsDisposable: Disposable?
     private var appConfigurationDisposable: Disposable?
+    private var countriesConfigurationDisposable: Disposable?
     
     private let deviceSpecificContactImportContexts: QueueLocalObject<DeviceSpecificContactImportContexts>
     private var managedAppSpecificContactsDisposable: Disposable?
@@ -160,24 +169,117 @@ public final class AccountContextImpl: AccountContext {
     private var experimentalUISettingsDisposable: Disposable?
     
     public let cachedGroupCallContexts: AccountGroupCallContextCache
-    public let meshAnimationCache: MeshAnimationCache
     
     public let animationCache: AnimationCache
     public let animationRenderer: MultiAnimationRenderer
     
     private var animatedEmojiStickersDisposable: Disposable?
-    public private(set) var animatedEmojiStickers: [String: [StickerPackItem]] = [:]
+    public private(set) var animatedEmojiStickersValue: [String: [StickerPackItem]] = [:]
+    private let animatedEmojiStickersPromise = Promise<[String: [StickerPackItem]]>()
+    public var animatedEmojiStickers: Signal<[String: [StickerPackItem]], NoError> {
+        return self.animatedEmojiStickersPromise.get()
+    }
+    
+    private var additionalAnimatedEmojiStickersPromise: Promise<[String: [Int: StickerPackItem]]>?
+    public var additionalAnimatedEmojiStickers: Signal<[String: [Int: StickerPackItem]], NoError> {
+        let additionalAnimatedEmojiStickersPromise: Promise<[String: [Int: StickerPackItem]]>
+        if let current = self.additionalAnimatedEmojiStickersPromise {
+            additionalAnimatedEmojiStickersPromise = current
+        } else {
+            additionalAnimatedEmojiStickersPromise = Promise<[String: [Int: StickerPackItem]]>()
+            self.additionalAnimatedEmojiStickersPromise = additionalAnimatedEmojiStickersPromise
+            additionalAnimatedEmojiStickersPromise.set(self.engine.stickers.loadedStickerPack(reference: .animatedEmojiAnimations, forceActualized: false)
+            |> map { animatedEmoji -> [String: [Int: StickerPackItem]] in
+                let sequence = "0️⃣1️⃣2️⃣3️⃣4️⃣5️⃣6️⃣7️⃣8️⃣9️⃣".strippedEmoji
+                var animatedEmojiStickers: [String: [Int: StickerPackItem]] = [:]
+                switch animatedEmoji {
+                case let .result(_, items, _):
+                    for item in items {
+                        let indexKeys = item.getStringRepresentationsOfIndexKeys()
+                        if indexKeys.count > 1, let first = indexKeys.first, let last = indexKeys.last {
+                            let emoji: String?
+                            let indexEmoji: String?
+                            if sequence.contains(first.strippedEmoji) {
+                                emoji = last
+                                indexEmoji = first
+                            } else if sequence.contains(last.strippedEmoji) {
+                                emoji = first
+                                indexEmoji = last
+                            } else {
+                                emoji = nil
+                                indexEmoji = nil
+                            }
+                            
+                            if let emoji = emoji?.strippedEmoji, let indexEmoji = indexEmoji?.strippedEmoji.first, let strIndex = sequence.firstIndex(of: indexEmoji) {
+                                let index = sequence.distance(from: sequence.startIndex, to: strIndex)
+                                if animatedEmojiStickers[emoji] != nil {
+                                    animatedEmojiStickers[emoji]![index] = item
+                                } else {
+                                    animatedEmojiStickers[emoji] = [index: item]
+                                }
+                            }
+                        }
+                    }
+                default:
+                    break
+                }
+                return animatedEmojiStickers
+            })
+        }
+        return additionalAnimatedEmojiStickersPromise.get()
+    }
+    
+    private var availableReactionsValue: Promise<AvailableReactions?>?
+    public var availableReactions: Signal<AvailableReactions?, NoError> {
+        let availableReactionsValue: Promise<AvailableReactions?>
+        if let current = self.availableReactionsValue {
+            availableReactionsValue = current
+        } else {
+            availableReactionsValue = Promise<AvailableReactions?>()
+            self.availableReactionsValue = availableReactionsValue
+            availableReactionsValue.set(self.engine.stickers.availableReactions())
+        }
+        return availableReactionsValue.get()
+    }
+    
+    private var availableMessageEffectsValue: Promise<AvailableMessageEffects?>?
+    public var availableMessageEffects: Signal<AvailableMessageEffects?, NoError> {
+        let availableMessageEffectsValue: Promise<AvailableMessageEffects?>
+        if let current = self.availableMessageEffectsValue {
+            availableMessageEffectsValue = current
+        } else {
+            availableMessageEffectsValue = Promise<AvailableMessageEffects?>()
+            self.availableMessageEffectsValue = availableMessageEffectsValue
+            availableMessageEffectsValue.set(self.engine.stickers.availableMessageEffects())
+        }
+        return availableMessageEffectsValue.get()
+    }
     
     private var userLimitsConfigurationDisposable: Disposable?
     public private(set) var userLimits: EngineConfiguration.UserLimits
     
-    public init(sharedContext: SharedAccountContextImpl, account: Account, limitsConfiguration: LimitsConfiguration, contentSettings: ContentSettings, appConfiguration: AppConfiguration, temp: Bool = false)
+    private var peerNameColorsConfigurationDisposable: Disposable?
+    public private(set) var peerNameColors: PeerNameColors
+    
+    private var audioTranscriptionTrialDisposable: Disposable?
+    public private(set) var audioTranscriptionTrial: AudioTranscription.TrialState
+    
+    public private(set) var isPremium: Bool
+    
+    public let imageCache: AnyObject?
+    
+    public init(sharedContext: SharedAccountContextImpl, account: Account, limitsConfiguration: LimitsConfiguration, contentSettings: ContentSettings, appConfiguration: AppConfiguration, availableReplyColors: EngineAvailableColorOptions, availableProfileColors: EngineAvailableColorOptions, temp: Bool = false)
     {
         self.sharedContextImpl = sharedContext
         self.account = account
         self.engine = TelegramEngine(account: account)
         
+        self.imageCache = DirectMediaImageCache(account: account)
+        
         self.userLimits = EngineConfiguration.UserLimits(UserLimitsConfiguration.defaultValue)
+        self.peerNameColors = PeerNameColors.with(availableReplyColors: availableReplyColors, availableProfileColors: availableProfileColors)
+        self.audioTranscriptionTrial = AudioTranscription.TrialState.defaultValue
+        self.isPremium = false
         
         self.downloadedMediaStoreManager = DownloadedMediaStoreManagerImpl(postbox: account.postbox, accountManager: sharedContext.accountManager)
         
@@ -193,24 +295,28 @@ public final class AccountContextImpl: AccountContext {
             self.themeUpdateManager = ThemeUpdateManagerImpl(sharedContext: sharedContext, account: account)
             
             self.inAppPurchaseManager = InAppPurchaseManager(engine: self.engine)
+            self.starsContext = self.engine.payments.peerStarsContext()
         } else {
             self.prefetchManager = nil
             self.wallpaperUploadManager = nil
             self.themeUpdateManager = nil
             self.inAppPurchaseManager = nil
+            self.starsContext = nil
         }
         
-        if let locationManager = self.sharedContextImpl.locationManager, sharedContext.applicationBindings.isMainApp && !temp {
-            self.peersNearbyManager = PeersNearbyManagerImpl(account: account, engine: self.engine, locationManager: locationManager, inForeground: sharedContext.applicationBindings.applicationInForeground)
-        } else {
-            self.peersNearbyManager = nil
-        }
+        self.account.stateManager.starsContext = self.starsContext
+        
+        self.peersNearbyManager = nil
         
         self.cachedGroupCallContexts = AccountGroupCallContextCacheImpl()
-        self.meshAnimationCache = MeshAnimationCache(mediaBox: account.postbox.mediaBox)
         
+        let cacheStorageBox = self.account.postbox.mediaBox.cacheStorageBox
         self.animationCache = AnimationCacheImpl(basePath: self.account.postbox.mediaBox.basePath + "/animation-cache", allocateTempFile: {
             return TempBox.shared.tempFile(fileName: "file").path
+        }, updateStorageStats: { path, size in
+            if let pathData = path.data(using: .utf8) {
+                cacheStorageBox.update(id: pathData, size: size)
+            }
         })
         self.animationRenderer = MultiAnimationRendererImpl()
         
@@ -241,12 +347,21 @@ public final class AccountContextImpl: AccountContext {
         let updatedAppConfiguration = getAppConfiguration(postbox: account.postbox)
         self.currentAppConfiguration = Atomic(value: appConfiguration)
         self._appConfiguration.set(.single(appConfiguration) |> then(updatedAppConfiguration))
-        
+                
         let currentAppConfiguration = self.currentAppConfiguration
         self.appConfigurationDisposable = (self._appConfiguration.get()
         |> deliverOnMainQueue).start(next: { value in
             let _ = currentAppConfiguration.swap(value)
         })
+        
+        self.currentCountriesConfiguration = Atomic(value: CountriesConfiguration(countries: loadCountryCodes()))
+        if !temp {
+            let currentCountriesConfiguration = self.currentCountriesConfiguration
+            self.countriesConfigurationDisposable = (self.engine.localization.getCountriesList(accountManager: sharedContext.accountManager, langCode: nil)
+            |> deliverOnMainQueue).start(next: { value in
+                let _ = currentCountriesConfiguration.swap(CountriesConfiguration(countries: value))
+            })
+        }
         
         let queue = Queue()
         self.deviceSpecificContactImportContexts = QueueLocalObject(queue: queue, generate: {
@@ -290,22 +405,51 @@ public final class AccountContextImpl: AccountContext {
             guard let strongSelf = self else {
                 return
             }
-            strongSelf.animatedEmojiStickers = stickers
+            strongSelf.animatedEmojiStickersValue = stickers
+            strongSelf.animatedEmojiStickersPromise.set(.single(stickers))
         })
         
-        self.userLimitsConfigurationDisposable = (self.account.postbox.peerView(id: self.account.peerId)
-        |> mapToSignal { peerView -> Signal<EngineConfiguration.UserLimits, NoError> in
-            if let peer = peerView.peers[peerView.peerId] {
-                return self.engine.data.subscribe(TelegramEngine.EngineData.Item.Configuration.UserLimits(isPremium: peer.isPremium))
-            } else {
-                return .complete()
+        self.userLimitsConfigurationDisposable = (self.engine.data.subscribe(TelegramEngine.EngineData.Item.Peer.Peer(id: account.peerId))
+        |> mapToSignal { peer -> Signal<(Bool, EngineConfiguration.UserLimits), NoError> in
+            let isPremium = peer?.isPremium ?? false
+            return self.engine.data.subscribe(TelegramEngine.EngineData.Item.Configuration.UserLimits(isPremium: isPremium))
+            |> map { userLimits in
+                return (isPremium, userLimits)
             }
         }
-        |> deliverOnMainQueue).start(next: { [weak self] value in
-            guard let strongSelf = self else {
+        |> deliverOnMainQueue).startStrict(next: { [weak self] isPremium, userLimits in
+            guard let self = self else {
                 return
             }
-            strongSelf.userLimits = value
+            self.isPremium = isPremium
+            self.userLimits = userLimits
+        })
+        
+        self.peerNameColorsConfigurationDisposable = (combineLatest(
+            self.engine.accountData.observeAvailableColorOptions(scope: .replies),
+            self.engine.accountData.observeAvailableColorOptions(scope: .profile)
+        )
+        |> deliverOnMainQueue).startStrict(next: { [weak self] availableReplyColors, availableProfileColors in
+            guard let self = self else {
+                return
+            }
+            self.peerNameColors = PeerNameColors.with(availableReplyColors: availableReplyColors, availableProfileColors: availableProfileColors)
+        })
+        
+        self.audioTranscriptionTrialDisposable = (self.engine.data.subscribe(TelegramEngine.EngineData.Item.Peer.Peer(id: account.peerId))
+        |> mapToSignal { peer -> Signal<AudioTranscription.TrialState, NoError> in
+            let isPremium = peer?.isPremium ?? false
+            if isPremium {
+                return .single(AudioTranscription.TrialState(cooldownUntilTime: nil, remainingCount: 1))
+            } else {
+                return self.engine.data.subscribe(TelegramEngine.EngineData.Item.Configuration.AudioTranscriptionTrial())
+            }
+        }
+        |> deliverOnMainQueue).startStrict(next: { [weak self] audioTranscriptionTrial in
+            guard let self = self else {
+                return
+            }
+            self.audioTranscriptionTrial = audioTranscriptionTrial
         })
     }
     
@@ -314,8 +458,11 @@ public final class AccountContextImpl: AccountContext {
         self.managedAppSpecificContactsDisposable?.dispose()
         self.contentSettingsDisposable?.dispose()
         self.appConfigurationDisposable?.dispose()
+        self.countriesConfigurationDisposable?.dispose()
         self.experimentalUISettingsDisposable?.dispose()
         self.animatedEmojiStickersDisposable?.dispose()
+        self.userLimitsConfigurationDisposable?.dispose()
+        self.peerNameColorsConfigurationDisposable?.dispose()
     }
     
     public func storeSecureIdPassword(password: String) {
@@ -344,15 +491,14 @@ public final class AccountContextImpl: AccountContext {
         case let .peer(peerId):
             return .peer(peerId: peerId, threadId: nil)
         case let .replyThread(data):
-            if data.isForumPost {
-                return .peer(peerId: data.messageId.peerId, threadId: Int64(data.messageId.id))
+            if data.isForumPost || data.peerId.namespace != Namespaces.Peer.CloudChannel {
+                return .peer(peerId: data.peerId, threadId: data.threadId)
             } else {
                 let context = chatLocationContext(holder: contextHolder, account: self.account, data: data)
-                return .thread(peerId: data.messageId.peerId, threadId: makeMessageThreadId(data.messageId), data: context.state)
+                return .thread(peerId: data.peerId, threadId: data.threadId, data: context.state)
             }
-        case let .feed(id):
-            let context = chatLocationContext(holder: contextHolder, account: self.account, feedId: id)
-            return .feed(id: id, data: context.state)
+        case .customChatContents:
+            preconditionFailure()
         }
     }
     
@@ -362,7 +508,7 @@ public final class AccountContextImpl: AccountContext {
             return .single(nil)
         case let .replyThread(data):
             if data.isForumPost, let peerId = location.peerId {
-                let viewKey: PostboxViewKey = .messageHistoryThreadInfo(peerId: data.messageId.peerId, threadId: Int64(data.messageId.id))
+                let viewKey: PostboxViewKey = .messageHistoryThreadInfo(peerId: data.peerId, threadId: data.threadId)
                 return self.account.postbox.combinedView(keys: [viewKey])
                 |> map { views -> MessageId? in
                     if let threadInfo = views.views[viewKey] as? MessageHistoryThreadInfoView, let data = threadInfo.info?.data.get(MessageHistoryThreadData.self) {
@@ -371,13 +517,14 @@ public final class AccountContextImpl: AccountContext {
                         return nil
                     }
                 }
-            } else {
+            } else if data.peerId.namespace == Namespaces.Peer.CloudChannel {
                 let context = chatLocationContext(holder: contextHolder, account: self.account, data: data)
                 return context.maxReadOutgoingMessageId
+            } else {
+                return .single(nil)
             }
-        case let .feed(id):
-            let context = chatLocationContext(holder: contextHolder, account: self.account, feedId: id)
-            return context.maxReadOutgoingMessageId
+        case .customChatContents:
+            return .single(nil)
         }
     }
 
@@ -399,7 +546,7 @@ public final class AccountContextImpl: AccountContext {
             }
         case let .replyThread(data):
             if data.isForumPost {
-                let viewKey: PostboxViewKey = .messageHistoryThreadInfo(peerId: data.messageId.peerId, threadId: Int64(data.messageId.id))
+                let viewKey: PostboxViewKey = .messageHistoryThreadInfo(peerId: data.peerId, threadId: data.threadId)
                 return self.account.postbox.combinedView(keys: [viewKey])
                 |> map { views -> Int in
                     if let threadInfo = views.views[viewKey] as? MessageHistoryThreadInfoView, let data = threadInfo.info?.data.get(MessageHistoryThreadData.self) {
@@ -408,13 +555,14 @@ public final class AccountContextImpl: AccountContext {
                         return 0
                     }
                 }
+            } else if data.peerId.namespace != Namespaces.Peer.CloudChannel {
+                return .single(0)
             } else {
                 let context = chatLocationContext(holder: contextHolder, account: self.account, data: data)
                 return context.unreadCount
             }
-        case let .feed(id):
-            let context = chatLocationContext(holder: contextHolder, account: self.account, feedId: id)
-            return context.unreadCount
+        case .customChatContents:
+            return .single(0)
         }
     }
     
@@ -425,14 +573,13 @@ public final class AccountContextImpl: AccountContext {
         case let .replyThread(data):
             let context = chatLocationContext(holder: contextHolder, account: self.account, data: data)
             context.applyMaxReadIndex(messageIndex: messageIndex)
-        case let .feed(id):
-            let context = chatLocationContext(holder: contextHolder, account: self.account, feedId: id)
-            context.applyMaxReadIndex(messageIndex: messageIndex)
+        case .customChatContents:
+            break
         }
     }
     
-    public func scheduleGroupCall(peerId: PeerId) {
-        let _ = self.sharedContext.callManager?.scheduleGroupCall(context: self, peerId: peerId, endCurrentIfAny: true)
+    public func scheduleGroupCall(peerId: PeerId, parentController: ViewController) {
+        let _ = self.sharedContext.callManager?.scheduleGroupCall(context: self, peerId: peerId, endCurrentIfAny: true, parentController: parentController)
     }
     
     public func joinGroupCall(peerId: PeerId, invite: String?, requestJoinAsPeerId: ((@escaping (PeerId?) -> Void) -> Void)?, activeCall: EngineGroupCallDescription) {
@@ -589,36 +736,12 @@ private func chatLocationContext(holder: Atomic<ChatLocationContextHolder?>, acc
     return holder.context
 }
 
-private func chatLocationContext(holder: Atomic<ChatLocationContextHolder?>, account: Account, feedId: Int32) -> FeedHistoryContext {
-    let holder = holder.modify { current in
-        if let current = current as? ChatLocationFeedContextHolderImpl {
-            return current
-        } else {
-            return ChatLocationFeedContextHolderImpl(account: account, feedId: feedId)
-        }
-    } as! ChatLocationFeedContextHolderImpl
-    return holder.context
-}
-
 private final class ChatLocationReplyContextHolderImpl: ChatLocationContextHolder {
     let context: ReplyThreadHistoryContext
     
     init(account: Account, data: ChatReplyThreadMessage) {
-        self.context = ReplyThreadHistoryContext(account: account, peerId: data.messageId.peerId, data: data)
+        self.context = ReplyThreadHistoryContext(account: account, peerId: data.peerId, data: data)
     }
-}
-
-private final class ChatLocationFeedContextHolderImpl: ChatLocationContextHolder {
-    let context: FeedHistoryContext
-    
-    init(account: Account, feedId: Int32) {
-        self.context = FeedHistoryContext(account: account, feedId: feedId)
-    }
-}
-
-func getAppConfiguration(transaction: Transaction) -> AppConfiguration {
-    let appConfiguration: AppConfiguration = transaction.getPreferencesEntry(key: PreferencesKeys.appConfiguration)?.get(AppConfiguration.self) ?? AppConfiguration.defaultValue
-    return appConfiguration
 }
 
 func getAppConfiguration(postbox: Postbox) -> Signal<AppConfiguration, NoError> {
@@ -628,4 +751,64 @@ func getAppConfiguration(postbox: Postbox) -> Signal<AppConfiguration, NoError> 
         return appConfiguration
     }
     |> distinctUntilChanged
+}
+
+private func loadCountryCodes() -> [Country] {
+    guard let filePath = getAppBundle().path(forResource: "PhoneCountries", ofType: "txt") else {
+        return []
+    }
+    guard let stringData = try? Data(contentsOf: URL(fileURLWithPath: filePath)) else {
+        return []
+    }
+    guard let data = String(data: stringData, encoding: .utf8) else {
+        return []
+    }
+    
+    let delimiter = ";"
+    let endOfLine = "\n"
+    
+    var result: [Country] = []
+//    var countriesByPrefix: [String: (Country, Country.CountryCode)] = [:]
+    
+    var currentLocation = data.startIndex
+    
+    let locale = Locale(identifier: "en-US")
+    
+    while true {
+        guard let codeRange = data.range(of: delimiter, options: [], range: currentLocation ..< data.endIndex) else {
+            break
+        }
+        
+        let countryCode = String(data[currentLocation ..< codeRange.lowerBound])
+        
+        guard let idRange = data.range(of: delimiter, options: [], range: codeRange.upperBound ..< data.endIndex) else {
+            break
+        }
+        
+        let countryId = String(data[codeRange.upperBound ..< idRange.lowerBound])
+        
+        guard let patternRange = data.range(of: delimiter, options: [], range: idRange.upperBound ..< data.endIndex) else {
+            break
+        }
+        
+        let pattern = String(data[idRange.upperBound ..< patternRange.lowerBound])
+        
+        let maybeNameRange = data.range(of: endOfLine, options: [], range: patternRange.upperBound ..< data.endIndex)
+        
+        let countryName = locale.localizedString(forIdentifier: countryId) ?? ""
+        if let _ = Int(countryCode) {
+            let code = Country.CountryCode(code: countryCode, prefixes: [], patterns: !pattern.isEmpty ? [pattern] : [])
+            let country = Country(id: countryId, name: countryName, localizedName: nil, countryCodes: [code], hidden: false)
+            result.append(country)
+//            countriesByPrefix["\(code.code)"] = (country, code)
+        }
+        
+        if let maybeNameRange = maybeNameRange {
+            currentLocation = maybeNameRange.upperBound
+        } else {
+            break
+        }
+    }
+        
+    return result
 }

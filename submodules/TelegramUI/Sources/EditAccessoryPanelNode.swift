@@ -17,6 +17,7 @@ import TextNodeWithEntities
 import AnimationCache
 import MultiAnimationRenderer
 import TextFormat
+import AccessoryPanelNode
 
 final class EditAccessoryPanelNode: AccessoryPanelNode {
     let dateTimeFormat: PresentationDateTimeFormat
@@ -48,7 +49,7 @@ final class EditAccessoryPanelNode: AccessoryPanelNode {
     override var interfaceInteraction: ChatPanelInterfaceInteraction? {
         didSet {
             if let statuses = self.interfaceInteraction?.statuses {
-                self.editingMessageDisposable.set(statuses.editingMessage.start(next: { [weak self] value in
+                self.editingMessageDisposable.set(statuses.editingMessage.startStrict(next: { [weak self] value in
                     if let strongSelf = self {
                         if let value = value {
                             if value.isZero {
@@ -160,7 +161,7 @@ final class EditAccessoryPanelNode: AccessoryPanelNode {
         self.addSubnode(self.tapNode)
         self.addSubnode(self.actionArea)
         self.messageDisposable.set((context.account.postbox.messageAtId(messageId)
-        |> deliverOnMainQueue).start(next: { [weak self] message in
+        |> deliverOnMainQueue).startStrict(next: { [weak self] message in
             self?.updateMessage(message)
         }))
     }
@@ -232,18 +233,20 @@ final class EditAccessoryPanelNode: AccessoryPanelNode {
         }
         self.previousMediaReference = updatedMediaReference
         
+        let hasSpoiler = message?.attributes.contains(where: { $0 is MediaSpoilerMessageAttribute }) ?? false
+        
         var isPhoto = false
         var updateImageSignal: Signal<(TransformImageArguments) -> DrawingContext?, NoError>?
         if mediaUpdated {
             if let updatedMediaReference = updatedMediaReference, imageDimensions != nil {
                 if let imageReference = updatedMediaReference.concrete(TelegramMediaImage.self) {
-                    updateImageSignal = chatMessagePhotoThumbnail(account: self.context.account, photoReference: imageReference)
+                    updateImageSignal = chatMessagePhotoThumbnail(account: self.context.account, userLocation: (message?.id.peerId).flatMap(MediaResourceUserLocation.peer) ?? .other, photoReference: imageReference, blurred: hasSpoiler)
                     isPhoto = true
                 } else if let fileReference = updatedMediaReference.concrete(TelegramMediaFile.self) {
                     if fileReference.media.isVideo {
-                        updateImageSignal = chatMessageVideoThumbnail(account: self.context.account, fileReference: fileReference)
+                        updateImageSignal = chatMessageVideoThumbnail(account: self.context.account, userLocation: (message?.id.peerId).flatMap(MediaResourceUserLocation.peer) ?? .other, fileReference: fileReference, blurred: hasSpoiler)
                     } else if let iconImageRepresentation = smallestImageRepresentation(fileReference.media.previewRepresentations) {
-                        updateImageSignal = chatWebpageSnippetFile(account: self.context.account, mediaReference: fileReference.abstract, representation: iconImageRepresentation)
+                        updateImageSignal = chatWebpageSnippetFile(account: self.context.account, userLocation: (message?.id.peerId).flatMap(MediaResourceUserLocation.peer) ?? .other, mediaReference: fileReference.abstract, representation: iconImageRepresentation)
                     }
                 }
             } else {
@@ -281,7 +284,9 @@ final class EditAccessoryPanelNode: AccessoryPanelNode {
         }
         
         let titleString: String
-        if canEditMedia {
+        if let message, message.id.namespace == Namespaces.Message.QuickReplyCloud {
+            titleString = self.strings.Conversation_EditingQuickReplyPanelTitle
+        } else if canEditMedia {
             titleString = isPhoto ? self.strings.Conversation_EditingPhotoPanelTitle : self.strings.Conversation_EditingCaptionPanelTitle
         } else {
             titleString = self.strings.Conversation_EditingMessagePanelTitle

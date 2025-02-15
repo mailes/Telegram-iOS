@@ -3,11 +3,11 @@ import UIKit
 import ComponentFlow
 import Display
 
-public extension Transition.Animation.Curve {
+public extension ComponentTransition.Animation.Curve {
     init(_ curve: ContainedViewLayoutTransitionCurve) {
         switch curve {
         case .linear:
-            self = .easeInOut
+            self = .linear
         case .easeInOut:
             self = .easeInOut
         case let .custom(a, b, c, d):
@@ -21,6 +21,8 @@ public extension Transition.Animation.Curve {
     
     var containedViewLayoutTransitionCurve: ContainedViewLayoutTransitionCurve {
         switch self {
+        case .linear:
+            return .linear
         case .easeInOut:
             return .easeInOut
         case .spring:
@@ -31,13 +33,13 @@ public extension Transition.Animation.Curve {
     }
 }
 
-public extension Transition {
+public extension ComponentTransition {
     init(_ transition: ContainedViewLayoutTransition) {
         switch transition {
         case .immediate:
             self.init(animation: .none)
         case let .animated(duration, curve):
-            self.init(animation: .curve(duration: duration, curve: Transition.Animation.Curve(curve)))
+            self.init(animation: .curve(duration: duration, curve: ComponentTransition.Animation.Curve(curve)))
         }
     }
     

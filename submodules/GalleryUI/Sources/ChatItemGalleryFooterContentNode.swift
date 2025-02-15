@@ -25,6 +25,12 @@ import InvisibleInkDustNode
 import TextNodeWithEntities
 import AnimationCache
 import MultiAnimationRenderer
+import Pasteboard
+import Speak
+import TranslateUI
+import TelegramNotices
+import SolidRoundedButtonNode
+import UrlHandling
 
 private let deleteImage = generateTintedImage(image: UIImage(bundleImageName: "Chat/Input/Accessory Panels/MessageSelectionTrash"), color: .white)
 private let actionImage = generateTintedImage(image: UIImage(bundleImageName: "Chat/Input/Accessory Panels/MessageSelectionForward"), color: .white)
@@ -117,9 +123,7 @@ class CaptionScrollWrapperNode: ASDisplayNode {
     }
 }
 
-
-
-final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScrollViewDelegate {
+final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, ASScrollViewDelegate {
     private let context: AccountContext
     private var presentationData: PresentationData
     private var theme: PresentationTheme
@@ -133,12 +137,18 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
     private let actionButton: UIButton
     private let editButton: UIButton
     private let maskNode: ASDisplayNode
+    private let textSelectionKnobContainer: UIView
+    private let textSelectionKnobSurface: UIView
     private let scrollWrapperNode: CaptionScrollWrapperNode
     private let scrollNode: ASScrollNode
 
     private let textNode: ImmediateTextNodeWithEntities
     private var spoilerTextNode: ImmediateTextNodeWithEntities?
     private var dustNode: InvisibleInkDustNode?
+    private var buttonNode: SolidRoundedButtonNode?
+    private var buttonIconNode: ASImageNode?
+    
+    private var textSelectionNode: TextSelectionNode?
     
     private let animationCache: AnimationCache
     private let animationRenderer: MultiAnimationRenderer
@@ -156,7 +166,7 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
     private var currentMessageText: NSAttributedString?
     private var currentAuthorNameText: String?
     private var currentDateText: String?
-        
+    
     private var currentMessage: Message?
     private var currentWebPageAndMedia: (TelegramMediaWebpage, Media)?
     private let messageContextDisposable = MetaDisposable()
@@ -164,6 +174,8 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
     private var videoFramePreviewNode: (ASImageNode, ImmediateTextNode)?
     
     private var validLayout: (CGSize, LayoutMetrics, CGFloat, CGFloat, CGFloat, CGFloat)?
+    
+    private var codeHighlightState: (id: EngineMessage.Id, specs: [CachedMessageSyntaxHighlight.Spec], disposable: Disposable)?
     
     var playbackControl: (() -> Void)?
     var seekBackward: ((Double) -> Void)?
@@ -178,8 +190,17 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
     private var currentIsPaused: Bool = true
     private var seekRate: Double = 1.0
     
+    private var currentSpeechHolder: SpeechSynthesizerHolder?
+    
     var performAction: ((GalleryControllerInteractionTapAction) -> Void)?
     var openActionOptions: ((GalleryControllerInteractionTapAction, Message) -> Void)?
+    
+    private var isAd: Bool {
+        if self.currentMessage?.adAttribute != nil {
+            return true
+        }
+        return false
+    }
     
     var content: ChatItemGalleryFooterContent = .info {
         didSet {
@@ -188,8 +209,7 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
                     case .info:
                         self.authorNameNode.isHidden = false
                         self.dateNode.isHidden = false
-                        self.backwardButton.isHidden = true
-                        self.forwardButton.isHidden = true
+                        self.hasSeekControls = false
                         self.playbackControlButton.isHidden = true
                         self.statusButtonNode.isHidden = true
                         self.statusNode.isHidden = true
@@ -197,9 +217,9 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
                         self.currentIsPaused = true
                         self.authorNameNode.isHidden = true
                         self.dateNode.isHidden = true
-                        self.backwardButton.isHidden = !seekable
-                        self.forwardButton.isHidden = !seekable
-                        if status == .Local {
+                        self.hasSeekControls = seekable && !self.isAd
+                    
+                        if status == .Local && !self.isAd {
                             self.playbackControlButton.isHidden = false
                             self.playPauseIconNode.enqueueState(.play, animated: true)
                         } else {
@@ -226,21 +246,35 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
                         self.currentIsPaused = paused
                         self.authorNameNode.isHidden = true
                         self.dateNode.isHidden = true
-                        self.backwardButton.isHidden = !seekable
-                        self.forwardButton.isHidden = !seekable
-                        self.playbackControlButton.isHidden = false
                         
-                        let icon: PlayPauseIconNodeState
-                        if let wasPlaying = self.wasPlaying {
-                            icon = wasPlaying ? .pause : .play
+                        if !self.isAd {
+                            self.playbackControlButton.isHidden = false
+                            let icon: PlayPauseIconNodeState
+                            if let wasPlaying = self.wasPlaying {
+                                icon = wasPlaying ? .pause : .play
+                            } else {
+                                icon = paused ? .play : .pause
+                            }
+                            self.playPauseIconNode.enqueueState(icon, animated: true)
+                            self.hasSeekControls = seekable
                         } else {
-                            icon = paused ? .play : .pause
+                            self.hasSeekControls = false
                         }
-                        self.playPauseIconNode.enqueueState(icon, animated: true)
                         self.statusButtonNode.isHidden = true
                         self.statusNode.isHidden = true
                 }
             }
+        }
+    }
+    
+    var hasSeekControls: Bool = false {
+        didSet {
+            let alpha = self.hasSeekControls ? 1.0 : 0.0
+            let transition = ContainedViewLayoutTransition.animated(duration: 0.2, curve: .easeInOut)
+            transition.updateAlpha(node: self.backwardButton, alpha: alpha)
+            transition.updateAlpha(node: self.forwardButton, alpha: alpha)
+            self.backwardButton.isUserInteractionEnabled = self.hasSeekControls
+            self.forwardButton.isUserInteractionEnabled = self.hasSeekControls
         }
     }
     
@@ -317,6 +351,10 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
         self.actionButton.setImage(actionImage, for: [.normal])
         self.editButton.setImage(editImage, for: [.normal])
         
+        self.textSelectionKnobContainer = UIView()
+        self.textSelectionKnobSurface = UIView()
+        self.textSelectionKnobContainer.addSubview(self.textSelectionKnobSurface)
+        
         self.scrollWrapperNode = CaptionScrollWrapperNode()
         self.scrollWrapperNode.clipsToBounds = true
         
@@ -328,22 +366,26 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
         self.textNode = ImmediateTextNodeWithEntities()
         self.textNode.maximumNumberOfLines = 0
         self.textNode.linkHighlightColor = UIColor(rgb: 0x5ac8fa, alpha: 0.2)
+        self.textNode.displaySpoilerEffect = false
         
         self.authorNameNode = ASTextNode()
         self.authorNameNode.maximumNumberOfLines = 1
         self.authorNameNode.isUserInteractionEnabled = false
         self.authorNameNode.displaysAsynchronously = false
+    
         self.dateNode = ASTextNode()
         self.dateNode.maximumNumberOfLines = 1
         self.dateNode.isUserInteractionEnabled = false
         self.dateNode.displaysAsynchronously = false
         
         self.backwardButton = PlaybackButtonNode()
-        self.backwardButton.isHidden = true
+        self.backwardButton.alpha = 0.0
+        self.backwardButton.isUserInteractionEnabled = false
         self.backwardButton.backgroundIconNode.image = backwardImage
         
         self.forwardButton = PlaybackButtonNode()
-        self.forwardButton.isHidden = true
+        self.forwardButton.alpha = 0.0
+        self.forwardButton.isUserInteractionEnabled = false
         self.forwardButton.forward = true
         self.forwardButton.backgroundIconNode.image = forwardImage
         
@@ -386,6 +428,8 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
         self.textNode.longTapAttributeAction = { [weak self] attributes, index in
             if let strongSelf = self, let action = strongSelf.actionForAttributes(attributes, index), let message = strongSelf.currentMessage {
                 strongSelf.openActionOptions?(action, message)
+            } else {
+                
             }
         }
         
@@ -398,13 +442,163 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
         )
         self.textNode.visibility = true
         
+        let textSelectionNode = TextSelectionNode(theme: TextSelectionTheme(selection: defaultDarkPresentationTheme.list.itemAccentColor.withMultipliedAlpha(0.5), knob: defaultDarkPresentationTheme.list.itemAccentColor, isDark: true), strings: presentationData.strings, textNode: self.textNode, updateIsActive: { [weak self] value in
+            guard let self else {
+                return
+            }
+            let _ = self
+        }, present: { c, a in
+            present(c, a)
+        }, rootNode: { [weak self] in
+            guard let self else {
+                return nil
+            }
+            return self.controllerInteraction?.controller()?.displayNode
+        }, externalKnobSurface: self.textSelectionKnobSurface, performAction: { [weak self] text, action in
+            guard let self else {
+                return
+            }
+            
+            switch action {
+            case .copy:
+                storeAttributedTextInPasteboard(text)
+                
+                let presentationData = self.context.sharedContext.currentPresentationData.with { $0 }
+                let undoController = UndoOverlayController(presentationData: presentationData, content: .copy(text: presentationData.strings.Conversation_TextCopied), elevatedLayout: false, animateInAsReplacement: false, blurred: true, action: { _ in true })
+                
+                self.controllerInteraction?.presentController(undoController, nil)
+            case .share:
+                let theme = defaultDarkPresentationTheme
+                let updatedPresentationData: (initial: PresentationData, signal: Signal<PresentationData, NoError>) = (self.context.sharedContext.currentPresentationData.with({ $0 }).withUpdated(theme: theme), self.context.sharedContext.presentationData |> map { $0.withUpdated(theme: theme) })
+                
+                let shareController = ShareController(context: self.context, subject: .text(text.string), externalShare: true, immediateExternalShare: false, updatedPresentationData: updatedPresentationData)
+                
+                self.controllerInteraction?.presentController(shareController, nil)
+            case .lookup:
+                let controller = UIReferenceLibraryViewController(term: text.string)
+                if let window = self.controllerInteraction?.controller()?.view.window {
+                    controller.popoverPresentationController?.sourceView = window
+                    controller.popoverPresentationController?.sourceRect = CGRect(origin: CGPoint(x: window.bounds.width / 2.0, y: window.bounds.size.height - 1.0), size: CGSize(width: 1.0, height: 1.0))
+                    window.rootViewController?.present(controller, animated: true)
+                }
+            case .speak:
+                if let speechHolder = speakText(context: self.context, text: text.string) {
+                    speechHolder.completion = { [weak self, weak speechHolder] in
+                        guard let self else {
+                            return
+                        }
+                        if self.currentSpeechHolder === speechHolder {
+                            self.currentSpeechHolder = nil
+                        }
+                    }
+                    self.currentSpeechHolder = speechHolder
+                }
+            case .translate:
+                let _ = (self.context.sharedContext.accountManager.sharedData(keys: [ApplicationSpecificSharedDataKeys.translationSettings])
+                |> take(1)
+                |> deliverOnMainQueue).start(next: { [weak self] sharedData in
+                    guard let self else {
+                        return
+                    }
+                    //let peer = component.slice.peer
+                    
+                    let translationSettings: TranslationSettings
+                    if let current = sharedData.entries[ApplicationSpecificSharedDataKeys.translationSettings]?.get(TranslationSettings.self) {
+                        translationSettings = current
+                    } else {
+                        translationSettings = TranslationSettings.defaultSettings
+                    }
+                    
+                    /*var showTranslateIfTopical = false
+                    if case let .channel(channel) = peer, !(channel.addressName ?? "").isEmpty {
+                        showTranslateIfTopical = true
+                    }*/
+                    let showTranslateIfTopical = false
+                    
+                    let (_, language) = canTranslateText(context: self.context, text: text.string, showTranslate: translationSettings.showTranslate, showTranslateIfTopical: showTranslateIfTopical, ignoredLanguages: translationSettings.ignoredLanguages)
+                    
+                    let _ = ApplicationSpecificNotice.incrementTranslationSuggestion(accountManager: self.context.sharedContext.accountManager, timestamp: Int32(Date().timeIntervalSince1970)).start()
+                    
+                    let translateController = TranslateScreen(context: self.context, forceTheme: defaultDarkPresentationTheme, text: text.string, canCopy: true, fromLanguage: language, ignoredLanguages: translationSettings.ignoredLanguages)
+                    translateController.pushController = { [weak self] c in
+                        guard let self else {
+                            return
+                        }
+                        self.controllerInteraction?.pushController(c)
+                    }
+                    translateController.presentController = { [weak self] c in
+                        guard let self else {
+                            return
+                        }
+                        self.controllerInteraction?.presentController(c, nil)
+                    }
+                    
+                    //self.actionSheet = translateController
+                    //view.updateIsProgressPaused()
+                    
+                    /*translateController.wasDismissed = { [weak self, weak view] in
+                        guard let self, let view else {
+                            return
+                        }
+                        self.actionSheet = nil
+                        view.updateIsProgressPaused()
+                    }*/
+                    
+                    //component.controller()?.present(translateController, in: .window(.root))
+                    self.controllerInteraction?.presentController(translateController, nil)
+                })
+            case .quote:
+                break
+            }
+        })
+        
+        textSelectionNode.enableLookup = true
+        textSelectionNode.canBeginSelection = { [weak self] location in
+            guard let self else {
+                return false
+            }
+            
+            let textNode = self.textNode
+            
+            let titleFrame = textNode.view.bounds
+            
+            if let (index, attributes) = textNode.attributesAtPoint(CGPoint(x: location.x - titleFrame.minX, y: location.y - titleFrame.minY)) {
+                let _ = index
+                
+                if let _ = attributes[NSAttributedString.Key(rawValue: TelegramTextAttributes.Spoiler)] {
+                    return false
+                } else if let _ = attributes[NSAttributedString.Key(rawValue: TelegramTextAttributes.URL)] as? String {
+                    return false
+                } else if let _ = attributes[NSAttributedString.Key(rawValue: TelegramTextAttributes.Timecode)] {
+                    return false
+                } else if let _ = attributes[NSAttributedString.Key(rawValue: TelegramTextAttributes.PeerMention)] as? TelegramPeerMention {
+                    return false
+                } else if let _ = attributes[NSAttributedString.Key(rawValue: TelegramTextAttributes.PeerTextMention)] as? String {
+                    return false
+                } else if let _ = attributes[NSAttributedString.Key(rawValue: TelegramTextAttributes.Hashtag)] as? TelegramHashtag {
+                    return false
+                } else if let _ = attributes[NSAttributedString.Key(rawValue: TelegramTextAttributes.BankCard)] as? String {
+                    return false
+                } else if let emoji = attributes[NSAttributedString.Key(rawValue: ChatTextInputAttributes.customEmoji.rawValue)] as? ChatTextInputTextCustomEmojiAttribute, let _ = emoji.file {
+                    return false
+                }
+            }
+            
+            return true
+        }
+        
+        self.textSelectionNode = textSelectionNode
+        
         self.contentNode.view.addSubview(self.deleteButton)
         self.contentNode.view.addSubview(self.fullscreenButton)
         self.contentNode.view.addSubview(self.actionButton)
         self.contentNode.view.addSubview(self.editButton)
         self.contentNode.addSubnode(self.scrollWrapperNode)
         self.scrollWrapperNode.addSubnode(self.scrollNode)
+        self.contentNode.view.addSubview(self.textSelectionKnobContainer)
+        self.scrollNode.addSubnode(textSelectionNode.highlightAreaNode)
         self.scrollNode.addSubnode(self.textNode)
+        self.scrollNode.addSubnode(textSelectionNode)
         
         self.contentNode.addSubnode(self.authorNameNode)
         self.contentNode.addSubnode(self.dateNode)
@@ -418,9 +612,20 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
         self.contentNode.addSubnode(self.statusButtonNode)
         
         self.deleteButton.addTarget(self, action: #selector(self.deleteButtonPressed), for: [.touchUpInside])
+        self.deleteButton.accessibilityTraits = [.button]
+        self.deleteButton.accessibilityLabel = presentationData.strings.Gallery_VoiceOver_Delete
+        
         self.fullscreenButton.addTarget(self, action: #selector(self.fullscreenButtonPressed), for: [.touchUpInside])
+        self.fullscreenButton.accessibilityTraits = [.button]
+        self.fullscreenButton.accessibilityLabel = presentationData.strings.Gallery_VoiceOver_Fullscreen
+        
         self.actionButton.addTarget(self, action: #selector(self.actionButtonPressed), for: [.touchUpInside])
+        self.actionButton.accessibilityTraits = [.button]
+        self.actionButton.accessibilityLabel = presentationData.strings.Gallery_VoiceOver_Share
+        
         self.editButton.addTarget(self, action: #selector(self.editButtonPressed), for: [.touchUpInside])
+        self.editButton.accessibilityTraits = [.button]
+        self.editButton.accessibilityLabel = presentationData.strings.Gallery_VoiceOver_Edit
         
         self.backwardButton.addTarget(self, action: #selector(self.backwardButtonPressed), forControlEvents: .touchUpInside)
         self.forwardButton.addTarget(self, action: #selector(self.forwardButtonPressed), forControlEvents: .touchUpInside)
@@ -442,11 +647,12 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
     
     deinit {
         self.messageContextDisposable.dispose()
+        self.codeHighlightState?.disposable.dispose()
     }
     
     override func didLoad() {
         super.didLoad()
-        self.scrollNode.view.delegate = self
+        self.scrollNode.view.delegate = self.wrappedScrollViewDelegate
         self.scrollNode.view.showsVerticalScrollIndicator = false
         
         let backwardLongPressGestureRecognizer = UILongPressGestureRecognizer(target: self, action: #selector(self.seekBackwardLongPress(_:)))
@@ -541,6 +747,21 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
         }
     }
     
+    override public func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        let result = super.hitTest(point, with: event)
+        
+        if let textSelectionNode = self.textSelectionNode, result === textSelectionNode.view {
+            let localPoint = self.view.convert(point, to: textSelectionNode.view)
+            if !textSelectionNode.canBeginSelection(localPoint) {
+                if let result = self.textNode.view.hitTest(self.view.convert(point, to: self.textNode.view), with: event) {
+                    return result
+                }
+            }
+        }
+        
+        return result
+    }
+    
     private func actionForAttributes(_ attributes: [NSAttributedString.Key: Any], _ index: Int) -> GalleryControllerInteractionTapAction? {
         if let url = attributes[NSAttributedString.Key(rawValue: TelegramTextAttributes.URL)] as? String {
             var concealed = true
@@ -563,9 +784,18 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
         }
     }
     
-    func setup(origin: GalleryItemOriginData?, caption: NSAttributedString) {
-        let titleText = origin?.title
-        let dateText = origin?.timestamp.flatMap { humanReadableStringForTimestamp(strings: self.strings, dateTimeFormat: self.dateTimeFormat, timestamp: $0).string }
+    func setup(origin: GalleryItemOriginData?, caption: NSAttributedString, isAd: Bool = false) {
+        var titleText = origin?.title
+        var dateText = origin?.timestamp.flatMap { humanReadableStringForTimestamp(strings: self.strings, dateTimeFormat: self.dateTimeFormat, timestamp: $0).string }
+        
+        let caption = caption.mutableCopy() as! NSMutableAttributedString
+        if isAd {
+            if let titleText, !titleText.isEmpty {
+                caption.insert(NSAttributedString(string: titleText + "\n", font: Font.semibold(17.0), textColor: .white), at: 0)
+            }
+            titleText = nil
+            dateText = nil
+        }
         
         if self.currentMessageText != caption || self.currentAuthorNameText != titleText || self.currentDateText != dateText {
             self.currentMessageText = caption
@@ -579,18 +809,22 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
                 self.textNode.isHidden = false
                 self.textNode.attributedText = caption
             }
+            self.textSelectionNode?.isHidden = self.textNode.isHidden
             
             if let titleText = titleText {
                 self.authorNameNode.attributedText = NSAttributedString(string: titleText, font: titleFont, textColor: .white)
             } else {
                 self.authorNameNode.attributedText = nil
             }
+            self.authorNameNode.accessibilityLabel = self.authorNameNode.attributedText?.string
+            
             if let dateText = dateText {
                 self.dateNode.attributedText = NSAttributedString(string: dateText, font: dateFont, textColor: .white)
             } else {
                 self.dateNode.attributedText = nil
             }
-
+            self.dateNode.accessibilityLabel = self.dateNode.attributedText?.string
+            
             self.requestLayout?(.immediate)
         }
         
@@ -602,23 +836,28 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
         }
     }
     
-    func setMessage(_ message: Message, displayInfo: Bool = true) {
+    func setMessage(_ message: Message, displayInfo: Bool = true, translateToLanguage: String? = nil, peerIsCopyProtected: Bool = false) {
         self.currentMessage = message
         
-        let canDelete: Bool
-        var canShare = !message.containsSecretMedia
-
+        var displayInfo = displayInfo
+        if Namespaces.Message.allNonRegular.contains(message.id.namespace) || message.timestamp == 0 {
+            displayInfo = false
+        }
         var canFullscreen = false
-        
+        var canDelete: Bool
+        var canShare = !message.containsSecretMedia && !Namespaces.Message.allNonRegular.contains(message.id.namespace) && message.adAttribute == nil
+                
         var canEdit = false
+        var isImage = false
+        var isVideo = false
         for media in message.media {
             if media is TelegramMediaImage {
                 canEdit = true
+                isImage = true
             } else if let media = media as? TelegramMediaFile, !media.isAnimated {
-                var isVideo = false
                 for attribute in media.attributes {
                     switch attribute {
-                    case let .Video(_, dimensions, _):
+                    case let .Video(_, dimensions, _, _, _, _):
                         isVideo = true
                         if dimensions.height > 0 {
                             if CGFloat(dimensions.width) / CGFloat(dimensions.height) > 1.33 {
@@ -632,6 +871,7 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
                 
                 if !isVideo {
                     canEdit = true
+                    isImage = true
                 }
             } else if let media = media as? TelegramMediaWebpage, case let .Loaded(content) = media.content {
                 let type = webEmbedType(content: content)
@@ -643,6 +883,9 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
                 }
                 if let file = content.file, !file.isAnimated, file.isVideo {
                     canFullscreen = true
+                }
+                if content.type == "photo", let _ = content.image {
+                    canEdit = true
                 }
             }
         }
@@ -656,7 +899,19 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
             } else if let channel = peer as? TelegramChannel {
                 if message.flags.contains(.Incoming) {
                     canDelete = channel.hasPermission(.deleteAllMessages)
-                    canEdit = canEdit && channel.hasPermission(.sendMessages)
+                    if canEdit {
+                        if isImage {
+                            if !channel.hasPermission(.sendPhoto) {
+                                canEdit = false
+                            }
+                        } else if isVideo {
+                            if !channel.hasPermission(.sendVideo) {
+                                canEdit = false
+                            }
+                        } else {
+                            canEdit = false
+                        }
+                    }
                 } else {
                     canDelete = true
                 }
@@ -670,9 +925,18 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
             canEdit = false
         }
         
-        if message.isCopyProtected() {
+        if message.isCopyProtected() || peerIsCopyProtected || message.paidContent != nil {
             canShare = false
             canEdit = false
+        }
+        
+        if message.containsSecretMedia {
+            canDelete = false
+        }
+        
+        if let _ = message.adAttribute {
+            displayInfo = false
+            canFullscreen = false
         }
         
         var authorNameText: String?
@@ -685,19 +949,16 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
         }
         
         var dateText = humanReadableStringForTimestamp(strings: self.strings, dateTimeFormat: self.dateTimeFormat, timestamp: message.timestamp).string
-        if !displayInfo {
-            authorNameText = ""
-            dateText = ""
-            canEdit = false
-        }
-        
-        var messageText = NSAttributedString(string: "")
+
+        var messageText = NSMutableAttributedString(string: "")
         var hasCaption = false
         for media in message.media {
-            if media is TelegramMediaImage {
+            if media is TelegramMediaPaidContent {
+                hasCaption = true
+            } else if media is TelegramMediaImage {
                 hasCaption = true
             } else if let file = media as? TelegramMediaFile {
-                hasCaption = file.mimeType.hasPrefix("image/")
+                hasCaption = file.mimeType.hasPrefix("image/") || file.mimeType.hasPrefix("video/")
             } else if media is TelegramMediaInvoice {
                 hasCaption = true
             }
@@ -710,7 +971,58 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
                     break
                 }
             }
-            messageText = galleryCaptionStringWithAppliedEntities(message.text, entities: entities, message: message)
+            var text = message.text
+            if let translateToLanguage, !text.isEmpty {
+                for attribute in message.attributes {
+                    if let attribute = attribute as? TranslationMessageAttribute, !attribute.text.isEmpty, attribute.toLang == translateToLanguage {
+                        text = attribute.text
+                        entities = attribute.entities
+                        break
+                    }
+                }
+            }
+            
+            let codeHighlightSpecs = extractMessageSyntaxHighlightSpecs(text: text, entities: entities)
+            var cachedMessageSyntaxHighlight: CachedMessageSyntaxHighlight?
+            
+            if !codeHighlightSpecs.isEmpty {
+                for attribute in message.attributes {
+                    if let attribute = attribute as? DerivedDataMessageAttribute {
+                        if let value = attribute.data["code"]?.get(CachedMessageSyntaxHighlight.self) {
+                            cachedMessageSyntaxHighlight = value
+                        }
+                    }
+                }
+            }
+            
+            if !codeHighlightSpecs.isEmpty {
+                if let current = self.codeHighlightState, current.id == message.id, current.specs == codeHighlightSpecs {
+                } else {
+                    if let codeHighlightState = self.codeHighlightState {
+                        self.codeHighlightState = nil
+                        codeHighlightState.disposable.dispose()
+                    }
+                    
+                    let disposable = MetaDisposable()
+                    self.codeHighlightState = (message.id, codeHighlightSpecs, disposable)
+                    disposable.set(asyncUpdateMessageSyntaxHighlight(engine: self.context.engine, messageId: message.id, current: cachedMessageSyntaxHighlight, specs: codeHighlightSpecs).startStrict(completed: {
+                    }))
+                }
+            } else if let codeHighlightState = self.codeHighlightState {
+                self.codeHighlightState = nil
+                codeHighlightState.disposable.dispose()
+            }
+            
+            messageText = galleryCaptionStringWithAppliedEntities(context: self.context, text: text, entities: entities, message: message, cachedMessageSyntaxHighlight: cachedMessageSyntaxHighlight).mutableCopy() as! NSMutableAttributedString
+            if let _ = message.adAttribute {
+                messageText.insert(NSAttributedString(string: (authorNameText ?? "") + "\n", font: Font.semibold(17.0), textColor: .white), at: 0)
+            }
+        }
+        
+        if !displayInfo {
+            authorNameText = ""
+            dateText = ""
+            canEdit = false
         }
                         
         if self.currentMessageText != messageText || canDelete != !self.deleteButton.isHidden || canFullscreen != !self.fullscreenButton.isHidden || canShare != !self.actionButton.isHidden || canEdit != !self.editButton.isHidden || self.currentAuthorNameText != authorNameText || self.currentDateText != dateText {
@@ -724,13 +1036,18 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
                 self.textNode.attributedText = messageText
             }
             
+            self.textSelectionNode?.isHidden = self.textNode.isHidden
+            
             if let authorNameText = authorNameText {
                 self.authorNameNode.attributedText = NSAttributedString(string: authorNameText, font: titleFont, textColor: .white)
             } else {
                 self.authorNameNode.attributedText = nil
             }
+            self.authorNameNode.accessibilityLabel = self.authorNameNode.attributedText?.string
+           
             self.dateNode.attributedText = NSAttributedString(string: dateText, font: dateFont, textColor: .white)
-
+            self.dateNode.accessibilityLabel = self.dateNode.attributedText?.string
+            
             if canFullscreen {
                 self.fullscreenButton.isHidden = false
                 self.deleteButton.isHidden = true
@@ -742,6 +1059,30 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
             self.actionButton.isHidden = !canShare
             self.editButton.isHidden = !canEdit
             
+            if let adAttribute = message.adAttribute {
+                if self.buttonNode == nil {
+                    let buttonNode = SolidRoundedButtonNode(title: adAttribute.buttonText, theme: SolidRoundedButtonTheme(backgroundColor: UIColor(rgb: 0xffffff, alpha: 0.15), foregroundColor: UIColor(rgb: 0xffffff)), height: 50.0, cornerRadius: 11.0)
+                    buttonNode.pressed = { [weak self] in
+                        guard let self else {
+                            return
+                        }
+                        self.performAction?(.ad(message.id))
+                    }
+                    self.contentNode.addSubnode(buttonNode)
+                    self.buttonNode = buttonNode
+                    
+                    if !isTelegramMeLink(adAttribute.url) {
+                        let buttonIconNode = ASImageNode()
+                        buttonIconNode.displaysAsynchronously = false
+                        buttonIconNode.image = generateTintedImage(image: UIImage(bundleImageName: "Chat/Message/BotLink"), color: .white)
+                        buttonNode.addSubnode(buttonIconNode)
+                        self.buttonIconNode = buttonIconNode
+                    }
+                }
+            } else if let buttonNode = self.buttonNode {
+                buttonNode.removeFromSupernode()
+            }
+            
             self.requestLayout?(.immediate)
         }
     }
@@ -750,6 +1091,7 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
         if let textLayout = self.textNode.cachedLayout, !textLayout.spoilers.isEmpty {
             if self.spoilerTextNode == nil {
                 let spoilerTextNode = ImmediateTextNodeWithEntities()
+                spoilerTextNode.displaySpoilerEffect = false
                 spoilerTextNode.attributedText = textNode.attributedText
                 spoilerTextNode.maximumNumberOfLines = 0
                 spoilerTextNode.linkHighlightColor = UIColor(rgb: 0x5ac8fa, alpha: 0.2)
@@ -761,10 +1103,13 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
                 self.spoilerTextNode = spoilerTextNode
                 self.textNode.supernode?.insertSubnode(spoilerTextNode, aboveSubnode: self.textNode)
                 
-                let dustNode = InvisibleInkDustNode(textNode: spoilerTextNode)
+                let dustNode = InvisibleInkDustNode(textNode: spoilerTextNode, enableAnimations: self.context.sharedContext.energyUsageSettings.fullTranslucency)
                 self.dustNode = dustNode
-                spoilerTextNode.supernode?.insertSubnode(dustNode, aboveSubnode: spoilerTextNode)
-                
+                if let textSelectionNode = self.textSelectionNode {
+                    spoilerTextNode.supernode?.insertSubnode(dustNode, aboveSubnode: textSelectionNode)
+                } else {
+                    spoilerTextNode.supernode?.insertSubnode(dustNode, aboveSubnode: spoilerTextNode)
+                }
             }
             if let dustNode = self.dustNode {
                 dustNode.update(size: textFrame.size, color: .white, textColor: .white, rects: textLayout.spoilers.map { $0.1.offsetBy(dx: 3.0, dy: 3.0).insetBy(dx: 0.0, dy: 1.0) }, wordRects: textLayout.spoilerWords.map { $0.1.offsetBy(dx: 3.0, dy: 3.0).insetBy(dx: 0.0, dy: 1.0) })
@@ -787,6 +1132,8 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
     }
     
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        self.textSelectionKnobContainer.frame = CGRect(origin: CGPoint(x: 0.0, y: -scrollView.bounds.origin.y), size: CGSize())
+        
         self.requestLayout?(.immediate)
     }
     
@@ -826,9 +1173,14 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
             displayCaption = !self.textNode.isHidden
         }
         
-        var textFrame = CGRect()
-        var visibleTextHeight: CGFloat = 0.0
+        if metrics.isTablet {
+            self.fullscreenButton.isHidden = true
+        }
+        
         if !self.textNode.isHidden {
+            var textFrame = CGRect()
+            var visibleTextHeight: CGFloat = 0.0
+            
             let sideInset: CGFloat = 8.0 + leftInset
             let topInset: CGFloat = 8.0
             let textBottomInset: CGFloat = 8.0
@@ -856,7 +1208,11 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
                     self.scrollNode.frame = scrollNodeFrame
                 }
                 
-                textOffset = min(400.0, self.scrollNode.view.contentOffset.y)
+                var maxTextOffset: CGFloat = size.height - bottomInset - 238.0 - UIScreenPixel
+                if let _ = self.scrubberView {
+                    maxTextOffset -= 44.0
+                }
+                textOffset = min(maxTextOffset, self.scrollNode.view.contentOffset.y)
                 panelHeight = max(0.0, panelHeight + visibleTextPanelHeight + textOffset)
                 
                 if self.scrollNode.view.isScrollEnabled {
@@ -878,6 +1234,21 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
                     self.scrollWrapperNode.layer.mask?.frame = self.scrollWrapperNode.bounds
                     self.scrollWrapperNode.layer.mask?.removeAllAnimations()
                 }
+                
+                if let buttonNode = self.buttonNode {
+                    let buttonHeight = buttonNode.updateLayout(width: constrainSize.width, transition: transition)
+                    transition.updateFrame(node: buttonNode, frame: CGRect(origin: CGPoint(x: sideInset, y: scrollWrapperNodeFrame.maxY + 8.0), size: CGSize(width: constrainSize.width, height: buttonHeight)))
+                    
+                    if let buttonIconNode = self.buttonIconNode, let icon = buttonIconNode.image {
+                        transition.updateFrame(node: buttonIconNode, frame: CGRect(origin: CGPoint(x: constrainSize.width - icon.size.width - 9.0, y: 9.0), size: icon.size))
+                    }
+                    
+                    if let _ = self.scrubberView {
+                        panelHeight += 68.0
+                    } else {
+                        panelHeight += 22.0
+                    }
+                }
             }
             textFrame = CGRect(origin: CGPoint(x: sideInset, y: topInset + textOffset), size: textSize)
             
@@ -888,6 +1259,10 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
             if self.textNode.frame != textFrame {
                 self.textNode.frame = textFrame
                 self.spoilerTextNode?.frame = textFrame
+                
+                self.textSelectionNode?.frame = textFrame
+                self.textSelectionNode?.highlightAreaNode.frame = textFrame
+                self.textSelectionKnobSurface.frame = textFrame
             }
         }
         
@@ -907,6 +1282,10 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
                 if contentInset > 0.0 {
                     scrubberY -= contentInset
                 }
+            }
+            
+            if let _ = self.buttonNode {
+                panelHeight -= 44.0
             }
             
             let scrubberFrame = CGRect(origin: CGPoint(x: leftInset, y: scrubberY), size: CGSize(width: width - leftInset - rightInset, height: 34.0))
@@ -1003,10 +1382,11 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
         self.fullscreenButton.alpha = 1.0
         self.actionButton.alpha = 1.0
         self.editButton.alpha = 1.0
-        self.backwardButton.alpha = 1.0
-        self.forwardButton.alpha = 1.0
+        self.backwardButton.alpha = self.hasSeekControls ? 1.0 : 0.0
+        self.forwardButton.alpha = self.hasSeekControls ? 1.0 : 0.0
         self.statusNode.alpha = 1.0
         self.playbackControlButton.alpha = 1.0
+        self.buttonNode?.alpha = 1.0
         self.scrollWrapperNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.15)
     }
     
@@ -1031,6 +1411,7 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
         self.forwardButton.alpha = 0.0
         self.statusNode.alpha = 0.0
         self.playbackControlButton.alpha = 0.0
+        self.buttonNode?.alpha = 0.0
         self.scrollWrapperNode.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.15, completion: { _ in
             completion()
         })
@@ -1119,7 +1500,7 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
     }
 
     private func commitDeleteMessages(_ messages: [EngineMessage], ask: Bool) {
-        self.messageContextDisposable.set((self.context.sharedContext.chatAvailableMessageActions(engine: self.context.engine, accountPeerId: self.context.account.peerId, messageIds: Set(messages.map { $0.id })) |> deliverOnMainQueue).start(next: { [weak self] actions in
+        self.messageContextDisposable.set((self.context.sharedContext.chatAvailableMessageActions(engine: self.context.engine, accountPeerId: self.context.account.peerId, messageIds: Set(messages.map { $0.id }), keepUpdated: false) |> deliverOnMainQueue).start(next: { [weak self] actions in
             if let strongSelf = self, let controllerInteration = strongSelf.controllerInteraction, !actions.options.isEmpty {
                 var presentationData = strongSelf.presentationData
                 if !presentationData.theme.overallDarkAppearance {
@@ -1274,18 +1655,21 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
                             } else if let file = m as? TelegramMediaFile {
                                 subject = .media(.message(message: MessageReference(messages[0]._asMessage()), media: file))
                                 if file.isAnimated {
-                                    preferredAction = .custom(action: ShareControllerAction(title: presentationData.strings.Preview_SaveGif, action: { [weak self] in
-                                        if let strongSelf = self {
-                                            let message = messages[0]
-                                            
-                                            let context = strongSelf.context
-                                            let presentationData = context.sharedContext.currentPresentationData.with { $0 }
-                                            let controllerInteraction = strongSelf.controllerInteraction
-                                            let _ = (toggleGifSaved(account: context.account, fileReference: .message(message: MessageReference(message._asMessage()), media: file), saved: true)
-                                            |> deliverOnMainQueue).start(next: { result in
-                                                switch result {
+                                    if messages[0].id.peerId.namespace == Namespaces.Peer.SecretChat {
+                                        preferredAction = .default
+                                    } else {
+                                        preferredAction = .custom(action: ShareControllerAction(title: presentationData.strings.Preview_SaveGif, action: { [weak self] in
+                                            if let strongSelf = self {
+                                                let message = messages[0]
+                                                
+                                                let context = strongSelf.context
+                                                let presentationData = context.sharedContext.currentPresentationData.with { $0 }
+                                                let controllerInteraction = strongSelf.controllerInteraction
+                                                let _ = (toggleGifSaved(account: context.account, fileReference: .message(message: MessageReference(message._asMessage()), media: file), saved: true)
+                                                         |> deliverOnMainQueue).start(next: { result in
+                                                    switch result {
                                                     case .generic:
-                                                        controllerInteraction?.presentController(UndoOverlayController(presentationData: presentationData, content: .universal(animation: "anim_gif", scale: 0.075, colors: [:], title: nil, text: presentationData.strings.Gallery_GifSaved, customUndoText: nil), elevatedLayout: true, animateInAsReplacement: false, action: { _ in return false }), nil)
+                                                        controllerInteraction?.presentController(UndoOverlayController(presentationData: presentationData, content: .universal(animation: "anim_gif", scale: 0.075, colors: [:], title: nil, text: presentationData.strings.Gallery_GifSaved, customUndoText: nil, timeout: nil), elevatedLayout: true, animateInAsReplacement: false, action: { _ in return false }), nil)
                                                     case let .limitExceeded(limit, premiumLimit):
                                                         let premiumConfiguration = PremiumConfiguration.with(appConfiguration: context.currentAppConfiguration.with { $0 })
                                                         let text: String
@@ -1294,18 +1678,19 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
                                                         } else {
                                                             text = presentationData.strings.Premium_MaxSavedGifsText("\(premiumLimit)").string
                                                         }
-                                                        controllerInteraction?.presentController(UndoOverlayController(presentationData: presentationData, content: .universal(animation: "anim_gif", scale: 0.075, colors: [:], title: presentationData.strings.Premium_MaxSavedGifsTitle("\(limit)").string, text: text, customUndoText: nil), elevatedLayout: true, animateInAsReplacement: false, action: { action in
+                                                        controllerInteraction?.presentController(UndoOverlayController(presentationData: presentationData, content: .universal(animation: "anim_gif", scale: 0.075, colors: [:], title: presentationData.strings.Premium_MaxSavedGifsTitle("\(limit)").string, text: text, customUndoText: nil, timeout: nil), elevatedLayout: true, animateInAsReplacement: false, action: { action in
                                                             if case .info = action {
-                                                                let controller = context.sharedContext.makePremiumIntroController(context: context, source: .savedGifs)
+                                                                let controller = context.sharedContext.makePremiumIntroController(context: context, source: .savedGifs, forceDark: false, dismissed: nil)
                                                                 controllerInteraction?.pushController(controller)
                                                                 return true
                                                             }
                                                             return false
                                                         }), nil)
-                                                }
-                                            })
-                                        }
-                                    }))
+                                                    }
+                                                })
+                                            }
+                                        }))
+                                    }
                                 } else if file.mimeType.hasPrefix("image/") {
                                     preferredAction = .saveToCameraRoll
                                     actionCompletionText = strongSelf.presentationData.strings.Gallery_ImageSaved
@@ -1318,7 +1703,10 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
                         
                         var hasExternalShare = true
                         for media in currentMessage.media {
-                            if let invoice = media as? TelegramMediaInvoice, let _ = invoice.extendedMedia {
+                            if let _ = media as? TelegramMediaPaidContent {
+                                hasExternalShare = false
+                                break
+                            } else if let invoice = media as? TelegramMediaInvoice, let _ = invoice.extendedMedia {
                                 hasExternalShare = false
                                 break
                             }
@@ -1328,6 +1716,7 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
                         shareController.dismissed = { [weak self] _ in
                             self?.interacting?(false)
                         }
+                        
                         shareController.actionCompleted = { [weak self] in
                             if let strongSelf = self, let actionCompletionText = actionCompletionText {
                                 let presentationData = strongSelf.context.sharedContext.currentPresentationData.with { $0 }
@@ -1353,14 +1742,18 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
                                             savedMessages = true
                                         } else {
                                             if peers.count == 1, let peer = peers.first {
-                                                let peerName = peer.id == strongSelf.context.account.peerId ? presentationData.strings.DialogList_SavedMessages : peer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
+                                                var peerName = peer.id == strongSelf.context.account.peerId ? presentationData.strings.DialogList_SavedMessages : peer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
+                                                peerName = peerName.replacingOccurrences(of: "**", with: "")
                                                 text = messages.count == 1 ? presentationData.strings.Conversation_ForwardTooltip_Chat_One(peerName).string : presentationData.strings.Conversation_ForwardTooltip_Chat_Many(peerName).string
                                             } else if peers.count == 2, let firstPeer = peers.first, let secondPeer = peers.last {
-                                                let firstPeerName = firstPeer.id == strongSelf.context.account.peerId ? presentationData.strings.DialogList_SavedMessages : firstPeer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
-                                                let secondPeerName = secondPeer.id == strongSelf.context.account.peerId ? presentationData.strings.DialogList_SavedMessages : secondPeer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
+                                                var firstPeerName = firstPeer.id == strongSelf.context.account.peerId ? presentationData.strings.DialogList_SavedMessages : firstPeer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
+                                                firstPeerName = firstPeerName.replacingOccurrences(of: "**", with: "")
+                                                var secondPeerName = secondPeer.id == strongSelf.context.account.peerId ? presentationData.strings.DialogList_SavedMessages : secondPeer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
+                                                secondPeerName = secondPeerName.replacingOccurrences(of: "**", with: "")
                                                 text = messages.count == 1 ? presentationData.strings.Conversation_ForwardTooltip_TwoChats_One(firstPeerName, secondPeerName).string : presentationData.strings.Conversation_ForwardTooltip_TwoChats_Many(firstPeerName, secondPeerName).string
                                             } else if let peer = peers.first {
-                                                let peerName = peer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
+                                                var peerName = peer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
+                                                peerName = peerName.replacingOccurrences(of: "**", with: "")
                                                 text = messages.count == 1 ? presentationData.strings.Conversation_ForwardTooltip_ManyChats_One(peerName, "\(peers.count - 1)").string : presentationData.strings.Conversation_ForwardTooltip_ManyChats_Many(peerName, "\(peers.count - 1)").string
                                             } else {
                                                 text = ""
@@ -1421,14 +1814,18 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
                                                     savedMessages = true
                                                 } else {
                                                     if peers.count == 1, let peer = peers.first {
-                                                        let peerName = peer.id == strongSelf.context.account.peerId ? presentationData.strings.DialogList_SavedMessages : peer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
+                                                        var peerName = peer.id == strongSelf.context.account.peerId ? presentationData.strings.DialogList_SavedMessages : peer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
+                                                        peerName = peerName.replacingOccurrences(of: "**", with: "")
                                                         text = messages.count == 1 ? presentationData.strings.Conversation_ForwardTooltip_Chat_One(peerName).string : presentationData.strings.Conversation_ForwardTooltip_Chat_Many(peerName).string
                                                     } else if peers.count == 2, let firstPeer = peers.first, let secondPeer = peers.last {
-                                                        let firstPeerName = firstPeer.id == strongSelf.context.account.peerId ? presentationData.strings.DialogList_SavedMessages : firstPeer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
-                                                        let secondPeerName = secondPeer.id == strongSelf.context.account.peerId ? presentationData.strings.DialogList_SavedMessages : secondPeer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
+                                                        var firstPeerName = firstPeer.id == strongSelf.context.account.peerId ? presentationData.strings.DialogList_SavedMessages : firstPeer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
+                                                        firstPeerName = firstPeerName.replacingOccurrences(of: "**", with: "")
+                                                        var secondPeerName = secondPeer.id == strongSelf.context.account.peerId ? presentationData.strings.DialogList_SavedMessages : secondPeer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
+                                                        secondPeerName = secondPeerName.replacingOccurrences(of: "**", with: "")
                                                         text = messages.count == 1 ? presentationData.strings.Conversation_ForwardTooltip_TwoChats_One(firstPeerName, secondPeerName).string : presentationData.strings.Conversation_ForwardTooltip_TwoChats_Many(firstPeerName, secondPeerName).string
                                                     } else if let peer = peers.first {
-                                                        let peerName = peer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
+                                                        var peerName = peer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
+                                                        peerName = peerName.replacingOccurrences(of: "**", with: "")
                                                         text = messages.count == 1 ? presentationData.strings.Conversation_ForwardTooltip_ManyChats_One(peerName, "\(peers.count - 1)").string : presentationData.strings.Conversation_ForwardTooltip_ManyChats_Many(peerName, "\(peers.count - 1)").string
                                                     } else {
                                                         text = ""
@@ -1489,7 +1886,7 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
                             |> deliverOnMainQueue).start(next: { result in
                                 switch result {
                                     case .generic:
-                                        controllerInteraction?.presentController(UndoOverlayController(presentationData: presentationData, content: .universal(animation: "anim_gif", scale: 0.075, colors: [:], title: nil, text: presentationData.strings.Gallery_GifSaved, customUndoText: nil), elevatedLayout: true, animateInAsReplacement: false, action: { _ in return false }), nil)
+                                        controllerInteraction?.presentController(UndoOverlayController(presentationData: presentationData, content: .universal(animation: "anim_gif", scale: 0.075, colors: [:], title: nil, text: presentationData.strings.Gallery_GifSaved, customUndoText: nil, timeout: nil), elevatedLayout: true, animateInAsReplacement: false, action: { _ in return false }), nil)
                                     case let .limitExceeded(limit, premiumLimit):
                                         let premiumConfiguration = PremiumConfiguration.with(appConfiguration: context.currentAppConfiguration.with { $0 })
                                         let text: String
@@ -1498,9 +1895,9 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
                                         } else {
                                             text = presentationData.strings.Premium_MaxSavedGifsText("\(premiumLimit)").string
                                         }
-                                        controllerInteraction?.presentController(UndoOverlayController(presentationData: presentationData, content: .universal(animation: "anim_gif", scale: 0.075, colors: [:], title: presentationData.strings.Premium_MaxSavedGifsTitle("\(limit)").string, text: text, customUndoText: nil), elevatedLayout: true, animateInAsReplacement: false, action: { action in
+                                        controllerInteraction?.presentController(UndoOverlayController(presentationData: presentationData, content: .universal(animation: "anim_gif", scale: 0.075, colors: [:], title: presentationData.strings.Premium_MaxSavedGifsTitle("\(limit)").string, text: text, customUndoText: nil, timeout: nil), elevatedLayout: true, animateInAsReplacement: false, action: { action in
                                             if case .info = action {
-                                                let controller = context.sharedContext.makePremiumIntroController(context: context, source: .savedGifs)
+                                                let controller = context.sharedContext.makePremiumIntroController(context: context, source: .savedGifs, forceDark: false, dismissed: nil)
                                                 controllerInteraction?.pushController(controller)
                                                 return true
                                             }
@@ -1569,14 +1966,18 @@ final class ChatItemGalleryFooterContentNode: GalleryFooterContentNode, UIScroll
                                 savedMessages = true
                             } else {
                                 if peers.count == 1, let peer = peers.first {
-                                    let peerName = peer.id == strongSelf.context.account.peerId ? presentationData.strings.DialogList_SavedMessages : peer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
+                                    var peerName = peer.id == strongSelf.context.account.peerId ? presentationData.strings.DialogList_SavedMessages : peer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
+                                    peerName = peerName.replacingOccurrences(of: "**", with: "")
                                     text = presentationData.strings.Conversation_ForwardTooltip_Chat_One(peerName).string
                                 } else if peers.count == 2, let firstPeer = peers.first, let secondPeer = peers.last {
-                                    let firstPeerName = firstPeer.id == strongSelf.context.account.peerId ? presentationData.strings.DialogList_SavedMessages : firstPeer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
-                                    let secondPeerName = secondPeer.id == strongSelf.context.account.peerId ? presentationData.strings.DialogList_SavedMessages : secondPeer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
+                                    var firstPeerName = firstPeer.id == strongSelf.context.account.peerId ? presentationData.strings.DialogList_SavedMessages : firstPeer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
+                                    firstPeerName = firstPeerName.replacingOccurrences(of: "**", with: "")
+                                    var secondPeerName = secondPeer.id == strongSelf.context.account.peerId ? presentationData.strings.DialogList_SavedMessages : secondPeer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
+                                    secondPeerName = secondPeerName.replacingOccurrences(of: "**", with: "")
                                     text = presentationData.strings.Conversation_ForwardTooltip_TwoChats_One(firstPeerName, secondPeerName).string
                                 } else if let peer = peers.first {
-                                    let peerName = peer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
+                                    var peerName = peer.displayTitle(strings: presentationData.strings, displayOrder: presentationData.nameDisplayOrder)
+                                    peerName = peerName.replacingOccurrences(of: "**", with: "")
                                     text = presentationData.strings.Conversation_ForwardTooltip_ManyChats_One(peerName, "\(peers.count - 1)").string
                                 } else {
                                     text = ""

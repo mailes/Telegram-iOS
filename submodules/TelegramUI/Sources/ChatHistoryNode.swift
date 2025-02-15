@@ -5,6 +5,7 @@ import Postbox
 import SwiftSignalKit
 import Display
 import ChatPresentationInterfaceState
+import AccountContext
 
 public enum ChatHistoryNodeLoadState: Equatable {
     public enum EmptyType: Equatable {
@@ -12,6 +13,7 @@ public enum ChatHistoryNodeLoadState: Equatable {
         case joined
         case clearedHistory
         case topic
+        case botInfo
     }
     
     case loading(Bool)

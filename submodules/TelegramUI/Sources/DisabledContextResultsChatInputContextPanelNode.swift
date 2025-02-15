@@ -8,6 +8,8 @@ import TelegramStringFormatting
 import TelegramUIPreferences
 import AccountContext
 import ChatPresentationInterfaceState
+import ChatControllerInteraction
+import ChatInputContextPanelNode
 
 final class DisabledContextResultsChatInputContextPanelNode: ChatInputContextPanelNode {
     private let containerNode: ASDisplayNode

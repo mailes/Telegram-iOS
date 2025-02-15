@@ -3,7 +3,10 @@ import Postbox
 
 
 public enum TelegramChannelPermission {
-    case sendMessages
+    case sendText
+    case sendPhoto
+    case sendVideo
+    case sendSomething
     case pinMessages
     case manageTopics
     case createTopics
@@ -15,10 +18,13 @@ public enum TelegramChannelPermission {
     case changeInfo
     case canBeAnonymous
     case manageCalls
+    case postStories
+    case editStories
+    case deleteStories
 }
 
 public extension TelegramChannel {
-    func hasPermission(_ permission: TelegramChannelPermission) -> Bool {
+    func hasPermission(_ permission: TelegramChannelPermission, ignoreDefault: Bool = false) -> Bool {
         if self.flags.contains(.isCreator) {
             if case .canBeAnonymous = permission {
                 if let adminRights = self.adminRights {
@@ -30,7 +36,7 @@ public extension TelegramChannel {
             return true
         }
         switch permission {
-            case .sendMessages:
+            case .sendText:
                 if case .broadcast = self.info {
                     if let adminRights = self.adminRights {
                         return adminRights.rights.contains(.canPostMessages)
@@ -41,10 +47,81 @@ public extension TelegramChannel {
                     if let _ = self.adminRights {
                         return true
                     }
-                    if let bannedRights = self.bannedRights, bannedRights.flags.contains(.banSendMessages) {
+                    if let bannedRights = self.bannedRights, bannedRights.flags.contains(.banSendText) {
                         return false
                     }
-                    if let defaultBannedRights = self.defaultBannedRights, defaultBannedRights.flags.contains(.banSendMessages) {
+                    if let defaultBannedRights = self.defaultBannedRights, defaultBannedRights.flags.contains(.banSendText) && !ignoreDefault {
+                        return false
+                    }
+                    return true
+                }
+            case .sendPhoto:
+                if case .broadcast = self.info {
+                    if let adminRights = self.adminRights {
+                        return adminRights.rights.contains(.canPostMessages)
+                    } else {
+                        return false
+                    }
+                } else {
+                    if let _ = self.adminRights {
+                        return true
+                    }
+                    if let bannedRights = self.bannedRights, bannedRights.flags.contains(.banSendPhotos) {
+                        return false
+                    }
+                    if let defaultBannedRights = self.defaultBannedRights, defaultBannedRights.flags.contains(.banSendPhotos) && !ignoreDefault {
+                        return false
+                    }
+                    return true
+                }
+            case .sendVideo:
+                if case .broadcast = self.info {
+                    if let adminRights = self.adminRights {
+                        return adminRights.rights.contains(.canPostMessages)
+                    } else {
+                        return false
+                    }
+                } else {
+                    if let _ = self.adminRights {
+                        return true
+                    }
+                    if let bannedRights = self.bannedRights, bannedRights.flags.contains(.banSendVideos) {
+                        return false
+                    }
+                    if let defaultBannedRights = self.defaultBannedRights, defaultBannedRights.flags.contains(.banSendVideos) && !ignoreDefault {
+                        return false
+                    }
+                    return true
+                }
+            case .sendSomething:
+                if case .broadcast = self.info {
+                    if let adminRights = self.adminRights {
+                        return adminRights.rights.contains(.canPostMessages)
+                    } else {
+                        return false
+                    }
+                } else {
+                    if let _ = self.adminRights {
+                        return true
+                    }
+                    
+                    let flags: TelegramChatBannedRightsFlags = [
+                        .banSendText,
+                        .banSendInstantVideos,
+                        .banSendVoice,
+                        .banSendPhotos,
+                        .banSendVideos,
+                        .banSendStickers,
+                        .banSendPolls,
+                        .banSendFiles,
+                        .banSendInline,
+                        .banSendMusic
+                    ]
+                    
+                    if let bannedRights = self.bannedRights, bannedRights.flags.intersection(flags) == flags {
+                        return false
+                    }
+                    if let defaultBannedRights = self.defaultBannedRights, defaultBannedRights.flags.intersection(flags) == flags && !ignoreDefault {
                         return false
                     }
                     return true
@@ -78,13 +155,7 @@ public extension TelegramChannel {
                 if let adminRights = self.adminRights, adminRights.rights.contains(.canManageTopics) {
                     return true
                 }
-                if let bannedRights = self.bannedRights, bannedRights.flags.contains(.banManageTopics) {
-                    return false
-                }
-                if let defaultBannedRights = self.defaultBannedRights, defaultBannedRights.flags.contains(.banManageTopics) {
-                    return false
-                }
-                return true
+                return false
             case .createTopics:
                 if self.flags.contains(.isCreator) {
                     return true
@@ -150,7 +221,7 @@ public extension TelegramChannel {
                     if let defaultBannedRights = self.defaultBannedRights, defaultBannedRights.flags.contains(.banChangeInfo) {
                         return false
                     }
-                    return false
+                    return true
                 }
             case .addAdmins:
                 if let adminRights = self.adminRights, adminRights.rights.contains(.canAddAdmins) {
@@ -167,17 +238,35 @@ public extension TelegramChannel {
                     return true
                 }
                 return false
+            case .postStories:
+                if let adminRights = self.adminRights {
+                    return adminRights.rights.contains(.canPostStories)
+                } else {
+                    return false
+                }
+            case .editStories:
+                if let adminRights = self.adminRights {
+                    return adminRights.rights.contains(.canEditStories)
+                } else {
+                    return false
+                }
+            case .deleteStories:
+                if let adminRights = self.adminRights {
+                    return adminRights.rights.contains(.canDeleteStories)
+                } else {
+                    return false
+                }
         }
     }
     
-    func hasBannedPermission(_ rights: TelegramChatBannedRightsFlags) -> (Int32, Bool)? {
+    func hasBannedPermission(_ rights: TelegramChatBannedRightsFlags, ignoreDefault: Bool = false) -> (Int32, Bool)? {
         if self.flags.contains(.isCreator) {
             return nil
         }
         if let _ = self.adminRights {
             return nil
         }
-        if let defaultBannedRights = self.defaultBannedRights, defaultBannedRights.flags.contains(rights) {
+        if let defaultBannedRights = self.defaultBannedRights, defaultBannedRights.flags.contains(rights) && !ignoreDefault {
             return (Int32.max, false)
         }
         if let bannedRights = self.bannedRights, bannedRights.flags.contains(rights) {

@@ -2,6 +2,12 @@ import Foundation
 import AsyncDisplayKit
 
 open class ContextControllerSourceNode: ContextReferenceContentNode {
+    public enum ShouldBegin {
+        case none
+        case `default`
+        case customActivationProcess
+    }
+    
     public private(set) var contextGesture: ContextGesture?
     
     public var isGestureEnabled: Bool = true {
@@ -18,15 +24,19 @@ open class ContextControllerSourceNode: ContextReferenceContentNode {
     
     public var activated: ((ContextGesture, CGPoint) -> Void)?
     public var shouldBegin: ((CGPoint) -> Bool)?
+    public var shouldBeginWithCustomActivationProcess: ((CGPoint) -> ShouldBegin)?
     public var customActivationProgress: ((CGFloat, ContextGestureTransition) -> Void)?
     public weak var additionalActivationProgressLayer: CALayer?
     public var targetNodeForActivationProgress: ASDisplayNode?
     public var targetNodeForActivationProgressContentRect: CGRect?
     
+    private var ignoreCurrentActivationProcess: Bool = false
+    
     public func cancelGesture() {
         self.contextGesture?.cancel()
         self.contextGesture?.isEnabled = false
         self.contextGesture?.isEnabled = self.isGestureEnabled
+        self.ignoreCurrentActivationProcess = false
     }
     
     override open func didLoad() {
@@ -40,10 +50,26 @@ open class ContextControllerSourceNode: ContextReferenceContentNode {
         contextGesture.isEnabled = self.isGestureEnabled
         
         contextGesture.shouldBegin = { [weak self] point in
-            guard let strongSelf = self, !strongSelf.bounds.width.isZero else {
+            guard let self, !self.bounds.width.isZero else {
                 return false
             }
-            return strongSelf.shouldBegin?(point) ?? true
+            if let shouldBeginWithCustomActivationProcess = self.shouldBeginWithCustomActivationProcess {
+                let result = shouldBeginWithCustomActivationProcess(point)
+                switch result {
+                case .none:
+                    self.ignoreCurrentActivationProcess = false
+                    return false
+                case .default:
+                    self.ignoreCurrentActivationProcess = false
+                    return true
+                case .customActivationProcess:
+                    self.ignoreCurrentActivationProcess = true
+                    return true
+                }
+            } else {
+                self.ignoreCurrentActivationProcess = false
+                return self.shouldBegin?(point) ?? true
+            }
         }
         
         contextGesture.activationProgress = { [weak self] progress, update in
@@ -52,7 +78,7 @@ open class ContextControllerSourceNode: ContextReferenceContentNode {
             }
             if let customActivationProgress = strongSelf.customActivationProgress {
                 customActivationProgress(progress, update)
-            } else if strongSelf.animateScale {
+            } else if strongSelf.animateScale && !strongSelf.ignoreCurrentActivationProcess {
                 let targetNode: ASDisplayNode
                 let targetContentRect: CGRect
                 if let targetNodeForActivationProgress = strongSelf.targetNodeForActivationProgress {
@@ -127,129 +153,6 @@ open class ContextControllerSourceNode: ContextReferenceContentNode {
     }
 }
 
-/*open class ContextControllerSourceNode: ASDisplayNode {
-    private var viewImpl: ContextControllerSourceView {
-        return self.view as! ContextControllerSourceView
-    }
-    
-    public var contextGesture: ContextGesture? {
-        if self.isNodeLoaded {
-            return self.viewImpl.contextGesture
-        } else {
-            return nil
-        }
-    }
-    
-    public var isGestureEnabled: Bool = true {
-        didSet {
-            if self.isNodeLoaded {
-                self.viewImpl.isGestureEnabled = self.isGestureEnabled
-            }
-        }
-    }
-    
-    public var beginDelay: Double = 0.12 {
-        didSet {
-            if self.isNodeLoaded {
-                self.viewImpl.beginDelay = self.beginDelay
-            }
-        }
-    }
-    
-    public var animateScale: Bool = true {
-        didSet {
-            if self.isNodeLoaded {
-                self.viewImpl.animateScale = self.animateScale
-            }
-        }
-    }
-    
-    public var activated: ((ContextGesture, CGPoint) -> Void)? {
-        didSet {
-            if self.isNodeLoaded {
-                self.viewImpl.activated = self.activated
-            }
-        }
-    }
-    
-    public var shouldBegin: ((CGPoint) -> Bool)? {
-        didSet {
-            if self.isNodeLoaded {
-                self.viewImpl.shouldBegin = self.shouldBegin
-            }
-        }
-    }
-    
-    public var customActivationProgress: ((CGFloat, ContextGestureTransition) -> Void)? {
-        didSet {
-            if self.isNodeLoaded {
-                self.viewImpl.customActivationProgress = self.customActivationProgress
-            }
-        }
-    }
-    
-    public weak var additionalActivationProgressLayer: CALayer? {
-        didSet {
-            if self.isNodeLoaded {
-                self.viewImpl.additionalActivationProgressLayer = self.additionalActivationProgressLayer
-            }
-        }
-    }
-    
-    public var targetNodeForActivationProgress: ASDisplayNode? {
-        didSet {
-            if self.isNodeLoaded {
-                self.viewImpl.targetNodeForActivationProgress = self.targetNodeForActivationProgress
-            }
-        }
-    }
-    
-    public var targetViewForActivationProgress: UIView? {
-        didSet {
-            if self.isNodeLoaded {
-                self.viewImpl.targetViewForActivationProgress = self.targetViewForActivationProgress
-            }
-        }
-    }
-    
-    public var targetNodeForActivationProgressContentRect: CGRect? {
-        didSet {
-            if self.isNodeLoaded {
-                self.viewImpl.targetNodeForActivationProgressContentRect = self.targetNodeForActivationProgressContentRect
-            }
-        }
-    }
-    
-    override public init() {
-        super.init()
-        
-        self.setViewBlock({
-            return ContextControllerSourceView(frame: CGRect())
-        })
-    }
-    
-    override open func didLoad() {
-        super.didLoad()
-        
-        self.viewImpl.isGestureEnabled = self.isGestureEnabled
-        self.viewImpl.beginDelay = self.beginDelay
-        self.viewImpl.animateScale = self.animateScale
-        self.viewImpl.activated = self.activated
-        self.viewImpl.shouldBegin = self.shouldBegin
-        self.viewImpl.customActivationProgress = self.customActivationProgress
-        self.viewImpl.additionalActivationProgressLayer = self.additionalActivationProgressLayer
-        self.viewImpl.targetNodeForActivationProgress = self.targetNodeForActivationProgress
-        self.viewImpl.targetViewForActivationProgress = self.targetViewForActivationProgress
-        self.viewImpl.targetNodeForActivationProgressContentRect = self.targetNodeForActivationProgressContentRect
-    }
-    
-    public func cancelGesture() {
-        if self.isNodeLoaded {
-            self.viewImpl.cancelGesture()
-        }
-    }
-}*/
-
 open class ContextControllerSourceView: UIView {
     public private(set) var contextGesture: ContextGesture?
     
@@ -277,6 +180,9 @@ open class ContextControllerSourceView: UIView {
     
     override public init(frame: CGRect) {
         super.init(frame: frame)
+        
+        self.isMultipleTouchEnabled = false
+        self.isExclusiveTouch = true
         
         let contextGesture = ContextGesture(target: self, action: nil)
         self.contextGesture = contextGesture

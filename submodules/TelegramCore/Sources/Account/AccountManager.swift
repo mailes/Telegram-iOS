@@ -9,12 +9,18 @@ private enum AccountKind {
     case unauthorized
 }
 
+public struct AccountSupportUserInfo: Codable, Equatable {
+    public init() {
+    }
+}
+
 public enum TelegramAccountRecordAttribute: AccountRecordAttribute, Equatable {
     enum CodingKeys: String, CodingKey {
         case backupData
         case environment
         case sortOrder
         case loggedOut
+        case supportUserInfo
         case legacyRootObject = "_"
     }
 
@@ -22,6 +28,7 @@ public enum TelegramAccountRecordAttribute: AccountRecordAttribute, Equatable {
     case environment(AccountEnvironmentAttribute)
     case sortOrder(AccountSortOrderAttribute)
     case loggedOut(LoggedOutAccountAttribute)
+    case supportUserInfo(AccountSupportUserInfo)
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -34,6 +41,8 @@ public enum TelegramAccountRecordAttribute: AccountRecordAttribute, Equatable {
             self = .sortOrder(sortOrder)
         } else if let loggedOut = try? container.decodeIfPresent(LoggedOutAccountAttribute.self, forKey: .loggedOut) {
             self = .loggedOut(loggedOut)
+        } else if let supportUserInfo = try? container.decodeIfPresent(AccountSupportUserInfo.self, forKey: .supportUserInfo) {
+            self = .supportUserInfo(supportUserInfo)
         } else {
             let legacyRootObjectData = try! container.decode(AdaptedPostboxDecoder.RawObjectData.self, forKey: .legacyRootObject)
             if legacyRootObjectData.typeHash == postboxEncodableTypeHash(AccountBackupDataAttribute.self) {
@@ -62,6 +71,8 @@ public enum TelegramAccountRecordAttribute: AccountRecordAttribute, Equatable {
             try container.encode(sortOrder, forKey: .sortOrder)
         case let .loggedOut(loggedOut):
             try container.encode(loggedOut, forKey: .loggedOut)
+        case let .supportUserInfo(supportUserInfo):
+            try container.encode(supportUserInfo, forKey: .supportUserInfo)
         }
     }
 
@@ -90,15 +101,20 @@ private var declaredEncodables: Void = {
     declareEncodable(ChannelState.self, f: { ChannelState(decoder: $0) })
     declareEncodable(RegularChatState.self, f: { RegularChatState(decoder: $0) })
     declareEncodable(InlineBotMessageAttribute.self, f: { InlineBotMessageAttribute(decoder: $0) })
+    declareEncodable(InlineBusinessBotMessageAttribute.self, f: { InlineBusinessBotMessageAttribute(decoder: $0) })
     declareEncodable(TextEntitiesMessageAttribute.self, f: { TextEntitiesMessageAttribute(decoder: $0) })
     declareEncodable(ReplyMessageAttribute.self, f: { ReplyMessageAttribute(decoder: $0) })
+    declareEncodable(QuotedReplyMessageAttribute.self, f: { QuotedReplyMessageAttribute(decoder: $0) })
+    declareEncodable(ReplyStoryAttribute.self, f: { ReplyStoryAttribute(decoder: $0) })
     declareEncodable(ReplyThreadMessageAttribute.self, f: { ReplyThreadMessageAttribute(decoder: $0) })
     declareEncodable(ReactionsMessageAttribute.self, f: { ReactionsMessageAttribute(decoder: $0) })
     declareEncodable(PendingReactionsMessageAttribute.self, f: { PendingReactionsMessageAttribute(decoder: $0) })
+    declareEncodable(PendingStarsReactionsMessageAttribute.self, f: { PendingStarsReactionsMessageAttribute(decoder: $0) })
     declareEncodable(CloudDocumentMediaResource.self, f: { CloudDocumentMediaResource(decoder: $0) })
     declareEncodable(TelegramMediaWebpage.self, f: { TelegramMediaWebpage(decoder: $0) })
     declareEncodable(ViewCountMessageAttribute.self, f: { ViewCountMessageAttribute(decoder: $0) })
     declareEncodable(ForwardCountMessageAttribute.self, f: { ForwardCountMessageAttribute(decoder: $0) })
+    declareEncodable(BoostCountMessageAttribute.self, f: { BoostCountMessageAttribute(decoder: $0) })
     declareEncodable(NotificationInfoMessageAttribute.self, f: { NotificationInfoMessageAttribute(decoder: $0) })
     declareEncodable(TelegramMediaAction.self, f: { TelegramMediaAction(decoder: $0) })
     declareEncodable(TelegramPeerNotificationSettings.self, f: { TelegramPeerNotificationSettings(decoder: $0) })
@@ -114,6 +130,7 @@ private var declaredEncodables: Void = {
     declareEncodable(OutgoingMessageInfoAttribute.self, f: { OutgoingMessageInfoAttribute(decoder: $0) })
     declareEncodable(ForwardSourceInfoAttribute.self, f: { ForwardSourceInfoAttribute(decoder: $0) })
     declareEncodable(SourceReferenceMessageAttribute.self, f: { SourceReferenceMessageAttribute(decoder: $0) })
+    declareEncodable(SourceAuthorInfoMessageAttribute.self, f: { SourceAuthorInfoMessageAttribute(decoder: $0) })
     declareEncodable(EditedMessageAttribute.self, f: { EditedMessageAttribute(decoder: $0) })
     declareEncodable(ReplyMarkupMessageAttribute.self, f: { ReplyMarkupMessageAttribute(decoder: $0) })
     declareEncodable(OutgoingChatContextResultMessageAttribute.self, f: { OutgoingChatContextResultMessageAttribute(decoder: $0) })
@@ -169,9 +186,10 @@ private var declaredEncodables: Void = {
     declareEncodable(CloudPeerPhotoSizeMediaResource.self, f: { CloudPeerPhotoSizeMediaResource(decoder: $0) })
     declareEncodable(CloudStickerPackThumbnailMediaResource.self, f: { CloudStickerPackThumbnailMediaResource(decoder: $0) })
     declareEncodable(ContentRequiresValidationMessageAttribute.self, f: { ContentRequiresValidationMessageAttribute(decoder: $0) })
-    declareEncodable(WasScheduledMessageAttribute.self, f: { WasScheduledMessageAttribute(decoder: $0) })
+    declareEncodable(PendingProcessingMessageAttribute.self, f: { PendingProcessingMessageAttribute(decoder: $0) })
     declareEncodable(OutgoingScheduleInfoMessageAttribute.self, f: { OutgoingScheduleInfoMessageAttribute(decoder: $0) })
     declareEncodable(UpdateMessageReactionsAction.self, f: { UpdateMessageReactionsAction(decoder: $0) })
+    declareEncodable(SendStarsReactionsAction.self, f: { SendStarsReactionsAction(decoder: $0) })
     declareEncodable(RestrictedContentMessageAttribute.self, f: { RestrictedContentMessageAttribute(decoder: $0) })
     declareEncodable(SendScheduledMessageImmediatelyAction.self, f: { SendScheduledMessageImmediatelyAction(decoder: $0) })
     declareEncodable(EmbeddedMediaStickersMessageAttribute.self, f: { EmbeddedMediaStickersMessageAttribute(decoder: $0) })
@@ -191,6 +209,27 @@ private var declaredEncodables: Void = {
     declareEncodable(NonPremiumMessageAttribute.self, f: { NonPremiumMessageAttribute(decoder: $0) })
     declareEncodable(TelegramExtendedMedia.self, f: { TelegramExtendedMedia(decoder: $0) })
     declareEncodable(TelegramPeerUsername.self, f: { TelegramPeerUsername(decoder: $0) })
+    declareEncodable(MediaSpoilerMessageAttribute.self, f: { MediaSpoilerMessageAttribute(decoder: $0) })
+    declareEncodable(AuthSessionInfoAttribute.self, f: { AuthSessionInfoAttribute(decoder: $0) })
+    declareEncodable(TranslationMessageAttribute.self, f: { TranslationMessageAttribute(decoder: $0) })
+    declareEncodable(TranslationMessageAttribute.Additional.self, f: { TranslationMessageAttribute.Additional(decoder: $0) })
+    declareEncodable(SynchronizeAutosaveItemOperation.self, f: { SynchronizeAutosaveItemOperation(decoder: $0) })
+    declareEncodable(TelegramMediaStory.self, f: { TelegramMediaStory(decoder: $0) })
+    declareEncodable(SynchronizeViewStoriesOperation.self, f: { SynchronizeViewStoriesOperation(decoder: $0) })
+    declareEncodable(SynchronizePeerStoriesOperation.self, f: { SynchronizePeerStoriesOperation(decoder: $0) })
+    declareEncodable(MapVenue.self, f: { MapVenue(decoder: $0) })
+    declareEncodable(MapGeoAddress.self, f: { MapGeoAddress(decoder: $0) })
+    declareEncodable(TelegramMediaGiveaway.self, f: { TelegramMediaGiveaway(decoder: $0) })
+    declareEncodable(TelegramMediaGiveawayResults.self, f: { TelegramMediaGiveawayResults(decoder: $0) })
+    declareEncodable(WebpagePreviewMessageAttribute.self, f: { WebpagePreviewMessageAttribute(decoder: $0) })
+    declareEncodable(InvertMediaMessageAttribute.self, f: { InvertMediaMessageAttribute(decoder: $0) })
+    declareEncodable(DerivedDataMessageAttribute.self, f: { DerivedDataMessageAttribute(decoder: $0) })
+    declareEncodable(TelegramApplicationIcons.self, f: { TelegramApplicationIcons(decoder: $0) })
+    declareEncodable(OutgoingQuickReplyMessageAttribute.self, f: { OutgoingQuickReplyMessageAttribute(decoder: $0) })
+    declareEncodable(EffectMessageAttribute.self, f: { EffectMessageAttribute(decoder: $0) })
+    declareEncodable(FactCheckMessageAttribute.self, f: { FactCheckMessageAttribute(decoder: $0) })
+    declareEncodable(TelegramMediaPaidContent.self, f: { TelegramMediaPaidContent(decoder: $0) })
+    declareEncodable(ReportDeliveryMessageAttribute.self, f: { ReportDeliveryMessageAttribute(decoder: $0) })
     return
 }()
 
@@ -252,7 +291,14 @@ public func currentAccount(allocateIfNotExists: Bool, networkArguments: NetworkI
                         return false
                     }
                 })
-                return accountWithId(accountManager: manager, networkArguments: networkArguments, id: record.0, encryptionParameters: encryptionParameters, supplementary: supplementary, rootPath: rootPath, beginWithTestingEnvironment: beginWithTestingEnvironment, backupData: nil, auxiliaryMethods: auxiliaryMethods)
+                let isSupportUser = record.1.contains(where: { attribute in
+                    if case .supportUserInfo = attribute {
+                        return true
+                    } else {
+                        return false
+                    }
+                })
+                return accountWithId(accountManager: manager, networkArguments: networkArguments, id: record.0, encryptionParameters: encryptionParameters, supplementary: supplementary, isSupportUser: isSupportUser, rootPath: rootPath, beginWithTestingEnvironment: beginWithTestingEnvironment, backupData: nil, auxiliaryMethods: auxiliaryMethods)
                 |> mapToSignal { accountResult -> Signal<AccountResult?, NoError> in
                     let postbox: Postbox
                     let initialKind: AccountKind
@@ -422,7 +468,14 @@ private func cleanupAccount(networkArguments: NetworkInitializationArguments, ac
             return false
         }
     })
-    return accountWithId(accountManager: accountManager, networkArguments: networkArguments, id: id, encryptionParameters: encryptionParameters, supplementary: true, rootPath: rootPath, beginWithTestingEnvironment: beginWithTestingEnvironment, backupData: nil, auxiliaryMethods: auxiliaryMethods)
+    let isSupportUser = attributes.contains(where: { attribute in
+        if case .supportUserInfo = attribute {
+            return true
+        } else {
+            return false
+        }
+    })
+    return accountWithId(accountManager: accountManager, networkArguments: networkArguments, id: id, encryptionParameters: encryptionParameters, supplementary: true, isSupportUser: isSupportUser, rootPath: rootPath, beginWithTestingEnvironment: beginWithTestingEnvironment, backupData: nil, auxiliaryMethods: auxiliaryMethods)
     |> mapToSignal { account -> Signal<Void, NoError> in
         switch account {
             case .upgrading:
@@ -437,23 +490,14 @@ private func cleanupAccount(networkArguments: NetworkInitializationArguments, ac
                     return .single(nil)
                 }
                 |> mapToSignal { result -> Signal<Void, NoError> in
-                    let _ = (accountManager.transaction { transaction -> Void in
-                        var tokens = transaction.getStoredLoginTokens()
-                        switch result {
-                        case let .loggedOut(_, futureAuthToken):
-                            if let futureAuthToken = futureAuthToken {
-                                tokens.insert(futureAuthToken.makeData(), at: 0)
-                            }
-                        default:
-                            break
+                    switch result {
+                    case let .loggedOut(_, futureAuthToken):
+                        if let futureAuthToken = futureAuthToken {
+                            storeFutureLoginToken(accountManager: accountManager, token: futureAuthToken.makeData())
                         }
-                        
-                        if tokens.count > 20 {
-                            tokens.removeLast(tokens.count - 20)
-                        }
-                        
-                        transaction.setStoredLoginTokens(tokens)
-                    }).start()
+                    default:
+                        break
+                    }
                     account.shouldBeServiceTaskMaster.set(.single(.never))
                     return accountManager.transaction { transaction -> Void in
                         transaction.updateRecord(id, { _ in

@@ -12,21 +12,9 @@ import SearchPeerMembers
 import DeviceLocationManager
 import TelegramNotices
 import ChatPresentationInterfaceState
-
-enum ChatContextQueryError {
-    case generic
-    case inlineBotLocationRequest(PeerId)
-}
-
-enum ChatContextQueryUpdate {
-    case remove
-    case update(ChatPresentationInputQuery, Signal<(ChatPresentationInputQueryResult?) -> ChatPresentationInputQueryResult?, ChatContextQueryError>)
-}
+import ChatContextQuery
 
 func contextQueryResultStateForChatInterfacePresentationState(_ chatPresentationInterfaceState: ChatPresentationInterfaceState, context: AccountContext, currentQueryStates: inout [ChatPresentationInputQueryKind: (ChatPresentationInputQuery, Disposable)], requestBotLocationStatus: @escaping (PeerId) -> Void) -> [ChatPresentationInputQueryKind: ChatContextQueryUpdate] {
-    guard let peer = chatPresentationInterfaceState.renderedPeer?.peer else {
-        return [:]
-    }
     let inputQueries = inputContextQueriesForChatPresentationIntefaceState(chatPresentationInterfaceState).filter({ query in
         if chatPresentationInterfaceState.editMessageState != nil {
             switch query {
@@ -45,7 +33,7 @@ func contextQueryResultStateForChatInterfacePresentationState(_ chatPresentation
     for query in inputQueries {
         let previousQuery = currentQueryStates[query.kind]?.0
         if previousQuery != query {
-            let signal = updatedContextQueryResultStateForQuery(context: context, peer: peer, chatLocation: chatPresentationInterfaceState.chatLocation, inputQuery: query, previousQuery: previousQuery, requestBotLocationStatus: requestBotLocationStatus)
+            let signal = updatedContextQueryResultStateForQuery(context: context, peer: chatPresentationInterfaceState.renderedPeer?.peer, chatLocation: chatPresentationInterfaceState.chatLocation, inputQuery: query, previousQuery: previousQuery, requestBotLocationStatus: requestBotLocationStatus)
             updates[query.kind] = .update(query, signal)
         }
     }
@@ -66,27 +54,7 @@ func contextQueryResultStateForChatInterfacePresentationState(_ chatPresentation
     return updates
 }
 
-struct StickersSearchConfiguration {
-    static var defaultValue: StickersSearchConfiguration {
-        return StickersSearchConfiguration(disableLocalSuggestions: false)
-    }
-    
-    public let disableLocalSuggestions: Bool
-    
-    fileprivate init(disableLocalSuggestions: Bool) {
-        self.disableLocalSuggestions = disableLocalSuggestions
-    }
-    
-    static func with(appConfiguration: AppConfiguration) -> StickersSearchConfiguration {
-        if let data = appConfiguration.data, let suggestOnlyApi = data["stickers_emoji_suggest_only_api"] as? Bool {
-            return StickersSearchConfiguration(disableLocalSuggestions: suggestOnlyApi)
-        } else {
-            return .defaultValue
-        }
-    }
-}
-
-private func updatedContextQueryResultStateForQuery(context: AccountContext, peer: Peer, chatLocation: ChatLocation, inputQuery: ChatPresentationInputQuery, previousQuery: ChatPresentationInputQuery?, requestBotLocationStatus: @escaping (PeerId) -> Void) -> Signal<(ChatPresentationInputQueryResult?) -> ChatPresentationInputQueryResult?, ChatContextQueryError> {
+private func updatedContextQueryResultStateForQuery(context: AccountContext, peer: Peer?, chatLocation: ChatLocation, inputQuery: ChatPresentationInputQuery, previousQuery: ChatPresentationInputQuery?, requestBotLocationStatus: @escaping (PeerId) -> Void) -> Signal<(ChatPresentationInputQueryResult?) -> ChatPresentationInputQueryResult?, ChatContextQueryError> {
     switch inputQuery {
         case let .emoji(query):
             var signal: Signal<(ChatPresentationInputQueryResult?) -> ChatPresentationInputQueryResult?, ChatContextQueryError> = .complete()
@@ -127,7 +95,10 @@ private func updatedContextQueryResultStateForQuery(context: AccountContext, pee
                     case .installed:
                         scope = [.installed]
                 }
-                return context.engine.stickers.searchStickers(query: query.basicEmoji.0, scope: scope)
+                return context.engine.stickers.searchStickers(query: nil, emoticon: [query.basicEmoji.0], scope: scope)
+                |> map { items -> [FoundStickerItem] in
+                    return items.items
+                }
                 |> castError(ChatContextQueryError.self)
             }
             |> map { stickers -> (ChatPresentationInputQueryResult?) -> ChatPresentationInputQueryResult? in
@@ -143,10 +114,10 @@ private func updatedContextQueryResultStateForQuery(context: AccountContext, pee
                     case .hashtag:
                         break
                     default:
-                        signal = .single({ _ in return .hashtags([]) })
+                        signal = .single({ _ in return .hashtags([], query) })
                 }
             } else {
-                signal = .single({ _ in return .hashtags([]) })
+                signal = .single({ _ in return .hashtags([], query) })
             }
             
             let hashtags: Signal<(ChatPresentationInputQueryResult?) -> ChatPresentationInputQueryResult?, ChatContextQueryError> = context.engine.messages.recentlyUsedHashtags()
@@ -158,7 +129,7 @@ private func updatedContextQueryResultStateForQuery(context: AccountContext, pee
                         result.append(hashtag)
                     }
                 }
-                return { _ in return .hashtags(result) }
+                return { _ in return .hashtags(result, query) }
             }
             |> castError(ChatContextQueryError.self)
             
@@ -180,74 +151,133 @@ private func updatedContextQueryResultStateForQuery(context: AccountContext, pee
             
             let inlineBots: Signal<[(EnginePeer, Double)], NoError> = types.contains(.contextBots) ? context.engine.peers.recentlyUsedInlineBots() : .single([])
             let strings = context.sharedContext.currentPresentationData.with({ $0 }).strings
-            let participants = combineLatest(inlineBots, searchPeerMembers(context: context, peerId: peer.id, chatLocation: chatLocation, query: query, scope: .mention))
-            |> map { inlineBots, peers -> (ChatPresentationInputQueryResult?) -> ChatPresentationInputQueryResult? in
-                let filteredInlineBots = inlineBots.sorted(by: { $0.1 > $1.1 }).filter { peer, rating in
-                    if rating < 0.14 {
+        
+            let participants: Signal<(ChatPresentationInputQueryResult?) -> ChatPresentationInputQueryResult?, ChatContextQueryError>
+            if let peer {
+                participants = combineLatest(
+                    inlineBots,
+                    searchPeerMembers(context: context, peerId: peer.id, chatLocation: chatLocation, query: query, scope: .mention)
+                )
+                |> map { inlineBots, peers -> (ChatPresentationInputQueryResult?) -> ChatPresentationInputQueryResult? in
+                    let filteredInlineBots = inlineBots.sorted(by: { $0.1 > $1.1 }).filter { peer, rating in
+                        if rating < 0.14 {
+                            return false
+                        }
+                        if peer.indexName.matchesByTokens(normalizedQuery) {
+                            return true
+                        }
+                        if let addressName = peer.addressName, addressName.lowercased().hasPrefix(normalizedQuery) {
+                            return true
+                        }
                         return false
-                    }
-                    if peer.indexName.matchesByTokens(normalizedQuery) {
+                    }.map { $0.0 }
+                    
+                    let inlineBotPeerIds = Set(filteredInlineBots.map { $0.id })
+                    
+                    let filteredPeers = peers.filter { peer in
+                        if inlineBotPeerIds.contains(peer.id) {
+                            return false
+                        }
+                        if !types.contains(.accountPeer) && peer.id == context.account.peerId {
+                            return false
+                        }
                         return true
                     }
-                    if let addressName = peer.addressName, addressName.lowercased().hasPrefix(normalizedQuery) {
-                        return true
+                    var sortedPeers = filteredInlineBots
+                    sortedPeers.append(contentsOf: filteredPeers.sorted(by: { lhs, rhs in
+                        let result = lhs.indexName.stringRepresentation(lastNameFirst: true).compare(rhs.indexName.stringRepresentation(lastNameFirst: true))
+                        return result == .orderedAscending
+                    }))
+                    sortedPeers = sortedPeers.filter { peer in
+                        return !peer.displayTitle(strings: strings, displayOrder: .firstLast).isEmpty
                     }
-                    return false
-                }.map { $0.0 }
-                
-                let inlineBotPeerIds = Set(filteredInlineBots.map { $0.id })
-                
-                let filteredPeers = peers.filter { peer in
-                    if inlineBotPeerIds.contains(peer.id) {
-                        return false
-                    }
-                    if !types.contains(.accountPeer) && peer.id == context.account.peerId {
-                        return false
-                    }
-                    return true
+                    return { _ in return .mentions(sortedPeers) }
                 }
-                var sortedPeers = filteredInlineBots
-                sortedPeers.append(contentsOf: filteredPeers.sorted(by: { lhs, rhs in
-                    let result = lhs.indexName.stringRepresentation(lastNameFirst: true).compare(rhs.indexName.stringRepresentation(lastNameFirst: true))
-                    return result == .orderedAscending
-                }))
-                sortedPeers = sortedPeers.filter { peer in
-                    return !peer.displayTitle(strings: strings, displayOrder: .firstLast).isEmpty
-                }
-                return { _ in return .mentions(sortedPeers) }
+                |> castError(ChatContextQueryError.self)
+            } else {
+                participants = .single({ _ in return nil })
             }
-            |> castError(ChatContextQueryError.self)
             
             return signal |> then(participants)
         case let .command(query):
+            guard let peer else {
+                return .single({ _ in return .commands(ChatInputQueryCommandsResult(
+                    commands: [],
+                    accountPeer: nil,
+                    hasShortcuts: false,
+                    query: ""
+                )) })
+            }
+        
             let normalizedQuery = query.lowercased()
             
             var signal: Signal<(ChatPresentationInputQueryResult?) -> ChatPresentationInputQueryResult?, ChatContextQueryError> = .complete()
             if let previousQuery = previousQuery {
                 switch previousQuery {
-                    case .command:
-                        break
-                    default:
-                        signal = .single({ _ in return .commands([]) })
+                case .command:
+                    break
+                default:
+                    signal = .single({ _ in return .commands(ChatInputQueryCommandsResult(
+                        commands: [],
+                        accountPeer: nil,
+                        hasShortcuts: false,
+                        query: ""
+                    )) })
                 }
             } else {
-                signal = .single({ _ in return .commands([]) })
+                signal = .single({ _ in return .commands(ChatInputQueryCommandsResult(
+                    commands: [],
+                    accountPeer: nil,
+                    hasShortcuts: false,
+                    query: ""
+                )) })
+            }
+        
+            var shortcuts: Signal<[ShortcutMessageList.Item], NoError> = .single([])
+            if let user = peer as? TelegramUser, user.botInfo == nil {
+                context.account.viewTracker.keepQuickRepliesApproximatelyUpdated()
+                
+                shortcuts = context.engine.accountData.shortcutMessageList(onlyRemote: true)
+                |> map { shortcutMessageList -> [ShortcutMessageList.Item] in
+                    return shortcutMessageList.items.filter { item in
+                        return item.shortcut.hasPrefix(normalizedQuery)
+                    }
+                }
             }
             
-            let commands = context.engine.peers.peerCommands(id: peer.id)
-            |> map { commands -> (ChatPresentationInputQueryResult?) -> ChatPresentationInputQueryResult? in
+            let commands = combineLatest(
+                context.engine.peers.peerCommands(id: peer.id),
+                shortcuts,
+                context.engine.data.subscribe(
+                    TelegramEngine.EngineData.Item.Peer.Peer(id: context.account.peerId)
+                )
+            )
+            |> map { commands, shortcuts, accountPeer -> (ChatPresentationInputQueryResult?) -> ChatPresentationInputQueryResult? in
                 let filteredCommands = commands.commands.filter { command in
                     if command.command.text.hasPrefix(normalizedQuery) {
                         return true
                     }
                     return false
                 }
-                let sortedCommands = filteredCommands
-                return { _ in return .commands(sortedCommands) }
+                var sortedCommands = filteredCommands.map(ChatInputTextCommand.command)
+                if !shortcuts.isEmpty && sortedCommands.isEmpty {
+                    for shortcut in shortcuts {
+                        sortedCommands.append(.shortcut(shortcut))
+                    }
+                }
+                return { _ in return .commands(ChatInputQueryCommandsResult(
+                    commands: sortedCommands,
+                    accountPeer: accountPeer,
+                    hasShortcuts: !shortcuts.isEmpty,
+                    query: normalizedQuery
+                )) }
             }
             |> castError(ChatContextQueryError.self)
             return signal |> then(commands)
         case let .contextRequest(addressName, query):
+            guard let peer else {
+                return .single({ _ in return .contextRequestResult(nil, nil) })
+            }
             var delayRequest = true
             var signal: Signal<(ChatPresentationInputQueryResult?) -> ChatPresentationInputQueryResult?, ChatContextQueryError> = .complete()
             if let previousQuery = previousQuery {
@@ -265,7 +295,13 @@ private func updatedContextQueryResultStateForQuery(context: AccountContext, pee
             }
             
             let chatPeer = peer
-            let contextBot = context.engine.peers.resolvePeerByName(name: addressName)
+            let contextBot = context.engine.peers.resolvePeerByName(name: addressName, referrer: nil)
+            |> mapToSignal { result -> Signal<EnginePeer?, NoError> in
+                guard case let .result(result) = result else {
+                    return .complete()
+                }
+                return .single(result)
+            }
             |> castError(ChatContextQueryError.self)
             |> mapToSignal { peer -> Signal<(ChatPresentationInputQueryResult?) -> ChatPresentationInputQueryResult?, ChatContextQueryError> in
                 if case let .user(user) = peer, let botInfo = user.botInfo, let _ = botInfo.inlinePlaceholder {
@@ -328,16 +364,16 @@ private func updatedContextQueryResultStateForQuery(context: AccountContext, pee
             
             return signal |> then(contextBot)
         case let .emojiSearch(query, languageCode, range):
-            if query.isSingleEmoji {
-                let hasPremium = context.engine.data.subscribe(TelegramEngine.EngineData.Item.Peer.Peer(id: context.account.peerId))
-                |> map { peer -> Bool in
-                    guard case let .user(user) = peer else {
-                        return false
-                    }
-                    return user.isPremium
+            let hasPremium = context.engine.data.subscribe(TelegramEngine.EngineData.Item.Peer.Peer(id: context.account.peerId))
+            |> map { peer -> Bool in
+                guard case let .user(user) = peer else {
+                    return false
                 }
-                |> distinctUntilChanged
-                
+                return user.isPremium
+            }
+            |> distinctUntilChanged
+        
+            if query.isSingleEmoji {
                 return combineLatest(
                     context.account.postbox.itemCollectionsView(orderedItemListCollectionIds: [], namespaces: [Namespaces.ItemCollection.CloudEmojiPacks], aroundIndex: nil, count: 10000000),
                     hasPremium
@@ -346,18 +382,13 @@ private func updatedContextQueryResultStateForQuery(context: AccountContext, pee
                     var result: [(String, TelegramMediaFile?, String)] = []
                     
                     for entry in view.entries {
-                        guard let item = entry.item as? StickerPackItem else {
+                        guard let item = entry.item as? StickerPackItem, !item.file.isPremiumEmoji || hasPremium else {
                             continue
                         }
-                        for attribute in item.file.attributes {
-                            switch attribute {
-                            case let .CustomEmoji(_, alt, _):
-                                if alt == query {
-                                    if !item.file.isPremiumEmoji || hasPremium {
-                                        result.append((alt, item.file, alt))
-                                    }
-                                }
-                            default:
+                        let stringRepresentations = item.getStringRepresentationsOfIndexKeys()
+                        for stringRepresentation in stringRepresentations {
+                            if stringRepresentation == query {
+                                result.append((stringRepresentation, item.file, stringRepresentation))
                                 break
                             }
                         }
@@ -382,15 +413,6 @@ private func updatedContextQueryResultStateForQuery(context: AccountContext, pee
                         )
                     }
                 }
-            
-                let hasPremium = context.engine.data.subscribe(TelegramEngine.EngineData.Item.Peer.Peer(id: context.account.peerId))
-                |> map { peer -> Bool in
-                    guard case let .user(user) = peer else {
-                        return false
-                    }
-                    return user.isPremium
-                }
-                |> distinctUntilChanged
                 
                 return signal
                 |> castError(ChatContextQueryError.self)
@@ -410,18 +432,13 @@ private func updatedContextQueryResultStateForQuery(context: AccountContext, pee
                         }
                         
                         for entry in view.entries {
-                            guard let item = entry.item as? StickerPackItem else {
+                            guard let item = entry.item as? StickerPackItem, !item.file.isPremiumEmoji || hasPremium else {
                                 continue
                             }
-                            for attribute in item.file.attributes {
-                                switch attribute {
-                                case let .CustomEmoji(_, alt, _):
-                                    if !alt.isEmpty, let keyword = allEmoticons[alt] {
-                                        if !item.file.isPremiumEmoji || hasPremium {
-                                            result.append((alt, item.file, keyword))
-                                        }
-                                    }
-                                default:
+                            let stringRepresentations = item.getStringRepresentationsOfIndexKeys()
+                            for stringRepresentation in stringRepresentations {
+                                if let keyword = allEmoticons[stringRepresentation] {
+                                    result.append((stringRepresentation, item.file, keyword))
                                     break
                                 }
                             }
@@ -470,15 +487,30 @@ func searchQuerySuggestionResultStateForChatInterfacePresentationState(_ chatPre
                                 signal = .single({ _ in return nil })
                             }
                         }
-                        
-                        let participants = searchPeerMembers(context: context, peerId: peer.id, chatLocation: chatPresentationInterfaceState.chatLocation, query: query, scope: .memberSuggestion)
-                        |> map { peers -> (ChatPresentationInputQueryResult?) -> ChatPresentationInputQueryResult? in
+                    
+                        let participants = combineLatest(
+                            context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: context.account.peerId)),
+                            searchPeerMembers(context: context, peerId: peer.id, chatLocation: chatPresentationInterfaceState.chatLocation, query: query, scope: .memberSuggestion)
+                        )
+                        |> map { accountPeer, peers -> (ChatPresentationInputQueryResult?) -> ChatPresentationInputQueryResult? in
                             let filteredPeers = peers
                             var sortedPeers: [EnginePeer] = []
                             sortedPeers.append(contentsOf: filteredPeers.sorted(by: { lhs, rhs in
                                 let result = lhs.indexName.stringRepresentation(lastNameFirst: true).compare(rhs.indexName.stringRepresentation(lastNameFirst: true))
                                 return result == .orderedAscending
                             }))
+                            if let accountPeer {
+                                var hasOwnPeer = false
+                                for peer in sortedPeers {
+                                    if peer.id == accountPeer.id {
+                                        hasOwnPeer = true
+                                        break
+                                    }
+                                }
+                                if !hasOwnPeer {
+                                    sortedPeers.append(accountPeer)
+                                }
+                            }
                             return { _ in return .mentions(sortedPeers) }
                         }
                         
@@ -497,30 +529,34 @@ func searchQuerySuggestionResultStateForChatInterfacePresentationState(_ chatPre
 
 private let dataDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType([.link]).rawValue)
 
-func detectUrl(_ inputText: NSAttributedString?) -> String? {
-    var detectedUrl: String?
+func detectUrls(_ inputText: NSAttributedString?) -> [String] {
+    var detectedUrls: [String] = []
     if let text = inputText, let dataDetector = dataDetector {
         let utf16 = text.string.utf16
         
         let nsRange = NSRange(location: 0, length: utf16.count)
         let matches = dataDetector.matches(in: text.string, options: [], range: nsRange)
-        if let match = matches.first {
+        for match in matches {
             let urlText = (text.string as NSString).substring(with: match.range)
-            detectedUrl = urlText
+            detectedUrls.append(urlText)
         }
         
-        if detectedUrl == nil {
-            inputText?.enumerateAttribute(ChatTextInputAttributes.textUrl, in: nsRange, options: [], using: { value, range, stop in
-                if let value = value as? ChatTextInputTextUrlAttribute {
-                    detectedUrl = value.url
+        inputText?.enumerateAttribute(ChatTextInputAttributes.textUrl, in: nsRange, options: [], using: { value, range, stop in
+            if let value = value as? ChatTextInputTextUrlAttribute {
+                if !detectedUrls.contains(value.url) {
+                    detectedUrls.append(value.url)
                 }
-            })
-        }
+            }
+        })
     }
-    return detectedUrl
+    return detectedUrls
 }
 
-func urlPreviewStateForInputText(_ inputText: NSAttributedString?, context: AccountContext, currentQuery: String?) -> (String?, Signal<(TelegramMediaWebpage?) -> TelegramMediaWebpage?, NoError>)? {
+struct UrlPreviewState {
+    var detectedUrls: [String]
+}
+
+func urlPreviewStateForInputText(_ inputText: NSAttributedString?, context: AccountContext, currentQuery: UrlPreviewState?, forPeerId: PeerId?) -> (UrlPreviewState?, Signal<(TelegramMediaWebpage?) -> (TelegramMediaWebpage, String)?, NoError>)? {
     guard let _ = inputText else {
         if currentQuery != nil {
             return (nil, .single({ _ in return nil }))
@@ -529,10 +565,21 @@ func urlPreviewStateForInputText(_ inputText: NSAttributedString?, context: Acco
         }
     }
     if let _ = dataDetector {
-        let detectedUrl = detectUrl(inputText)
-        if detectedUrl != currentQuery {
-            if let detectedUrl = detectedUrl {
-                return (detectedUrl, webpagePreview(account: context.account, url: detectedUrl) |> map { value in
+        let detectedUrls = detectUrls(inputText)
+        if detectedUrls != (currentQuery?.detectedUrls ?? []) {
+            if !detectedUrls.isEmpty {
+                return (UrlPreviewState(detectedUrls: detectedUrls), webpagePreview(account: context.account, urls: detectedUrls, forPeerId: forPeerId)
+                |> mapToSignal { result -> Signal<(TelegramMediaWebpage, String)?, NoError> in
+                    guard case let .result(webpageResult) = result else {
+                        return .complete()
+                    }
+                    if let webpageResult {
+                        return .single((webpageResult.webpage, webpageResult.sourceUrl))
+                    } else {
+                        return .single(nil)
+                    }
+                }
+                |> map { value in
                     return { _ in return value }
                 })
             } else {

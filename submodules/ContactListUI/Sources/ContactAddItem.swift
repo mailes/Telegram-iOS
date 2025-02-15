@@ -7,10 +7,12 @@ import TelegramCore
 import TelegramPresentationData
 import AppBundle
 import PhoneNumberFormat
+import AccountContext
 
 private let titleFont = Font.regular(17.0)
 
 public class ContactsAddItem: ListViewItem {
+    let context: AccountContext
     let theme: PresentationTheme
     let strings: PresentationStrings
     let phoneNumber: String
@@ -18,7 +20,8 @@ public class ContactsAddItem: ListViewItem {
     
     public let header: ListViewItemHeader?
     
-    public init(theme: PresentationTheme, strings: PresentationStrings, phoneNumber: String, header: ListViewItemHeader?, action: @escaping () -> Void) {
+    public init(context: AccountContext, theme: PresentationTheme, strings: PresentationStrings, phoneNumber: String, header: ListViewItemHeader?, action: @escaping () -> Void) {
+        self.context = context
         self.theme = theme
         self.strings = strings
         self.phoneNumber = phoneNumber
@@ -187,7 +190,7 @@ class ContactsAddItemNode: ListViewItemNode {
             let leftInset: CGFloat = 65.0 + params.leftInset
             let rightInset: CGFloat = 10.0 + params.rightInset
 
-            let titleAttributedString = NSAttributedString(string: item.strings.Contacts_AddPhoneNumber(formatPhoneNumber(item.phoneNumber)).string, font: titleFont, textColor: item.theme.list.itemAccentColor)
+            let titleAttributedString = NSAttributedString(string: item.strings.Contacts_AddPhoneNumber(formatPhoneNumber(context: item.context, number: item.phoneNumber)).string, font: titleFont, textColor: item.theme.list.itemAccentColor)
             
             let (titleLayout, titleApply) = makeTitleLayout(TextNodeLayoutArguments(attributedString: titleAttributedString, backgroundColor: nil, maximumNumberOfLines: 1, truncationType: .end, constrainedSize: CGSize(width: max(0.0, params.width - leftInset - rightInset), height: CGFloat.infinity), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
             
@@ -235,7 +238,7 @@ class ContactsAddItemNode: ListViewItemNode {
         accessoryItemNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -29.0), size: CGSize(width: bounds.size.width, height: 29.0))
     }
     
-    override func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
+    override func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: duration * 0.5)
     }
     

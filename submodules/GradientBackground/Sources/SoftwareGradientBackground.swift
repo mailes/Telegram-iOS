@@ -103,7 +103,7 @@ private func generateGradient(size: CGSize, colors inputColors: [UIColor], posit
         positionFloats.advanced(by: i * 2 + 1).pointee = Float(1.0 - positions[i].y)
     }
 
-    let context = DrawingContext(size: CGSize(width: CGFloat(width), height: CGFloat(height)), scale: 1.0, opaque: true, clear: false)
+    let context = DrawingContext(size: CGSize(width: CGFloat(width), height: CGFloat(height)), scale: 1.0, opaque: true, clear: false)!
     let imageBytes = context.bytes.assumingMemoryBound(to: UInt8.self)
 
     for y in 0 ..< height {
@@ -271,6 +271,22 @@ public final class GradientBackgroundNode: ASDisplayNode {
     
     private var patternOverlayLayer: GradientBackgroundPatternOverlayLayer?
     
+    private class SharedAnimationUpdate {
+        let phase: Int
+        let sender: AnyObject
+        
+        init(
+            phase: Int,
+            sender: AnyObject
+        ) {
+            self.phase = phase
+            self.sender = sender
+        }
+    }
+    
+    private static let sharedAnimationSyncPipe = ValuePipe<SharedAnimationUpdate>()
+    private var sharedAnimationSyncDisposable: Disposable?
+    
     public init(colors: [UIColor]? = nil, useSharedAnimationPhase: Bool = false, adjustSaturation: Bool = true) {
         self.useSharedAnimationPhase = useSharedAnimationPhase
         self.saturation = adjustSaturation ? 1.7 : 1.0
@@ -289,12 +305,26 @@ public final class GradientBackgroundNode: ASDisplayNode {
 
         if useSharedAnimationPhase {
             self.phase = GradientBackgroundNode.sharedPhase
+            
+            self.sharedAnimationSyncDisposable = (GradientBackgroundNode.sharedAnimationSyncPipe.signal()
+            |> filter { [weak self] update in
+                return update.sender !== self
+            }
+            |> deliverOnMainQueue).start(next: { [weak self] update in
+                if let self {
+                    self.phase = update.phase
+                    if let size = self.validLayout {
+                        self.updateLayout(size: size, transition: .immediate, extendAnimation: false, backwards: false, completion: {})
+                    }
+                }
+            })
         } else {
             self.phase = 0
         }
     }
 
     deinit {
+        self.sharedAnimationSyncDisposable?.dispose()
     }
     
     public func setPatternOverlay(layer: GradientBackgroundPatternOverlayLayer?) {
@@ -422,8 +452,7 @@ public final class GradientBackgroundNode: ASDisplayNode {
                         animation.fillMode = .backwards
                         animation.beginTime = self.contentView.layer.convertTime(CACurrentMediaTime(), from: nil) + 0.25
                     }
-
-                    
+   
                     self.isAnimating = true
                     if let patternOverlayLayer = self.patternOverlayLayer {
                         patternOverlayLayer.isAnimating = true
@@ -542,6 +571,8 @@ public final class GradientBackgroundNode: ASDisplayNode {
             }
         }
     }
+    
+
 
     public func animateEvent(transition: ContainedViewLayoutTransition, extendAnimation: Bool, backwards: Bool, completion: @escaping () -> Void) {
         guard case let .animated(duration, _) = transition, duration > 0.001 else {
@@ -560,6 +591,7 @@ public final class GradientBackgroundNode: ASDisplayNode {
         }
         if self.useSharedAnimationPhase {
             GradientBackgroundNode.sharedPhase = self.phase
+            GradientBackgroundNode.sharedAnimationSyncPipe.putNext(SharedAnimationUpdate(phase: self.phase, sender: self))
         }
         if let size = self.validLayout {
             self.updateLayout(size: size, transition: transition, extendAnimation: extendAnimation, backwards: backwards, completion: completion)

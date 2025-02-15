@@ -35,9 +35,9 @@ public enum PeerMessagesPlaylistLocation: Equatable, SharedMediaPlaylistLocation
                 case let .peer(peerId):
                     return .peer(peerId)
                 case let .replyThread(replyThreaMessage):
-                    return .peer(replyThreaMessage.messageId.peerId)
-                case let .feed(id):
-                    return .feed(id)
+                    return .peer(replyThreaMessage.peerId)
+                case .customChatContents:
+                    return .custom
                 }
             case let .singleMessage(id):
                 return .peer(id.peerId)
@@ -95,8 +95,8 @@ public enum PeerMessagesPlaylistLocation: Equatable, SharedMediaPlaylistLocation
     }
 }
 
-public func peerMessageMediaPlayerType(_ message: Message) -> MediaManagerPlayerType? {
-    func extractFileMedia(_ message: Message) -> TelegramMediaFile? {
+public func peerMessageMediaPlayerType(_ message: EngineMessage) -> MediaManagerPlayerType? {
+    func extractFileMedia(_ message: EngineMessage) -> TelegramMediaFile? {
         var file: TelegramMediaFile?
         for media in message.media {
             if let media = media as? TelegramMediaFile {
@@ -120,7 +120,7 @@ public func peerMessageMediaPlayerType(_ message: Message) -> MediaManagerPlayer
     return nil
 }
     
-public func peerMessagesMediaPlaylistAndItemId(_ message: Message, isRecentActions: Bool, isGlobalSearch: Bool, isDownloadList: Bool) -> (SharedMediaPlaylistId, SharedMediaPlaylistItemId)? {
+public func peerMessagesMediaPlaylistAndItemId(_ message: EngineMessage, isRecentActions: Bool, isGlobalSearch: Bool, isDownloadList: Bool) -> (SharedMediaPlaylistId, SharedMediaPlaylistItemId)? {
     if isGlobalSearch && !isDownloadList {
         return (PeerMessagesMediaPlaylistId.custom, PeerMessagesMediaPlaylistItemId(messageId: message.id, messageIndex: message.index))
     } else if isRecentActions && !isDownloadList {
@@ -146,7 +146,7 @@ public protocol MediaManager: AnyObject {
     var musicMediaPlayerState: Signal<(Account, SharedMediaPlayerItemPlaybackStateOrLoading, MediaManagerPlayerType)?, NoError> { get }
     var activeGlobalMediaPlayerAccountId: Signal<(AccountRecordId, Bool)?, NoError> { get }
     
-    func setPlaylist(_ playlist: (Account, SharedMediaPlaylist)?, type: MediaManagerPlayerType, control: SharedMediaPlayerControlAction)
+    func setPlaylist(_ playlist: (AccountContext, SharedMediaPlaylist)?, type: MediaManagerPlayerType, control: SharedMediaPlayerControlAction)
     func playlistControl(_ control: SharedMediaPlayerControlAction, type: MediaManagerPlayerType?)
     
     func filteredPlaylistState(accountId: AccountRecordId, playlistId: SharedMediaPlaylistId, itemId: SharedMediaPlaylistItemId, type: MediaManagerPlayerType) -> Signal<SharedMediaPlayerItemPlaybackState?, NoError>
@@ -202,6 +202,7 @@ public protocol UniversalVideoManager: AnyObject {
     func removePlaybackCompleted(id: AnyHashable, index: Int)
     func statusSignal(content: UniversalVideoContent) -> Signal<MediaPlayerStatus?, NoError>
     func bufferingStatusSignal(content: UniversalVideoContent) -> Signal<(RangeSet<Int64>, Int64)?, NoError>
+    func isNativePictureInPictureActiveSignal(content: UniversalVideoContent) -> Signal<Bool, NoError>
 }
 
 public enum AudioRecordingState: Equatable {
@@ -228,6 +229,8 @@ public protocol ManagedAudioRecorder: AnyObject {
     var recordingState: Signal<AudioRecordingState, NoError> { get }
     
     func start()
+    func pause()
+    func resume()
     func stop()
     func takenRecordedData() -> Signal<RecordedAudioData?, NoError>
 }

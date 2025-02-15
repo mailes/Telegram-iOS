@@ -9,6 +9,8 @@ public final class SolidRoundedButtonComponent: Component {
     public typealias Theme = SolidRoundedButtonTheme
     
     public let title: String?
+    public let label: String?
+    public let badge: String?
     public let icon: UIImage?
     public let theme: SolidRoundedButtonTheme
     public let font: SolidRoundedButtonFont
@@ -16,6 +18,7 @@ public final class SolidRoundedButtonComponent: Component {
     public let height: CGFloat
     public let cornerRadius: CGFloat
     public let gloss: Bool
+    public let isEnabled: Bool
     public let iconName: String?
     public let animationName: String?
     public let iconPosition: SolidRoundedButtonIconPosition
@@ -25,6 +28,8 @@ public final class SolidRoundedButtonComponent: Component {
     
     public init(
         title: String? = nil,
+        label: String? = nil,
+        badge: String? = nil,
         icon: UIImage? = nil,
         theme: SolidRoundedButtonTheme,
         font: SolidRoundedButtonFont = .bold,
@@ -32,6 +37,7 @@ public final class SolidRoundedButtonComponent: Component {
         height: CGFloat = 48.0,
         cornerRadius: CGFloat = 24.0,
         gloss: Bool = false,
+        isEnabled: Bool = true,
         iconName: String? = nil,
         animationName: String? = nil,
         iconPosition: SolidRoundedButtonIconPosition = .left,
@@ -40,6 +46,8 @@ public final class SolidRoundedButtonComponent: Component {
         action: @escaping () -> Void
     ) {
         self.title = title
+        self.label = label
+        self.badge = badge
         self.icon = icon
         self.theme = theme
         self.font = font
@@ -47,6 +55,7 @@ public final class SolidRoundedButtonComponent: Component {
         self.height = height
         self.cornerRadius = cornerRadius
         self.gloss = gloss
+        self.isEnabled = isEnabled
         self.iconName = iconName
         self.animationName = animationName
         self.iconPosition = iconPosition
@@ -57,6 +66,12 @@ public final class SolidRoundedButtonComponent: Component {
     
     public static func ==(lhs: SolidRoundedButtonComponent, rhs: SolidRoundedButtonComponent) -> Bool {
         if lhs.title != rhs.title {
+            return false
+        }
+        if lhs.label != rhs.label {
+            return false
+        }
+        if lhs.badge != rhs.badge {
             return false
         }
         if lhs.icon !== rhs.icon {
@@ -78,6 +93,9 @@ public final class SolidRoundedButtonComponent: Component {
             return false
         }
         if lhs.gloss != rhs.gloss {
+            return false
+        }
+        if lhs.isEnabled != rhs.isEnabled {
             return false
         }
         if lhs.iconName != rhs.iconName {
@@ -104,10 +122,12 @@ public final class SolidRoundedButtonComponent: Component {
         
         private var currentIsLoading = false
         
-        public func update(component: SolidRoundedButtonComponent, availableSize: CGSize, transition: Transition) -> CGSize {
+        public func update(component: SolidRoundedButtonComponent, availableSize: CGSize, transition: ComponentTransition) -> CGSize {
             if self.button == nil {
                 let button = SolidRoundedButtonView(
                     title: component.title,
+                    label: component.label,
+                    badge: component.badge,
                     icon: component.icon,
                     theme: component.theme,
                     font: component.font,
@@ -127,11 +147,16 @@ public final class SolidRoundedButtonComponent: Component {
             
             if let button = self.button {
                 button.title = component.title
+                button.label = component.label
+                button.badge = component.badge
                 button.iconPosition = component.iconPosition
                 button.iconSpacing = component.iconSpacing
                 button.icon = component.iconName.flatMap { UIImage(bundleImageName: $0) }
                 button.animation = component.animationName
                 button.gloss = component.gloss
+                
+                button.isEnabled = component.isEnabled
+                button.isUserInteractionEnabled = component.isEnabled
                 
                 button.updateTheme(component.theme)
                 let height = button.updateLayout(width: availableSize.width, transition: .immediate)
@@ -157,7 +182,7 @@ public final class SolidRoundedButtonComponent: Component {
         return View()
     }
     
-    public func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: Transition) -> CGSize {
+    public func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: ComponentTransition) -> CGSize {
         return view.update(component: self, availableSize: availableSize, transition: transition)
     }
 }

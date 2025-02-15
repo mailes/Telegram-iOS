@@ -13,6 +13,7 @@ import SearchUI
 import TelegramPermissionsUI
 import AppBundle
 import DeviceAccess
+import ShareController
 
 public class ComposeControllerImpl: ViewController, ComposeController {
     private let context: AccountContext
@@ -62,7 +63,7 @@ public class ComposeControllerImpl: ViewController, ComposeController {
         }
         
         self.presentationDataDisposable = (context.sharedContext.presentationData
-        |> deliverOnMainQueue).start(next: { [weak self] presentationData in
+        |> deliverOnMainQueue).startStrict(next: { [weak self] presentationData in
             if let strongSelf = self {
                 let previousTheme = strongSelf.presentationData.theme
                 let previousStrings = strongSelf.presentationData.strings
@@ -116,7 +117,7 @@ public class ComposeControllerImpl: ViewController, ComposeController {
             self?.activateSearch()
         }
         
-        self.contactsNode.contactListNode.openPeer = { [weak self] peer, _ in
+        self.contactsNode.contactListNode.openPeer = { [weak self] peer, _, _, _ in
             if case let .peer(peer, _, _) = peer {
                 self?.openPeer(peerId: peer.id)
             }
@@ -124,14 +125,14 @@ public class ComposeControllerImpl: ViewController, ComposeController {
 
         self.contactsNode.openCreateNewGroup = { [weak self] in
             if let strongSelf = self {
-                let controller = strongSelf.context.sharedContext.makeContactMultiselectionController(ContactMultiselectionControllerParams(context: strongSelf.context, mode: .groupCreation, options: []))
+                let controller = strongSelf.context.sharedContext.makeContactMultiselectionController(ContactMultiselectionControllerParams(context: strongSelf.context, mode: .groupCreation, onlyWriteable: true))
                 (strongSelf.navigationController as? NavigationController)?.pushViewController(controller, completion: { [weak self] in
                     if let strongSelf = self {
                         strongSelf.contactsNode.contactListNode.listNode.clearHighlightAnimated(true)
                     }
                 })
                 strongSelf.createActionDisposable.set((controller.result
-                |> deliverOnMainQueue).start(next: { [weak controller] result in
+                |> deliverOnMainQueue).startStrict(next: { [weak controller] result in
                     var peerIds: [ContactListPeerId] = []
                     if case let .result(peerIdsValue, _) = result {
                         peerIds = peerIdsValue
@@ -156,11 +157,11 @@ public class ComposeControllerImpl: ViewController, ComposeController {
                 let controller = ContactSelectionControllerImpl(ContactSelectionControllerParams(context: strongSelf.context, autoDismiss: false, title: { $0.Compose_NewEncryptedChatTitle }))
                 strongSelf.createActionDisposable.set((controller.result
                     |> take(1)
-                    |> deliverOnMainQueue).start(next: { [weak controller] result in
-                    if let strongSelf = self, let (contactPeers, _, _, _, _) = result, case let .peer(peer, _, _) = contactPeers.first {
+                    |> deliverOnMainQueue).startStrict(next: { [weak controller] result in
+                    if let strongSelf = self, let (contactPeers, _, _, _, _, _) = result, case let .peer(peer, _, _) = contactPeers.first {
                         controller?.dismissSearch()
                         controller?.displayNavigationActivity = true
-                        strongSelf.createActionDisposable.set((strongSelf.context.engine.peers.createSecretChat(peerId: peer.id) |> deliverOnMainQueue).start(next: { peerId in
+                        strongSelf.createActionDisposable.set((strongSelf.context.engine.peers.createSecretChat(peerId: peer.id) |> deliverOnMainQueue).startStrict(next: { peerId in
                             if let strongSelf = self, let controller = controller {
                                 controller.displayNavigationActivity = false
                                 (controller.navigationController as? NavigationController)?.replaceAllButRootController(ChatControllerImpl(context: strongSelf.context, chatLocation: .peer(id: peerId)), animated: true)
@@ -192,7 +193,7 @@ public class ComposeControllerImpl: ViewController, ComposeController {
         self.contactsNode.openCreateContact = { [weak self] in
             let _ = (DeviceAccess.authorizationStatus(subject: .contacts)
             |> take(1)
-            |> deliverOnMainQueue).start(next: { status in
+            |> deliverOnMainQueue).startStandalone(next: { status in
                 guard let strongSelf = self else {
                     return
                 }
@@ -200,7 +201,7 @@ public class ComposeControllerImpl: ViewController, ComposeController {
                 switch status {
                     case .allowed:
                         let contactData = DeviceContactExtendedData(basicData: DeviceContactBasicData(firstName: "", lastName: "", phoneNumbers: [DeviceContactPhoneNumberData(label: "_$!<Mobile>!$_", value: "+")]), middleName: "", prefix: "", suffix: "", organization: "", jobTitle: "", department: "", emailAddresses: [], urls: [], addresses: [], birthdayDate: nil, socialProfiles: [], instantMessagingProfiles: [], note: "")
-                        (strongSelf.navigationController as? NavigationController)?.pushViewController(strongSelf.context.sharedContext.makeDeviceContactInfoController(context: strongSelf.context, subject: .create(peer: nil, contactData: contactData, isSharing: false, shareViaException: false, completion: { peer, stableId, contactData in
+                        (strongSelf.navigationController as? NavigationController)?.pushViewController(strongSelf.context.sharedContext.makeDeviceContactInfoController(context: ShareControllerAppAccountContext(context: strongSelf.context), environment: ShareControllerAppEnvironment(sharedContext: strongSelf.context.sharedContext), subject: .create(peer: nil, contactData: contactData, isSharing: false, shareViaException: false, completion: { peer, stableId, contactData in
                             guard let strongSelf = self else {
                                 return
                             }
@@ -211,7 +212,7 @@ public class ComposeControllerImpl: ViewController, ComposeController {
                                     }
                                 }
                             } else {
-                                (strongSelf.navigationController as? NavigationController)?.replaceAllButRootController(strongSelf.context.sharedContext.makeDeviceContactInfoController(context: strongSelf.context, subject: .vcard(nil, stableId, contactData), completed: nil, cancelled: nil), animated: true)
+                                (strongSelf.navigationController as? NavigationController)?.replaceAllButRootController(strongSelf.context.sharedContext.makeDeviceContactInfoController(context: ShareControllerAppAccountContext(context: strongSelf.context), environment: ShareControllerAppEnvironment(sharedContext: strongSelf.context.sharedContext), subject: .vcard(nil, stableId, contactData), completed: nil, cancelled: nil), animated: true)
                             }
                         }), completed: nil, cancelled: nil))
                     case .notDetermined:

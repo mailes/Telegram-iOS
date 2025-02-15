@@ -104,7 +104,7 @@ public final class NotificationSoundList: Equatable, Codable {
 
 private extension NotificationSoundList.NotificationSound {
     convenience init?(apiDocument: Api.Document) {
-        guard let file = telegramMediaFileFromApiDocument(apiDocument) else {
+        guard let file = telegramMediaFileFromApiDocument(apiDocument, altDocuments: []) else {
             return nil
         }
         self.init(file: file)
@@ -152,7 +152,7 @@ public func ensureDownloadedNotificationSoundList(postbox: Postbox) -> Signal<Ne
             
             for resource in resources {
                 signals.append(
-                    fetchedMediaResource(mediaBox: postbox.mediaBox, reference: .soundList(resource: resource))
+                    fetchedMediaResource(mediaBox: postbox.mediaBox, userLocation: .other, userContentType: .file, reference: .soundList(resource: resource))
                     |> ignoreValues
                     |> `catch` { _ -> Signal<Never, NoError> in
                         return .complete()
@@ -228,7 +228,7 @@ private func pollNotificationSoundList(postbox: Postbox, network: Network) -> Si
                         
                         for resource in resources {
                             signals.append(
-                                fetchedMediaResource(mediaBox: postbox.mediaBox, reference: .soundList(resource: resource))
+                                fetchedMediaResource(mediaBox: postbox.mediaBox, userLocation: .other, userContentType: .file, reference: .soundList(resource: resource))
                                 |> ignoreValues
                                 |> `catch` { _ -> Signal<Never, NoError> in
                                     return .complete()
@@ -268,10 +268,11 @@ func _internal_saveNotificationSound(account: Account, file: FileMediaReference,
     guard let resource = file.media.resource as? CloudDocumentMediaResource else {
         return .fail(.generic)
     }
+    let accountPeerId = account.peerId
     return account.network.request(Api.functions.account.saveRingtone(id: .inputDocument(id: resource.fileId, accessHash: resource.accessHash, fileReference: Buffer(data: resource.fileReference)), unsave: unsave ? .boolTrue : .boolFalse))
     |> `catch` { error -> Signal<Api.account.SavedRingtone, MTRpcError> in
         if error.errorDescription == "FILE_REFERENCE_EXPIRED" {
-            return revalidateMediaResourceReference(postbox: account.postbox, network: account.network, revalidationContext: account.mediaReferenceRevalidationContext, info: TelegramCloudMediaResourceFetchInfo(reference: file.abstract.resourceReference(file.media.resource), preferBackgroundReferenceRevalidation: false, continueInBackground: false), resource: file.media.resource)
+            return revalidateMediaResourceReference(accountPeerId: accountPeerId, postbox: account.postbox, network: account.network, revalidationContext: account.mediaReferenceRevalidationContext, info: TelegramCloudMediaResourceFetchInfo(reference: file.abstract.resourceReference(file.media.resource), preferBackgroundReferenceRevalidation: false, continueInBackground: false), resource: file.media.resource)
             |> mapError { _ -> MTRpcError in
                 return MTRpcError(errorCode: 500, errorDescription: "Internal")
             }
@@ -312,7 +313,7 @@ func _internal_uploadNotificationSound(account: Account, title: String, data: Da
                 return .generic
             }
             |> mapToSignal { result -> Signal<NotificationSoundList.NotificationSound, UploadNotificationSoundError> in
-                guard let file = telegramMediaFileFromApiDocument(result) else {
+                guard let file = telegramMediaFileFromApiDocument(result, altDocuments: []) else {
                     return .fail(.generic)
                 }
                 return account.postbox.transaction { transaction -> NotificationSoundList.NotificationSound in

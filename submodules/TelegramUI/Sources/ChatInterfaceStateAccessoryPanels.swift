@@ -4,8 +4,15 @@ import AsyncDisplayKit
 import TelegramCore
 import AccountContext
 import ChatPresentationInterfaceState
+import ChatControllerInteraction
+import AccessoryPanelNode
+import ForwardAccessoryPanelNode
+import ReplyAccessoryPanelNode
 
 func accessoryPanelForChatPresentationIntefaceState(_ chatPresentationInterfaceState: ChatPresentationInterfaceState, context: AccountContext, currentPanel: AccessoryPanelNode?, chatControllerInteraction: ChatControllerInteraction?, interfaceInteraction: ChatPanelInterfaceInteraction?) -> AccessoryPanelNode? {
+    if case .standard(.previewing) = chatPresentationInterfaceState.mode {
+        return nil
+    }
     if let _ = chatPresentationInterfaceState.interfaceState.selectionState {
         return nil
     }
@@ -14,21 +21,21 @@ func accessoryPanelForChatPresentationIntefaceState(_ chatPresentationInterfaceS
     }
     
     switch chatPresentationInterfaceState.subject {
-        case .pinnedMessages, .forwardedMessages:
-            return nil
-        default:
-            break
+    case .pinnedMessages, .messageOptions:
+        return nil
+    default:
+        break
     }
     
     if let editMessage = chatPresentationInterfaceState.interfaceState.editMessage {
-        if let editingUrlPreview = chatPresentationInterfaceState.editingUrlPreview, editMessage.disableUrlPreview != editingUrlPreview.0 {
+        if let editingUrlPreview = chatPresentationInterfaceState.editingUrlPreview, !editMessage.disableUrlPreviews.contains(editingUrlPreview.url) {
             if let previewPanelNode = currentPanel as? WebpagePreviewAccessoryPanelNode {
                 previewPanelNode.interfaceInteraction = interfaceInteraction
-                previewPanelNode.replaceWebpage(url: editingUrlPreview.0, webpage: editingUrlPreview.1)
+                previewPanelNode.replaceWebpage(url: editingUrlPreview.url, webpage: editingUrlPreview.webPage)
                 previewPanelNode.updateThemeAndStrings(theme: chatPresentationInterfaceState.theme, strings: chatPresentationInterfaceState.strings)
                 return previewPanelNode
             } else {
-                let panelNode = WebpagePreviewAccessoryPanelNode(context: context, url: editingUrlPreview.0, webpage: editingUrlPreview.1, theme: chatPresentationInterfaceState.theme, strings: chatPresentationInterfaceState.strings)
+                let panelNode = WebpagePreviewAccessoryPanelNode(context: context, url: editingUrlPreview.url, webpage: editingUrlPreview.webPage, theme: chatPresentationInterfaceState.theme, strings: chatPresentationInterfaceState.strings)
                 panelNode.interfaceInteraction = interfaceInteraction
                 return panelNode
             }
@@ -43,14 +50,14 @@ func accessoryPanelForChatPresentationIntefaceState(_ chatPresentationInterfaceS
             panelNode.interfaceInteraction = interfaceInteraction
             return panelNode
         }
-    } else if let urlPreview = chatPresentationInterfaceState.urlPreview, chatPresentationInterfaceState.interfaceState.composeDisableUrlPreview != urlPreview.0 {
+    } else if let urlPreview = chatPresentationInterfaceState.urlPreview, !chatPresentationInterfaceState.interfaceState.composeDisableUrlPreviews.contains(urlPreview.url) {
         if let previewPanelNode = currentPanel as? WebpagePreviewAccessoryPanelNode {
             previewPanelNode.interfaceInteraction = interfaceInteraction
-            previewPanelNode.replaceWebpage(url: urlPreview.0, webpage: urlPreview.1)
+            previewPanelNode.replaceWebpage(url: urlPreview.url, webpage: urlPreview.webPage)
             previewPanelNode.updateThemeAndStrings(theme: chatPresentationInterfaceState.theme, strings: chatPresentationInterfaceState.strings)
             return previewPanelNode
         } else {
-            let panelNode = WebpagePreviewAccessoryPanelNode(context: context, url: urlPreview.0, webpage: urlPreview.1, theme: chatPresentationInterfaceState.theme, strings: chatPresentationInterfaceState.strings)
+            let panelNode = WebpagePreviewAccessoryPanelNode(context: context, url: urlPreview.url, webpage: urlPreview.webPage, theme: chatPresentationInterfaceState.theme, strings: chatPresentationInterfaceState.strings)
             panelNode.interfaceInteraction = interfaceInteraction
             return panelNode
         }
@@ -64,15 +71,26 @@ func accessoryPanelForChatPresentationIntefaceState(_ chatPresentationInterfaceS
             panelNode.interfaceInteraction = interfaceInteraction
             return panelNode
         }
-    } else if let replyMessageId = chatPresentationInterfaceState.interfaceState.replyMessageId {
-        if let replyPanelNode = currentPanel as? ReplyAccessoryPanelNode, replyPanelNode.messageId == replyMessageId {
+    } else if let replyMessageSubject = chatPresentationInterfaceState.interfaceState.replyMessageSubject {
+        if let replyPanelNode = currentPanel as? ReplyAccessoryPanelNode, replyPanelNode.messageId == replyMessageSubject.messageId && replyPanelNode.quote == replyMessageSubject.quote {
             replyPanelNode.interfaceInteraction = interfaceInteraction
             replyPanelNode.updateThemeAndStrings(theme: chatPresentationInterfaceState.theme, strings: chatPresentationInterfaceState.strings)
             return replyPanelNode
         } else {
-            let panelNode = ReplyAccessoryPanelNode(context: context, messageId: replyMessageId, theme: chatPresentationInterfaceState.theme, strings: chatPresentationInterfaceState.strings, nameDisplayOrder: chatPresentationInterfaceState.nameDisplayOrder, dateTimeFormat: chatPresentationInterfaceState.dateTimeFormat, animationCache: chatControllerInteraction?.presentationContext.animationCache, animationRenderer: chatControllerInteraction?.presentationContext.animationRenderer)
-            panelNode.interfaceInteraction = interfaceInteraction
-            return panelNode
+            var chatPeerId: EnginePeer.Id?
+            if let peerId = chatPresentationInterfaceState.chatLocation.peerId {
+                chatPeerId = peerId
+            } else if case .customChatContents = chatPresentationInterfaceState.chatLocation {
+                chatPeerId = context.account.peerId
+            }
+            
+            if let chatPeerId {
+                let panelNode = ReplyAccessoryPanelNode(context: context, chatPeerId: chatPeerId, messageId: replyMessageSubject.messageId, quote: replyMessageSubject.quote, theme: chatPresentationInterfaceState.theme, strings: chatPresentationInterfaceState.strings, nameDisplayOrder: chatPresentationInterfaceState.nameDisplayOrder, dateTimeFormat: chatPresentationInterfaceState.dateTimeFormat, animationCache: chatControllerInteraction?.presentationContext.animationCache, animationRenderer: chatControllerInteraction?.presentationContext.animationRenderer)
+                panelNode.interfaceInteraction = interfaceInteraction
+                return panelNode
+            } else {
+                return nil
+            }
         }
     } else {
         return nil

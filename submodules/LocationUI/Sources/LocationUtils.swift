@@ -8,7 +8,7 @@ import AccountContext
 
 extension TelegramMediaMap {
     convenience init(coordinate: CLLocationCoordinate2D, liveBroadcastingTimeout: Int32? = nil, proximityNotificationRadius: Int32? = nil) {
-        self.init(latitude: coordinate.latitude, longitude: coordinate.longitude, heading: nil, accuracyRadius: nil, geoPlace: nil, venue: nil, liveBroadcastingTimeout: liveBroadcastingTimeout, liveProximityNotificationRadius: proximityNotificationRadius)
+        self.init(latitude: coordinate.latitude, longitude: coordinate.longitude, heading: nil, accuracyRadius: nil, venue: nil, liveBroadcastingTimeout: liveBroadcastingTimeout, liveProximityNotificationRadius: proximityNotificationRadius)
     }
     
     var coordinate: CLLocationCoordinate2D {
@@ -24,19 +24,45 @@ extension MKMapRect {
     }
 }
 
-extension CLLocationCoordinate2D: Equatable {
-
+public func locationCoordinatesAreEqual(_ lhs: CLLocationCoordinate2D?, _ rhs: CLLocationCoordinate2D?) -> Bool {
+    if let lhs, let rhs {
+        return lhs.isEqual(to: rhs)
+    } else if (lhs == nil) != (rhs == nil) {
+        return false
+    } else {
+        return true
+    }
 }
 
-public func ==(lhs: CLLocationCoordinate2D, rhs: CLLocationCoordinate2D) -> Bool {
-    return lhs.latitude == rhs.latitude && lhs.longitude == rhs.longitude
+extension CLLocationCoordinate2D {
+    func isEqual(to other: CLLocationCoordinate2D) -> Bool {
+        return self.latitude == other.latitude && self.longitude == other.longitude
+    }
 }
 
-public func nearbyVenues(context: AccountContext, latitude: Double, longitude: Double, query: String? = nil) -> Signal<[TelegramMediaMap], NoError> {
-    return context.engine.data.get(TelegramEngine.EngineData.Item.Configuration.SearchBots())
-    |> mapToSignal { searchBotsConfiguration in
-        return context.engine.peers.resolvePeerByName(name: searchBotsConfiguration.venueBotUsername ?? "foursquare")
-        |> take(1)
+public func nearbyVenues(context: AccountContext, story: Bool = false, latitude: Double, longitude: Double, query: String? = nil) -> Signal<ChatContextResultCollection?, NoError> {
+    let botUsername: Signal<String, NoError>
+    if story {
+        botUsername = context.engine.data.get(TelegramEngine.EngineData.Item.Configuration.App())
+        |> map { appConfiguration in
+            let storiesConfiguration = StoriesConfiguration.with(appConfiguration: appConfiguration)
+            return storiesConfiguration.venueSearchBot
+        }
+    } else {
+        botUsername = context.engine.data.get(TelegramEngine.EngineData.Item.Configuration.SearchBots())
+        |> map { searchBotsConfiguration -> String in
+            return searchBotsConfiguration.venueBotUsername ?? "foursquare"
+        }
+    }
+    return botUsername
+    |> mapToSignal { botUsername in
+        return context.engine.peers.resolvePeerByName(name: botUsername, referrer: nil)
+        |> mapToSignal { result -> Signal<EnginePeer?, NoError> in
+            guard case let .result(result) = result else {
+                return .complete()
+            }
+            return .single(result)
+        }
         |> mapToSignal { peer -> Signal<ChatContextResultCollection?, NoError> in
             guard let peer = peer else {
                 return .single(nil)
@@ -49,22 +75,11 @@ public func nearbyVenues(context: AccountContext, latitude: Double, longitude: D
                 return .single(nil)
             }
         }
-        |> map { contextResult -> [TelegramMediaMap] in
-            guard let contextResult = contextResult else {
-                return []
+        |> map { contextResult -> ChatContextResultCollection? in
+            guard let contextResult else {
+                return nil
             }
-            var list: [TelegramMediaMap] = []
-            for result in contextResult.results {
-                switch result.message {
-                    case let .mapLocation(mapMedia, _):
-                        if let _ = mapMedia.venue {
-                            list.append(mapMedia)
-                        }
-                    default:
-                        break
-                }
-            }
-            return list
+            return contextResult
         }
     }
 }
@@ -94,7 +109,7 @@ func stringForEstimatedDuration(strings: PresentationStrings, time: Double, form
     }
 }
 
-func throttledUserLocation(_ userLocation: Signal<CLLocation?, NoError>) -> Signal<CLLocation?, NoError> {
+public func throttledUserLocation(_ userLocation: Signal<CLLocation?, NoError>) -> Signal<CLLocation?, NoError> {
     return userLocation
     |> reduceLeft(value: nil) { current, updated, emit -> CLLocation? in
         if let current = current {
@@ -119,13 +134,13 @@ func throttledUserLocation(_ userLocation: Signal<CLLocation?, NoError>) -> Sign
     }
 }
 
-enum ExpectedTravelTime: Equatable {
+public enum ExpectedTravelTime: Equatable {
     case unknown
     case calculating
     case ready(Double)
 }
 
-func getExpectedTravelTime(coordinate: CLLocationCoordinate2D, transportType: MKDirectionsTransportType) -> Signal<ExpectedTravelTime, NoError> {
+public func getExpectedTravelTime(coordinate: CLLocationCoordinate2D, transportType: MKDirectionsTransportType) -> Signal<ExpectedTravelTime, NoError> {
     return Signal { subscriber in
         subscriber.putNext(.calculating)
         

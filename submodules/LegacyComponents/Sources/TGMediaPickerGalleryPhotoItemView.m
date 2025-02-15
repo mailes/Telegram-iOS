@@ -20,8 +20,7 @@
 
 #import "TGMediaPickerGalleryPhotoItem.h"
 
-#import "TGPhotoEntitiesContainerView.h"
-#import "TGPhotoPaintController.h"
+#import "TGPhotoDrawingController.h"
 
 #import <LegacyComponents/TGMenuView.h>
 
@@ -42,7 +41,7 @@
     
     UIView *_contentView;
     UIView *_contentWrapperView;
-    TGPhotoEntitiesContainerView *_entitiesContainerView;
+    UIView<TGPhotoDrawingEntitiesView> *_entitiesView;
     
     SMetaDisposable *_adjustmentsDisposable;
     SMetaDisposable *_attributesDisposable;
@@ -90,11 +89,7 @@
         
         _contentWrapperView = [[UIView alloc] init];
         [_contentView addSubview:_contentWrapperView];
-        
-        _entitiesContainerView = [[TGPhotoEntitiesContainerView alloc] init];
-        _entitiesContainerView.userInteractionEnabled = false;
-        [_contentWrapperView addSubview:_entitiesContainerView];
-        
+
         _fileInfoLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 200, 20)];
         _fileInfoLabel.backgroundColor = [UIColor clearColor];
         _fileInfoLabel.font = TGSystemFontOfSize(13);
@@ -143,7 +138,11 @@
     
     [super setItem:item synchronously:synchronously];
     
-    _entitiesContainerView.stickersContext = item.stickersContext;
+    if (_entitiesView == nil) {
+        _entitiesView = [item.stickersContext drawingEntitiesViewWithSize:item.asset.originalSize];
+        _entitiesView.userInteractionEnabled = false;
+        [_contentWrapperView addSubview:_entitiesView];
+    }
     
     _imageSize = item.asset.originalSize;
     [self reset];
@@ -216,15 +215,15 @@
             }];
             
             SSignal *adjustmentsSignal = [item.editingContext adjustmentsSignalForItem:item.editableMediaItem];
-            [_adjustmentsDisposable setDisposable:[[adjustmentsSignal deliverOn:[SQueue mainQueue]] startWithNext:^(__unused id<TGMediaEditAdjustments> next)
+            [_adjustmentsDisposable setDisposable:[[adjustmentsSignal deliverOn:[SQueue mainQueue]] startStrictWithNext:^(__unused id<TGMediaEditAdjustments> next)
             {
                 __strong TGMediaPickerGalleryPhotoItemView *strongSelf = weakSelf;
                 if (strongSelf == nil)
                     return;
                 
                 [strongSelf layoutEntities];
-                [strongSelf->_entitiesContainerView setupWithPaintingData:next.paintingData];
-            }]];
+                [strongSelf->_entitiesView setupWithEntitiesData:next.paintingData.entitiesData];
+            } file:__FILE_NAME__ line:__LINE__]];
         }
         
         if (item.immediateThumbnailImage != nil)
@@ -249,11 +248,11 @@
 
         }]];
         
-        if (!item.asFile) {
-            [_facesDisposable setDisposable:[[TGPaintFaceDetector detectFacesInItem:item.editableMediaItem editingContext:item.editingContext] startWithNext:nil]];
-            
-            return;
-        }
+//        if (!item.asFile) {
+//            [_facesDisposable setDisposable:[[TGPaintFaceDetector detectFacesInItem:item.editableMediaItem editingContext:item.editingContext] startStrictWithNext:nil file:__FILE_NAME__ line:__LINE__]];
+//            
+//            return;
+//        }
         
         _fileInfoLabel.text = nil;
         
@@ -262,7 +261,7 @@
         
         if ([item.asset isKindOfClass:[TGMediaAsset class]])
         {
-            [_attributesDisposable setDisposable:[[[TGMediaAssetImageSignals fileAttributesForAsset:(TGMediaAsset *)item.asset] deliverOn:[SQueue mainQueue]] startWithNext:^(TGMediaAssetImageFileAttributes *next)
+            [_attributesDisposable setDisposable:[[[TGMediaAssetImageSignals fileAttributesForAsset:(TGMediaAsset *)item.asset] deliverOn:[SQueue mainQueue]] startStrictWithNext:^(TGMediaAssetImageFileAttributes *next)
             {
                 __strong TGMediaPickerGalleryPhotoItemView *strongSelf = weakSelf;
                 if (strongSelf == nil)
@@ -277,7 +276,7 @@
                 } else {
                     strongSelf->_fileInfoLabel.text = dimensions;
                 }
-            }]];
+            } file:__FILE_NAME__ line:__LINE__]];
         }
     }
 }
@@ -486,27 +485,27 @@
     _contentView.transform = rotationTransform;
     _contentView.frame = previewFrame;
     
-    CGSize fittedContentSize = [TGPhotoPaintController fittedContentSize:cropRect orientation:orientation originalSize:originalSize];
-    CGRect fittedCropRect = [TGPhotoPaintController fittedCropRect:cropRect originalSize:originalSize keepOriginalSize:false];
+    CGSize fittedContentSize = [TGPhotoDrawingController fittedContentSize:cropRect orientation:orientation originalSize:originalSize];
+    CGRect fittedCropRect = [TGPhotoDrawingController fittedCropRect:cropRect originalSize:originalSize keepOriginalSize:false];
     _contentWrapperView.frame = CGRectMake(0.0f, 0.0f, fittedContentSize.width, fittedContentSize.height);
     
     CGFloat contentScale = _contentView.bounds.size.width / fittedCropRect.size.width;
     _contentWrapperView.transform = CGAffineTransformMakeScale(contentScale, contentScale);
     _contentWrapperView.frame = CGRectMake(0.0f, 0.0f, _contentView.bounds.size.width, _contentView.bounds.size.height);
     
-    CGRect rect = [TGPhotoPaintController fittedCropRect:cropRect originalSize:originalSize keepOriginalSize:true];
-    _entitiesContainerView.frame = CGRectMake(0, 0, rect.size.width, rect.size.height);
-    _entitiesContainerView.transform = CGAffineTransformMakeRotation(rotation);
+    CGRect rect = [TGPhotoDrawingController fittedCropRect:cropRect originalSize:originalSize keepOriginalSize:true];
+    _entitiesView.frame = CGRectMake(0, 0, rect.size.width, rect.size.height);
+    _entitiesView.transform = CGAffineTransformMakeRotation(rotation);
     
-    CGSize fittedOriginalSize = TGScaleToSize(originalSize, [TGPhotoPaintController maximumPaintingSize]);
+    CGSize fittedOriginalSize = TGScaleToSize(originalSize, [TGPhotoDrawingController maximumPaintingSize]);
     CGSize rotatedSize = TGRotatedContentSize(fittedOriginalSize, rotation);
     CGPoint centerPoint = CGPointMake(rotatedSize.width / 2.0f, rotatedSize.height / 2.0f);
     
     CGFloat scale = fittedOriginalSize.width / originalSize.width;
-    CGPoint offset = TGPaintSubtractPoints(centerPoint, [TGPhotoPaintController fittedCropRect:cropRect centerScale:scale]);
+    CGPoint offset = TGPaintSubtractPoints(centerPoint, [TGPhotoDrawingController fittedCropRect:cropRect centerScale:scale]);
     
     CGPoint boundsCenter = TGPaintCenterOfRect(_contentWrapperView.bounds);
-    _entitiesContainerView.center = TGPaintAddPoints(boundsCenter, offset);
+    _entitiesView.center = TGPaintAddPoints(boundsCenter, offset);
 }
 
 @end

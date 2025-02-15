@@ -56,6 +56,8 @@ private let accountAuxiliaryMethods = AccountAuxiliaryMethods(fetchResource: { a
     return .single(nil)
 }, prepareSecretThumbnailData: { _ in
     return nil
+}, backgroundUpload: { _, _, _ in
+    return .single(nil)
 })
 
 private func rootPathForBasePath(_ appGroupPath: String) -> String {
@@ -175,9 +177,14 @@ private func getCommonTimeline(friends: [Friend]?, in context: TimelineProviderC
                     }
                 }
                 
+                var isForum = false
+                if let peer = peer as? TelegramChannel, peer.flags.contains(.isForum) {
+                    isForum = true
+                }
+                
                 let widgetPeer = WidgetDataPeer(id: peer.id.toInt64(), name: name, lastName: lastName, letters: peer.displayLetters, avatarPath: smallestImageRepresentation(peer.profileImageRepresentations).flatMap { representation in
                     return postbox.mediaBox.resourcePath(representation.resource)
-                }, badge: badge, message: mappedMessage)
+                }, badge: badge, message: mappedMessage, isForum: isForum)
                 
                 result.append(ParsedPeer(accountId: accountId, accountPeerId: state.peerId.toInt64(), peer: widgetPeer))
             }
@@ -271,8 +278,8 @@ struct AvatarItemView: View {
     var body: some View {
         return ZStack {
             if let peer = peer {
-                Image(uiImage: avatarImage(accountPeerId: peer.accountPeerId, peer: peer.peer, size: CGSize(width: itemSize, height: itemSize)))
-                .clipShape(Circle())
+                Image(uiImage: avatarImage(accountPeerId: peer.accountPeerId, peer: peer.peer, size: CGSize(width: itemSize, height: itemSize), style: peer.peer.isForum ? .roundedRect : .round))
+                    .mask(peer.peer.isForum ? AnyView(RoundedRectangle(cornerRadius: itemSize * 0.25)) : AnyView(Circle()))
             } else {
                 Circle()
                     .fill(placeholderColor)
@@ -722,9 +729,22 @@ struct WidgetView: View {
                 chatUpdateView(size: geometry.size)
             })
         })
-        .background(Rectangle().foregroundColor(getBackgroundColor()))
         .padding(0.0)
         .unredacted()
+        .widgetBackground(Rectangle().foregroundColor(getBackgroundColor()))
+    }
+}
+
+@available(iOSApplicationExtension 14.0, iOS 14.0, *)
+extension View {
+    func widgetBackground(_ backgroundView: some View) -> some View {
+        if #available(iOSApplicationExtension 17.0, iOS 17.0, *) {
+            return containerBackground(for: .widget) {
+                backgroundView
+            }
+        } else {
+            return background(backgroundView)
+        }
     }
 }
 
@@ -754,6 +774,17 @@ struct AvatarsWidgetView: View {
             return Color(.sRGB, red: 235.0 / 255.0, green: 235.0 / 255.0, blue: 241.0 / 255.0, opacity: 1.0)
         case .dark:
             return Color(.sRGB, red: 38.0 / 255.0, green: 38.0 / 255.0, blue: 41.0 / 255.0, opacity: 1.0)
+        @unknown default:
+            return .secondary
+        }
+    }
+    
+    func getBackgroundColor() -> Color {
+        switch colorScheme {
+        case .light:
+            return .white
+        case .dark:
+            return Color(.sRGB, red: 28.0 / 255.0, green: 28.0 / 255.0, blue: 30.0 / 255.0, opacity: 1.0)
         @unknown default:
             return .secondary
         }
@@ -814,6 +845,7 @@ struct AvatarsWidgetView: View {
         })
         .padding(EdgeInsets(top: 10.0, leading: 10.0, bottom: 10.0, trailing: 10.0))
         .unredacted()
+        .widgetBackground(Rectangle().foregroundColor(getBackgroundColor()))
     }
 }
 
@@ -847,12 +879,22 @@ struct Static_Widget: Widget {
     public var body: some WidgetConfiguration {
         let presentationData = WidgetPresentationData.getForExtension()
         
-        return IntentConfiguration(kind: kind, intent: SelectFriendsIntent.self, provider: Provider(), content: { entry in
-            WidgetView(data: getWidgetData(contents: entry.contents), presentationData: presentationData)
-        })
-        .supportedFamilies([.systemMedium])
-        .configurationDisplayName(presentationData.widgetChatsGalleryTitle)
-        .description(presentationData.widgetChatsGalleryDescription)
+        if #available(iOSApplicationExtension 15.0, iOS 15.0, *) {
+            return IntentConfiguration(kind: kind, intent: SelectFriendsIntent.self, provider: Provider(), content: { entry in
+                WidgetView(data: getWidgetData(contents: entry.contents), presentationData: presentationData)
+            })
+            .supportedFamilies([.systemMedium])
+            .configurationDisplayName(presentationData.widgetChatsGalleryTitle)
+            .contentMarginsDisabled()
+            .description(presentationData.widgetChatsGalleryDescription)
+        } else {
+            return IntentConfiguration(kind: kind, intent: SelectFriendsIntent.self, provider: Provider(), content: { entry in
+                WidgetView(data: getWidgetData(contents: entry.contents), presentationData: presentationData)
+            })
+            .supportedFamilies([.systemMedium])
+            .configurationDisplayName(presentationData.widgetChatsGalleryTitle)
+            .description(presentationData.widgetChatsGalleryDescription)
+        }
     }
 }
 
@@ -863,12 +905,22 @@ struct Static_AvatarsWidget: Widget {
     public var body: some WidgetConfiguration {
         let presentationData = WidgetPresentationData.getForExtension()
         
-        return IntentConfiguration(kind: kind, intent: SelectAvatarFriendsIntent.self, provider: AvatarsProvider(), content: { entry in
-            AvatarsWidgetView(data: getWidgetData(contents: entry.contents), presentationData: presentationData)
-        })
-        .supportedFamilies([.systemMedium])
-        .configurationDisplayName(presentationData.widgetShortcutsGalleryTitle)
-        .description(presentationData.widgetShortcutsGalleryDescription)
+        if #available(iOSApplicationExtension 15.0, iOS 15.0, *) {
+            return IntentConfiguration(kind: kind, intent: SelectAvatarFriendsIntent.self, provider: AvatarsProvider(), content: { entry in
+                AvatarsWidgetView(data: getWidgetData(contents: entry.contents), presentationData: presentationData)
+            })
+            .supportedFamilies([.systemMedium])
+            .configurationDisplayName(presentationData.widgetShortcutsGalleryTitle)
+            .contentMarginsDisabled()
+            .description(presentationData.widgetShortcutsGalleryDescription)
+        } else {
+            return IntentConfiguration(kind: kind, intent: SelectAvatarFriendsIntent.self, provider: AvatarsProvider(), content: { entry in
+                AvatarsWidgetView(data: getWidgetData(contents: entry.contents), presentationData: presentationData)
+            })
+            .supportedFamilies([.systemMedium])
+            .configurationDisplayName(presentationData.widgetShortcutsGalleryTitle)
+            .description(presentationData.widgetShortcutsGalleryDescription)
+        }
     }
 }
 

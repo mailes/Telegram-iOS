@@ -35,6 +35,13 @@ swift_library(
         "//submodules/MoreButtonNode:MoreButtonNode",
         "//submodules/Components/AnimatedStickerComponent:AnimatedStickerComponent",
         "//submodules/Components/MultilineTextComponent:MultilineTextComponent",
+        "//submodules/ShimmerEffect:ShimmerEffect",
+        "//submodules/TextFormat:TextFormat",
+        "//submodules/TelegramUI/Components/LegacyMessageInputPanel",
+        "//submodules/TelegramUI/Components/LegacyMessageInputPanelInputView",
+        "//submodules/ReactionSelectionNode",
+        "//submodules/TelegramUI/Components/Chat/TopMessageReactions",
+        "//submodules/TelegramUI/Components/MinimizedContainer",
     ],
     visibility = [
         "//visibility:public",

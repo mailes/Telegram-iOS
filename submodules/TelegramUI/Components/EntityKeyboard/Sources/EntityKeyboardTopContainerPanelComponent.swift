@@ -8,18 +8,24 @@ import TelegramCore
 import Postbox
 
 public final class EntityKeyboardTopContainerPanelEnvironment: Equatable {
-    let visibilityFractionUpdated: ActionSlot<(CGFloat, Transition)>
-    let isExpandedUpdated: (Bool, Transition) -> Void
+    let isContentInFocus: Bool
+    let visibilityFractionUpdated: ActionSlot<(CGFloat, ComponentTransition)>
+    let isExpandedUpdated: (Bool, ComponentTransition) -> Void
     
     init(
-        visibilityFractionUpdated: ActionSlot<(CGFloat, Transition)>,
-        isExpandedUpdated: @escaping (Bool, Transition) -> Void
+        isContentInFocus: Bool,
+        visibilityFractionUpdated: ActionSlot<(CGFloat, ComponentTransition)>,
+        isExpandedUpdated: @escaping (Bool, ComponentTransition) -> Void
     ) {
+        self.isContentInFocus = isContentInFocus
         self.visibilityFractionUpdated = visibilityFractionUpdated
         self.isExpandedUpdated = isExpandedUpdated
     }
     
     public static func ==(lhs: EntityKeyboardTopContainerPanelEnvironment, rhs: EntityKeyboardTopContainerPanelEnvironment) -> Bool {
+        if lhs.isContentInFocus != rhs.isContentInFocus {
+            return false
+        }
         if lhs.visibilityFractionUpdated !== rhs.visibilityFractionUpdated {
             return false
         }
@@ -32,12 +38,12 @@ final class EntityKeyboardTopContainerPanelComponent: Component {
     
     let theme: PresentationTheme
     let overflowHeight: CGFloat
-    let displayBackground: Bool
+    let displayBackground: EntityKeyboardComponent.DisplayTopPanelBackground
     
     init(
         theme: PresentationTheme,
         overflowHeight: CGFloat,
-        displayBackground: Bool
+        displayBackground: EntityKeyboardComponent.DisplayTopPanelBackground
     ) {
         self.theme = theme
         self.overflowHeight = overflowHeight
@@ -60,7 +66,7 @@ final class EntityKeyboardTopContainerPanelComponent: Component {
     
     private final class PanelView {
         let view = ComponentHostView<EntityKeyboardTopContainerPanelEnvironment>()
-        let visibilityFractionUpdated = ActionSlot<(CGFloat, Transition)>()
+        let visibilityFractionUpdated = ActionSlot<(CGFloat, ComponentTransition)>()
         var isExpanded: Bool = false
     }
     
@@ -87,7 +93,7 @@ final class EntityKeyboardTopContainerPanelComponent: Component {
             fatalError("init(coder:) has not been implemented")
         }
         
-        func update(component: EntityKeyboardTopContainerPanelComponent, availableSize: CGSize, state: EmptyComponentState, environment: Environment<EnvironmentType>, transition: Transition) -> CGSize {
+        func update(component: EntityKeyboardTopContainerPanelComponent, availableSize: CGSize, state: EmptyComponentState, environment: Environment<EnvironmentType>, transition: ComponentTransition) -> CGSize {
             let intrinsicHeight: CGFloat = 34.0
             let height = intrinsicHeight
             
@@ -146,6 +152,7 @@ final class EntityKeyboardTopContainerPanelComponent: Component {
                             component: panel.component,
                             environment: {
                                 EntityKeyboardTopContainerPanelEnvironment(
+                                    isContentInFocus: panelEnvironment.isContentInFocus,
                                     visibilityFractionUpdated: panelView.visibilityFractionUpdated,
                                     isExpandedUpdated: { [weak self] isExpanded, transition in
                                         guard let strongSelf = self else {
@@ -186,7 +193,9 @@ final class EntityKeyboardTopContainerPanelComponent: Component {
                 strongSelf.updateVisibilityFraction(value: fraction, transition: transition)
             }
             
-            if component.displayBackground {
+            if case .blur = component.displayBackground {
+                self.backgroundColor = nil
+                
                 let backgroundView: BlurredBackgroundView
                 if let current = self.backgroundView {
                     backgroundView = current
@@ -209,7 +218,9 @@ final class EntityKeyboardTopContainerPanelComponent: Component {
                 
                 backgroundSeparatorView.backgroundColor = component.theme.chat.inputPanel.panelSeparatorColor
                 transition.setFrame(view: backgroundSeparatorView, frame: CGRect(origin: CGPoint(x: 0.0, y: height), size: CGSize(width: availableSize.width, height: UIScreenPixel)))
-            } else {
+            } else if case .none = component.displayBackground {
+                self.backgroundColor = nil
+                
                 if let backgroundView = self.backgroundView {
                     self.backgroundView = nil
                     backgroundView.removeFromSuperview()
@@ -218,12 +229,23 @@ final class EntityKeyboardTopContainerPanelComponent: Component {
                     self.backgroundSeparatorView = nil
                     backgroundSeparatorView.removeFromSuperview()
                 }
+            } else if case .opaque = component.displayBackground {
+                if let backgroundView = self.backgroundView {
+                    self.backgroundView = nil
+                    backgroundView.removeFromSuperview()
+                }
+                if let backgroundSeparatorView = self.backgroundSeparatorView {
+                    self.backgroundSeparatorView = nil
+                    backgroundSeparatorView.removeFromSuperview()
+                }
+                
+                self.backgroundColor = component.theme.chat.inputMediaPanel.backgroundColor
             }
             
             return CGSize(width: availableSize.width, height: height)
         }
         
-        private func updateVisibilityFraction(value: CGFloat, transition: Transition) {
+        private func updateVisibilityFraction(value: CGFloat, transition: ComponentTransition) {
             if self.visibilityFraction == value {
                 return
             }
@@ -235,7 +257,7 @@ final class EntityKeyboardTopContainerPanelComponent: Component {
             }
         }
         
-        private func panelIsExpandedUpdated(id: AnyHashable, isExpanded: Bool, transition: Transition) {
+        private func panelIsExpandedUpdated(id: AnyHashable, isExpanded: Bool, transition: ComponentTransition) {
             guard let panelView = self.panelViews[id] else {
                 return
             }
@@ -284,7 +306,7 @@ final class EntityKeyboardTopContainerPanelComponent: Component {
         return View(frame: CGRect())
     }
     
-    func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<EnvironmentType>, transition: Transition) -> CGSize {
+    func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<EnvironmentType>, transition: ComponentTransition) -> CGSize {
         return view.update(component: self, availableSize: availableSize, state: state, environment: environment, transition: transition)
     }
 }

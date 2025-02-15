@@ -143,9 +143,9 @@ private final class KeepMediaDurationPickerItemNode: ListViewItemNode {
           
             sliderView.value = CGFloat(value)
             sliderView.backgroundColor = item.theme.list.itemBlocksBackgroundColor
-            sliderView.backColor = item.theme.list.itemSwitchColors.frameColor
-            sliderView.startColor = item.theme.list.itemSwitchColors.frameColor
-            sliderView.trackColor = item.theme.list.itemAccentColor
+            sliderView.backColor = item.theme.list.itemSwitchColors.frameColor.blitOver(item.theme.list.itemBlocksBackgroundColor, alpha: 1.0)
+            sliderView.startColor = item.theme.list.itemSwitchColors.frameColor.blitOver(item.theme.list.itemBlocksBackgroundColor, alpha: 1.0)
+            sliderView.trackColor = item.theme.list.itemAccentColor.blitOver(item.theme.list.itemBlocksBackgroundColor, alpha: 1.0)
             sliderView.knobImage = PresentationResourcesItemList.knobImage(item.theme)
             
             sliderView.frame = CGRect(origin: CGPoint(x: params.leftInset + 15.0, y: 37.0), size: CGSize(width: params.width - params.leftInset - params.rightInset - 15.0 * 2.0, height: 44.0))
@@ -286,7 +286,7 @@ private final class KeepMediaDurationPickerItemNode: ListViewItemNode {
         }
     }
     
-    override func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
+    override func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.4)
     }
     

@@ -15,10 +15,12 @@ import AuthorizationUtils
 import PhoneNumberFormat
 
 private final class ChangePhoneNumberCodeControllerArguments {
+    let context: AccountContext
     let updateEntryText: (String) -> Void
     let next: () -> Void
     
-    init(updateEntryText: @escaping (String) -> Void, next: @escaping () -> Void) {
+    init(context: AccountContext, updateEntryText: @escaping (String) -> Void, next: @escaping () -> Void) {
+        self.context = context
         self.updateEntryText = updateEntryText
         self.next = next
     }
@@ -88,8 +90,8 @@ private enum ChangePhoneNumberCodeEntry: ItemListNodeEntry {
     func item(presentationData: ItemListPresentationData, arguments: Any) -> ListViewItem {
         let arguments = arguments as! ChangePhoneNumberCodeControllerArguments
         switch self {
-            case let .codeEntry(_, _, title, text):
-                return ItemListSingleLineInputItem(presentationData: presentationData, title: NSAttributedString(string: title, textColor: .black), text: text, placeholder: "", type: .number, spacing: 10.0, tag: ChangePhoneNumberCodeTag.input, sectionId: self.section, textUpdated: { updatedText in
+            case let .codeEntry(theme, _, title, text):
+                return ItemListSingleLineInputItem(presentationData: presentationData, title: NSAttributedString(string: title, textColor: theme.list.itemPrimaryTextColor), text: text, placeholder: "", type: .number, spacing: 10.0, tag: ChangePhoneNumberCodeTag.input, sectionId: self.section, textUpdated: { updatedText in
                     arguments.updateEntryText(updatedText)
                 }, action: {
                     arguments.next()
@@ -229,7 +231,13 @@ func changePhoneNumberCodeController(context: AccountContext, phoneNumber: Strin
                     |> take(1)
                     |> mapToSignal { _ -> Signal<Void, NoError> in
                         return Signal { subscriber in
-                            return context.engine.accountData.requestNextChangeAccountPhoneNumberVerification(phoneNumber: phoneNumber, phoneCodeHash: data.hash).start(next: { next in
+                            return context.engine.accountData.requestNextChangeAccountPhoneNumberVerification(
+                                phoneNumber: phoneNumber,
+                                phoneCodeHash: data.hash,
+                                apiId: context.sharedContext.networkArguments.apiId,
+                                apiHash: context.sharedContext.networkArguments.apiHash,
+                                firebaseSecretStream: context.sharedContext.firebaseSecretStream
+                            ).start(next: { next in
                                 currentDataPromise?.set(.single(next))
                             }, error: { error in
                                 
@@ -277,14 +285,14 @@ func changePhoneNumberCodeController(context: AccountContext, phoneNumber: Strin
                 let presentationData = context.sharedContext.currentPresentationData.with { $0 }
                 presentControllerImpl?(OverlayStatusController(theme: presentationData.theme, type: .success), nil)
                 
-                let _ = dismissServerProvidedSuggestion(account: context.account, suggestion: .validatePhoneNumber).start()
+                let _ = context.engine.notices.dismissServerProvidedSuggestion(suggestion: .validatePhoneNumber).start()
                 
                 dismissImpl?()
             }))
         }
     }
     
-    let arguments = ChangePhoneNumberCodeControllerArguments(updateEntryText: { updatedText in
+    let arguments = ChangePhoneNumberCodeControllerArguments(context: context, updateEntryText: { updatedText in
         var initiateCheck = false
         updateState { state in
             if state.codeText.count < 5 && updatedText.count == 5 {
@@ -315,14 +323,14 @@ func changePhoneNumberCodeController(context: AccountContext, phoneNumber: Strin
                 })
             }
             
-            let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(formatPhoneNumber(phoneNumber)), leftNavigationButton: nil, rightNavigationButton: rightNavigationButton, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back), animateChanges: false)
+            let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(formatPhoneNumber(context: context, number: phoneNumber)), leftNavigationButton: nil, rightNavigationButton: rightNavigationButton, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back), animateChanges: false)
             let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: changePhoneNumberCodeControllerEntries(presentationData: presentationData, state: state, codeData: data, timeout: timeout, strings: presentationData.strings, phoneNumber: phoneNumber), style: .blocks, focusItemTag: ChangePhoneNumberCodeTag.input, emptyStateItem: nil, animateChanges: false)
             
             return (controllerState, (listState, arguments))
         } |> afterDisposed {
             actionsDisposable.dispose()
     }
-    
+        
     let controller = ChangePhoneNumberCodeControllerImpl(context: context, state: signal, applyCodeImpl: { code in
         updateState { state in
             return state.withUpdatedCodeText("\(code)")

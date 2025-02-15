@@ -4,6 +4,35 @@ import AsyncDisplayKit
 import Display
 
 public enum RadialStatusNodeState: Equatable {
+    public enum SecretTimeoutIcon: Equatable {
+        case none
+        case image(UIImage)
+        case flame
+        
+        public static func ==(lhs: SecretTimeoutIcon, rhs: SecretTimeoutIcon) -> Bool {
+            switch lhs {
+            case .none:
+                if case .none = rhs {
+                    return true
+                } else {
+                    return false
+                }
+            case let .image(lhsImage):
+                if case let .image(rhsImage) = rhs, lhsImage === rhsImage {
+                    return true
+                } else {
+                    return false
+                }
+            case .flame:
+                if case .flame = rhs {
+                    return true
+                } else {
+                    return false
+                }
+            }
+        }
+    }
+    
     case none
     case download(UIColor)
     case play(UIColor)
@@ -12,7 +41,8 @@ public enum RadialStatusNodeState: Equatable {
     case cloudProgress(color: UIColor, strokeBackgroundColor: UIColor, lineWidth: CGFloat, value: CGFloat?)
     case check(UIColor)
     case customIcon(UIImage)
-    case secretTimeout(color: UIColor, icon: UIImage?, beginTime: Double, timeout: Double, sparks: Bool)
+    case staticTimeout
+    case secretTimeout(color: UIColor, icon: SecretTimeoutIcon, beginTime: Double, timeout: Double, sparks: Bool)
     
     public static func ==(lhs: RadialStatusNodeState, rhs: RadialStatusNodeState) -> Bool {
         switch lhs {
@@ -64,8 +94,14 @@ public enum RadialStatusNodeState: Equatable {
                 } else {
                     return false
                 }
+            case .staticTimeout:
+                if case .staticTimeout = rhs {
+                    return true
+                } else {
+                    return false
+                }
             case let .secretTimeout(lhsColor, lhsIcon, lhsBeginTime, lhsTimeout, lhsSparks):
-                if case let .secretTimeout(rhsColor, rhsIcon, rhsBeginTime, rhsTimeout, rhsSparks) = rhs, lhsColor.isEqual(rhsColor), lhsIcon === rhsIcon, lhsBeginTime.isEqual(to: rhsBeginTime), lhsTimeout.isEqual(to: rhsTimeout), lhsSparks == rhsSparks {
+                if case let .secretTimeout(rhsColor, rhsIcon, rhsBeginTime, rhsTimeout, rhsSparks) = rhs, lhsColor.isEqual(rhsColor), lhsIcon == rhsIcon, lhsBeginTime.isEqual(to: rhsBeginTime), lhsTimeout.isEqual(to: rhsTimeout), lhsSparks == rhsSparks {
                     return true
                 } else {
                     return false
@@ -123,8 +159,14 @@ public enum RadialStatusNodeState: Equatable {
                 } else {
                     return false
                 }
+            case .staticTimeout:
+                if case .staticTimeout = rhs{
+                    return true
+                } else {
+                    return false
+                }
             case let .secretTimeout(lhsColor, lhsIcon, lhsBeginTime, lhsTimeout, lhsSparks):
-                if case let .secretTimeout(rhsColor, rhsIcon, rhsBeginTime, rhsTimeout, rhsSparks) = rhs, lhsColor.isEqual(rhsColor), lhsIcon === rhsIcon, lhsBeginTime.isEqual(to: rhsBeginTime), lhsTimeout.isEqual(to: rhsTimeout), lhsSparks == rhsSparks {
+                if case let .secretTimeout(rhsColor, rhsIcon, rhsBeginTime, rhsTimeout, rhsSparks) = rhs, lhsColor.isEqual(rhsColor), lhsIcon == rhsIcon, lhsBeginTime.isEqual(to: rhsBeginTime), lhsTimeout.isEqual(to: rhsTimeout), lhsSparks == rhsSparks {
                     return true
                 } else {
                     return false
@@ -179,8 +221,14 @@ public enum RadialStatusNodeState: Equatable {
                     node.progress = value
                     return node
                 }
+            case .staticTimeout:
+                return RadialStatusIconContentNode(icon: .timeout, synchronous: synchronous)
             case let .secretTimeout(color, icon, beginTime, timeout, sparks):
-                return RadialStatusSecretTimeoutContentNode(color: color, beginTime: beginTime, timeout: timeout, icon: icon, sparks: sparks)
+                var animate = true
+                if let current = current as? RadialStatusIconContentNode, case .timeout = current.icon {
+                    animate = false
+                }
+                return RadialStatusSecretTimeoutContentNode(color: color, beginTime: beginTime, timeout: timeout, icon: icon, sparks: sparks, animate: animate)
         }
     }
 }
@@ -188,23 +236,28 @@ public enum RadialStatusNodeState: Equatable {
 public final class RadialStatusNode: ASControlNode {
     public var backgroundNodeColor: UIColor {
         didSet {
-            self.transitionToBackgroundColor(self.state.backgroundColor(color: self.backgroundNodeColor), previousContentNode: nil, animated: false, synchronous: false, completion: {})
+            if self.backgroundNodeColor != oldValue {
+                self.transitionToBackgroundColor(self.state.backgroundColor(color: self.backgroundNodeColor), previousContentNode: nil, animated: false, synchronous: false, completion: {})
+            }
         }
     }
 
     private let enableBlur: Bool
-
+    private let isPreview: Bool
+    
     public private(set) var state: RadialStatusNodeState = .none
     
+    private var staticBackgroundNode: ASImageNode?
     private var backgroundNode: NavigationBackgroundNode?
     private var currentBackgroundNodeColor: UIColor?
 
     private var contentNode: RadialStatusContentNode?
     private var nextContentNode: RadialStatusContentNode?
     
-    public init(backgroundNodeColor: UIColor, enableBlur: Bool = false) {
-        self.enableBlur = enableBlur
+    public init(backgroundNodeColor: UIColor, enableBlur: Bool = false, isPreview: Bool = false) {
         self.backgroundNodeColor = backgroundNodeColor
+        self.enableBlur = enableBlur
+        self.isPreview = isPreview
         
         super.init()
     }
@@ -275,6 +328,7 @@ public final class RadialStatusNode: ASControlNode {
         } else {
             self.contentNode = node
             if let contentNode = self.contentNode {
+                contentNode.displaysAsynchronously = self.displaysAsynchronously
                 contentNode.frame = self.bounds
                 contentNode.prepareAnimateIn(from: nil)
                 self.addSubnode(contentNode)
@@ -304,27 +358,40 @@ public final class RadialStatusNode: ASControlNode {
         
         if updated {
             if let color = color {
-                if let backgroundNode = self.backgroundNode {
-                    backgroundNode.updateColor(color: color, transition: .immediate)
-                    self.currentBackgroundNodeColor = color
-
-                    completion()
-                } else {
-                    let backgroundNode = NavigationBackgroundNode(color: color, enableBlur: self.enableBlur)
-                    self.currentBackgroundNodeColor = color
-
-                    backgroundNode.frame = self.bounds
-                    backgroundNode.update(size: backgroundNode.bounds.size, cornerRadius: backgroundNode.bounds.size.height / 2.0, transition: .immediate)
-                    self.backgroundNode = backgroundNode
-                    self.insertSubnode(backgroundNode, at: 0)
-                    
-                    if animated {
-                        backgroundNode.layer.animateScale(from: 0.01, to: 1.0, duration: 0.2, removeOnCompletion: false)
-                        backgroundNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.2, removeOnCompletion: false, completion: { _ in
-                            completion()
-                        })
+                if self.isPreview {
+                    let backgroundNode: ASImageNode
+                    if let current = self.staticBackgroundNode {
+                        backgroundNode = current
                     } else {
+                        backgroundNode = ASImageNode()
+                        backgroundNode.image = generateFilledCircleImage(diameter: 50.0, color: self.backgroundNodeColor)
+                        self.insertSubnode(backgroundNode, at: 0)
+                        self.staticBackgroundNode = backgroundNode
+                    }
+                    backgroundNode.frame = self.bounds
+                } else {
+                    if let backgroundNode = self.backgroundNode {
+                        backgroundNode.updateColor(color: color, transition: .immediate)
+                        self.currentBackgroundNodeColor = color
+                        
                         completion()
+                    } else {
+                        let backgroundNode = NavigationBackgroundNode(color: color, enableBlur: self.enableBlur)
+                        self.currentBackgroundNodeColor = color
+                        
+                        backgroundNode.frame = self.bounds
+                        backgroundNode.update(size: backgroundNode.bounds.size, cornerRadius: backgroundNode.bounds.size.height / 2.0, transition: .immediate)
+                        self.backgroundNode = backgroundNode
+                        self.insertSubnode(backgroundNode, at: 0)
+                        
+                        if animated {
+                            backgroundNode.layer.animateScale(from: 0.01, to: 1.0, duration: 0.2, removeOnCompletion: false)
+                            backgroundNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.2, removeOnCompletion: false, completion: { _ in
+                                completion()
+                            })
+                        } else {
+                            completion()
+                        }
                     }
                 }
             } else if let backgroundNode = self.backgroundNode {

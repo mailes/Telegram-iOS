@@ -1,6 +1,5 @@
 import Foundation
 import SwiftSignalKit
-import Postbox
 import TelegramCore
 import AccountContext
 import UrlHandling
@@ -49,17 +48,31 @@ public func cachedPrivacyPage(context: AccountContext) -> Signal<ResolvedUrl, No
     return cachedInternalInstantPage(context: context, url: privacyUrl)
 }
 
+public func cachedWebAppTermsPage(context: AccountContext) -> Signal<ResolvedUrl, NoError> {
+    var privacyUrl = context.sharedContext.currentPresentationData.with { $0 }.strings.WebApp_TermsOfUse_URL
+    if privacyUrl == "WebApp.TermsOfUse_URL" || privacyUrl.isEmpty {
+        privacyUrl = "https://telegram.org/tos/mini-apps"
+    }
+    return cachedInternalInstantPage(context: context, url: privacyUrl)
+}
+
 private func cachedInternalInstantPage(context: AccountContext, url: String) -> Signal<ResolvedUrl, NoError> {
     let (cachedUrl, anchor) = extractAnchor(string: url)
     return cachedInstantPage(engine: context.engine, url: cachedUrl)
     |> mapToSignal { cachedInstantPage -> Signal<ResolvedUrl, NoError> in
         let updated = resolveInstantViewUrl(account: context.account, url: url)
+        |> mapToSignal { result -> Signal<ResolvedUrl, NoError> in
+            guard case let .result(result) = result else {
+                return .complete()
+            }
+            return .single(result)
+        }
         |> afterNext { result in
             if case let .instantView(webPage, _) = result, case let .Loaded(content) = webPage.content, let instantPage = content.instantPage {
                 if instantPage.isComplete {
                     let _ = updateCachedInstantPage(engine: context.engine, url: cachedUrl, webPage: webPage).start()
                 } else {
-                    let _ = (actualizedWebpage(postbox: context.account.postbox, network: context.account.network, webpage: webPage)
+                    let _ = (actualizedWebpage(account: context.account, webpage: webPage)
                     |> mapToSignal { webPage -> Signal<Never, NoError> in
                         if case let .Loaded(content) = webPage.content, let instantPage = content.instantPage, instantPage.isComplete {
                             return updateCachedInstantPage(engine: context.engine, url: cachedUrl, webPage: webPage)

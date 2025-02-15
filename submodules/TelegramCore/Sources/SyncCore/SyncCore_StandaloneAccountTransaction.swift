@@ -113,6 +113,13 @@ public let telegramPostboxSeedConfiguration: SeedConfiguration = {
                     break
                 }
             }
+            var derivedData: DerivedDataMessageAttribute?
+            for attribute in previous {
+                if let attribute = attribute as? DerivedDataMessageAttribute {
+                    derivedData = attribute
+                    break
+                }
+            }
             
             if let audioTranscription = audioTranscription {
                 var found = false
@@ -127,13 +134,109 @@ public let telegramPostboxSeedConfiguration: SeedConfiguration = {
                     updated.append(audioTranscription)
                 }
             }
+            if let derivedData = derivedData {
+                var found = false
+                for i in 0 ..< updated.count {
+                    if let attribute = updated[i] as? DerivedDataMessageAttribute {
+                        updated[i] = derivedData
+                        found = true
+                        break
+                    }
+                }
+                if !found {
+                    updated.append(derivedData)
+                }
+            }
         },
         decodeMessageThreadInfo: { entry in
             guard let data = entry.get(MessageHistoryThreadData.self) else {
                 return nil
             }
-            return Message.AssociatedThreadInfo(title: data.info.title, icon: data.info.icon, iconColor: data.info.iconColor)
-        }
+            return Message.AssociatedThreadInfo(title: data.info.title, icon: data.info.icon, iconColor: data.info.iconColor, isClosed: data.isClosed)
+        },
+        decodeAutoremoveTimeout: { cachedData in
+            if let cachedData = cachedData as? CachedUserData {
+                if case let .known(value) = cachedData.autoremoveTimeout {
+                    return value?.effectiveValue
+                }
+            } else if let cachedData = cachedData as? CachedGroupData {
+                if case let .known(value) = cachedData.autoremoveTimeout {
+                    return value?.effectiveValue
+                }
+            } else if let cachedData = cachedData as? CachedChannelData {
+                if case let .known(value) = cachedData.autoremoveTimeout {
+                    return value?.effectiveValue
+                }
+            }
+            return nil
+        },
+        decodeDisplayPeerAsRegularChat: { cachedData in
+            if let cachedData = cachedData as? CachedChannelData {
+                if case let .known(value) = cachedData.viewForumAsMessages {
+                    return value
+                }
+            }
+            return false
+        },
+        isPeerUpgradeMessage: { message in
+            for media in message.media {
+                if let action = media as? TelegramMediaAction {
+                    switch action.action {
+                    case .groupMigratedToChannel, .channelMigratedFromGroup:
+                        return true
+                    default:
+                        break
+                    }
+                }
+            }
+            return false
+        },
+        automaticThreadIndexInfo: { peerId, _ in
+            if peerId.namespace == Namespaces.Peer.CloudUser {
+                return StoredMessageHistoryThreadInfo(data: CodableEntry(data: Data()), summary: StoredMessageHistoryThreadInfo.Summary(totalUnreadCount: 0, mutedUntil: nil))
+            } else {
+                return nil
+            }
+        },
+        customTagsFromAttributes: { attributes in
+            var isTags = false
+            
+            for attribute in attributes {
+                if let attribute = attribute as? PendingReactionsMessageAttribute, attribute.isTags {
+                    isTags = true
+                    break
+                } else if let attribute = attribute as? ReactionsMessageAttribute, attribute.isTags {
+                    isTags = true
+                    break
+                }
+            }
+            
+            if !isTags {
+                return []
+            }
+            
+            guard let reactions = mergedMessageReactions(attributes: attributes, isTags: isTags), !reactions.reactions.isEmpty else {
+                return []
+            }
+            
+            var result: [MemoryBuffer] = []
+            
+            for reaction in reactions.reactions {
+                if reaction.isSelected {
+                    let tag = ReactionsMessageAttribute.messageTag(reaction: reaction.value)
+                    if !result.contains(tag) {
+                        result.append(tag)
+                    }
+                }
+            }
+            
+            if !result.isEmpty {
+                result.sort()
+            }
+            
+            return result
+        },
+        displaySavedMessagesAsTopicListPreferencesKey: PreferencesKeys.displaySavedChatsAsTopics()
     )
 }()
 
@@ -143,7 +246,7 @@ public enum AccountTransactionError {
 
 public func accountTransaction<T>(rootPath: String, id: AccountRecordId, encryptionParameters: ValueBoxEncryptionParameters, isReadOnly: Bool, useCopy: Bool = false, useCaches: Bool = true, removeDatabaseOnError: Bool = true, transaction: @escaping (Postbox, Transaction) -> T) -> Signal<T, AccountTransactionError> {
     let path = "\(rootPath)/\(accountRecordIdPathName(id))"
-    let postbox = openPostbox(basePath: path + "/postbox", seedConfiguration: telegramPostboxSeedConfiguration, encryptionParameters: encryptionParameters, timestampForAbsoluteTimeBasedOperations: Int32(CFAbsoluteTimeGetCurrent() + NSTimeIntervalSince1970), isTemporary: true, isReadOnly: isReadOnly, useCopy: useCopy, useCaches: useCaches, removeDatabaseOnError: removeDatabaseOnError)
+    let postbox = openPostbox(basePath: path + "/postbox", seedConfiguration: telegramPostboxSeedConfiguration, encryptionParameters: encryptionParameters, timestampForAbsoluteTimeBasedOperations: Int32(CFAbsoluteTimeGetCurrent() + NSTimeIntervalSince1970), isMainProcess: false, isTemporary: true, isReadOnly: isReadOnly, useCopy: useCopy, useCaches: useCaches, removeDatabaseOnError: removeDatabaseOnError)
     return postbox
     |> castError(AccountTransactionError.self)
     |> mapToSignal { value -> Signal<T, AccountTransactionError> in

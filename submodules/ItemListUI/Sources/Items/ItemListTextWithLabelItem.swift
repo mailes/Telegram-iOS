@@ -189,7 +189,7 @@ public class ItemListTextWithLabelItemNode: ListViewItemNode {
             var leftOffset: CGFloat = 0.0
             var selectionNodeWidthAndApply: (CGFloat, (CGSize, Bool) -> ItemListSelectableControlNode)?
             if let selected = item.selected {
-                let (selectionWidth, selectionApply) = selectionNodeLayout(item.presentationData.theme.list.itemCheckColors.strokeColor, item.presentationData.theme.list.itemCheckColors.fillColor, item.presentationData.theme.list.itemCheckColors.foregroundColor, selected, false)
+                let (selectionWidth, selectionApply) = selectionNodeLayout(item.presentationData.theme.list.itemCheckColors.strokeColor, item.presentationData.theme.list.itemCheckColors.fillColor, item.presentationData.theme.list.itemCheckColors.foregroundColor, selected, .regular)
                 selectionNodeWidthAndApply = (selectionWidth, selectionApply)
                 leftOffset += selectionWidth - 8.0
             }
@@ -419,7 +419,7 @@ public class ItemListTextWithLabelItemNode: ListViewItemNode {
         return nil
     }
     
-    override public func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
+    override public func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.4)
     }
     
@@ -458,7 +458,7 @@ public class ItemListTextWithLabelItemNode: ListViewItemNode {
                 if let current = self.linkHighlightingNode {
                     linkHighlightingNode = current
                 } else {
-                    linkHighlightingNode = LinkHighlightingNode(color: item.presentationData.theme.list.itemAccentColor.withAlphaComponent(0.5))
+                    linkHighlightingNode = LinkHighlightingNode(color: item.presentationData.theme.list.itemAccentColor.withAlphaComponent(0.2))
                     self.linkHighlightingNode = linkHighlightingNode
                     self.insertSubnode(linkHighlightingNode, belowSubnode: self.textNode)
                 }

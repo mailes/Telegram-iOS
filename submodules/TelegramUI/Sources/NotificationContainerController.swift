@@ -6,6 +6,7 @@ import TelegramCore
 import SwiftSignalKit
 import TelegramPresentationData
 import AccountContext
+import ChatMessageNotificationItem
 
 public final class NotificationContainerController: ViewController {
     private var controllerNode: NotificationContainerControllerNode {
@@ -25,7 +26,7 @@ public final class NotificationContainerController: ViewController {
         self.statusBar.statusBarStyle = .Ignore
         
         self.presentationDataDisposable = (context.sharedContext.presentationData
-            |> deliverOnMainQueue).start(next: { [weak self] presentationData in
+            |> deliverOnMainQueue).startStrict(next: { [weak self] presentationData in
                 if let strongSelf = self {
                     let previousTheme = strongSelf.presentationData.theme
                     let previousStrings = strongSelf.presentationData.strings
@@ -95,6 +96,10 @@ public final class NotificationContainerController: ViewController {
     
     public func enqueue(_ item: NotificationItem) {
         self.controllerNode.enqueue(item)
+    }
+    
+    public func setBlocking(_ item: NotificationItem?) {
+        self.controllerNode.setBlocking(item)
     }
     
     public func removeItems(_ f: (NotificationItem) -> Bool) {

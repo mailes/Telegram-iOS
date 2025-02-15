@@ -163,26 +163,38 @@ private func attachmentFileControllerEntries(presentationData: PresentationData,
     return entries
 }
 
-private class AttachmentFileControllerImpl: ItemListController, AttachmentContainable {
+private final class AttachmentFileContext: AttachmentMediaPickerContext {
+}
+
+class AttachmentFileControllerImpl: ItemListController, AttachmentFileController, AttachmentContainable {
     public var requestAttachmentMenuExpansion: () -> Void = {}
     public var updateNavigationStack: (@escaping ([AttachmentContainable]) -> ([AttachmentContainable], AttachmentMediaPickerContext?)) -> Void = { _ in }
+    public var parentController: () -> ViewController? = {
+        return nil
+    }
     public var updateTabBarAlpha: (CGFloat, ContainedViewLayoutTransition) -> Void = { _, _ in }
+    public var updateTabBarVisibility: (Bool, ContainedViewLayoutTransition) -> Void = { _, _ in }
     public var cancelPanGesture: () -> Void = { }
     public var isContainerPanning: () -> Bool = { return false }
     public var isContainerExpanded: () -> Bool = { return false }
+    public var isMinimized: Bool = false
     
     var delayDisappear = false
     
     var resetForReuseImpl: () -> Void = {}
-    public func resetForReuse() {
+    func resetForReuse() {
         self.resetForReuseImpl()
         self.scrollToTop?()
     }
     
-    public func prepareForReuse() {
+    func prepareForReuse() {
         self.delayDisappear = true
         self.visibleBottomContentOffsetChanged?(self.visibleBottomContentOffset)
         self.delayDisappear = false
+    }
+    
+    public var mediaPickerContext: AttachmentMediaPickerContext? {
+        return AttachmentFileContext()
     }
 }
 
@@ -190,7 +202,7 @@ private struct AttachmentFileControllerState: Equatable {
     var searching: Bool
 }
 
-public func attachmentFileController(context: AccountContext, updatedPresentationData: (initial: PresentationData, signal: Signal<PresentationData, NoError>)? = nil, bannedSendMedia: (Int32, Bool)?, presentGallery: @escaping () -> Void, presentFiles: @escaping () -> Void, send: @escaping (AnyMediaReference) -> Void) -> AttachmentContainable {
+func makeAttachmentFileControllerImpl(context: AccountContext, updatedPresentationData: (initial: PresentationData, signal: Signal<PresentationData, NoError>)? = nil, bannedSendMedia: (Int32, Bool)?, presentGallery: @escaping () -> Void, presentFiles: @escaping () -> Void, send: @escaping (AnyMediaReference) -> Void) -> AttachmentFileController {
     let actionsDisposable = DisposableSet()
     
     let statePromise = ValuePromise(AttachmentFileControllerState(searching: false), ignoreRepeated: true)
@@ -212,7 +224,16 @@ public func attachmentFileController(context: AccountContext, updatedPresentatio
         },
         send: { message in
             let _ = (context.engine.messages.getMessagesLoadIfNecessary([message.id], strategy: .cloud(skipLocal: true))
-            |> deliverOnMainQueue).start(next: { messages in
+            |> `catch` { _ in
+                return .single(.result([]))
+            }
+            |> mapToSignal { result -> Signal<[Message], NoError> in
+                guard case let .result(result) = result else {
+                    return .complete()
+                }
+                return .single(result)
+            }
+            |> deliverOnMainQueue).startStandalone(next: { messages in
                 if let message = messages.first, let file = message.media.first(where: { $0 is TelegramMediaFile }) as? TelegramMediaFile {
                     send(.message(message: MessageReference(message), media: file))
                 }
@@ -239,10 +260,9 @@ public func attachmentFileController(context: AccountContext, updatedPresentatio
     )
     |> map { presentationData, recentDocuments, state -> (ItemListControllerState, (ItemListNodeState, Any)) in
         var presentationData = presentationData
-        if presentationData.theme.list.blocksBackgroundColor.rgb == presentationData.theme.list.plainBackgroundColor.rgb {
-            let updatedTheme = presentationData.theme.withModalBlocksBackground()
-            presentationData = presentationData.withUpdated(theme: updatedTheme)
-        }
+        
+        let updatedTheme = presentationData.theme.withModalBlocksBackground()
+        presentationData = presentationData.withUpdated(theme: updatedTheme)
         
         let previousRecentDocuments = previousRecentDocuments.swap(recentDocuments)
         let crossfade = previousRecentDocuments == nil && recentDocuments != nil
@@ -276,7 +296,7 @@ public func attachmentFileController(context: AccountContext, updatedPresentatio
             } else {
                 banDescription = presentationData.strings.Conversation_DefaultRestrictedMedia
             }
-            emptyItem = AttachmentFileEmptyStateItem(context: context, theme: presentationData.theme, strings: presentationData.strings, content: .bannedSendMedia(banDescription))
+            emptyItem = AttachmentFileEmptyStateItem(context: context, theme: presentationData.theme, strings: presentationData.strings, content: .bannedSendMedia(text: banDescription, canBoost: false))
         } else if let recentDocuments = recentDocuments, recentDocuments.isEmpty {
             emptyItem = AttachmentFileEmptyStateItem(context: context, theme: presentationData.theme, strings: presentationData.strings, content: .intro)
         }

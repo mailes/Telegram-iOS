@@ -13,12 +13,19 @@ import SearchUI
 import ContextUI
 import AnimationCache
 import MultiAnimationRenderer
+import TelegramUIPreferences
+import ActionPanelComponent
+import ComponentDisplayAdapters
+import ComponentFlow
+import ChatFolderLinkPreviewScreen
+import ChatListHeaderComponent
+import StoryPeerListComponent
 
-enum ChatListContainerNodeFilter: Equatable {
+public enum ChatListContainerNodeFilter: Equatable {
     case all
     case filter(ChatListFilter)
     
-    var id: ChatListFilterTabEntryId {
+    public var id: ChatListFilterTabEntryId {
         switch self {
         case .all:
             return .all
@@ -27,7 +34,7 @@ enum ChatListContainerNodeFilter: Equatable {
         }
     }
     
-    var filter: ChatListFilter? {
+    public var filter: ChatListFilter? {
         switch self {
         case .all:
             return nil
@@ -37,425 +44,20 @@ enum ChatListContainerNodeFilter: Equatable {
     }
 }
 
-private final class ShimmerEffectNode: ASDisplayNode {
-    private var currentBackgroundColor: UIColor?
-    private var currentForegroundColor: UIColor?
-    private let imageNodeContainer: ASDisplayNode
-    private let imageNode: ASImageNode
-    
-    private var absoluteLocation: (CGRect, CGSize)?
-    private var isCurrentlyInHierarchy = false
-    private var shouldBeAnimating = false
-    
-    override init() {
-        self.imageNodeContainer = ASDisplayNode()
-        self.imageNodeContainer.isLayerBacked = true
-        
-        self.imageNode = ASImageNode()
-        self.imageNode.isLayerBacked = true
-        self.imageNode.displaysAsynchronously = false
-        self.imageNode.displayWithoutProcessing = true
-        self.imageNode.contentMode = .scaleToFill
-        
-        super.init()
-        
-        self.isLayerBacked = true
-        self.clipsToBounds = true
-        
-        self.imageNodeContainer.addSubnode(self.imageNode)
-        self.addSubnode(self.imageNodeContainer)
-    }
-    
-    override func didEnterHierarchy() {
-        super.didEnterHierarchy()
-        
-        self.isCurrentlyInHierarchy = true
-        self.updateAnimation()
-    }
-    
-    override func didExitHierarchy() {
-        super.didExitHierarchy()
-        
-        self.isCurrentlyInHierarchy = false
-        self.updateAnimation()
-    }
-    
-    func update(backgroundColor: UIColor, foregroundColor: UIColor) {
-        if let currentBackgroundColor = self.currentBackgroundColor, currentBackgroundColor.isEqual(backgroundColor), let currentForegroundColor = self.currentForegroundColor, currentForegroundColor.isEqual(foregroundColor) {
-            return
-        }
-        self.currentBackgroundColor = backgroundColor
-        self.currentForegroundColor = foregroundColor
-        
-        self.imageNode.image = generateImage(CGSize(width: 4.0, height: 320.0), opaque: true, scale: 1.0, rotatedContext: { size, context in
-            context.setFillColor(backgroundColor.cgColor)
-            context.fill(CGRect(origin: CGPoint(), size: size))
-            
-            context.clip(to: CGRect(origin: CGPoint(), size: size))
-            
-            let transparentColor = foregroundColor.withAlphaComponent(0.0).cgColor
-            let peakColor = foregroundColor.cgColor
-            
-            var locations: [CGFloat] = [0.0, 0.5, 1.0]
-            let colors: [CGColor] = [transparentColor, peakColor, transparentColor]
-            
-            let colorSpace = CGColorSpaceCreateDeviceRGB()
-            let gradient = CGGradient(colorsSpace: colorSpace, colors: colors as CFArray, locations: &locations)!
-            
-            context.drawLinearGradient(gradient, start: CGPoint(x: 0.0, y: 0.0), end: CGPoint(x: 0.0, y: size.height), options: CGGradientDrawingOptions())
-        })
-    }
-    
-    func updateAbsoluteRect(_ rect: CGRect, within containerSize: CGSize) {
-        if let absoluteLocation = self.absoluteLocation, absoluteLocation.0 == rect && absoluteLocation.1 == containerSize {
-            return
-        }
-        let sizeUpdated = self.absoluteLocation?.1 != containerSize
-        let frameUpdated = self.absoluteLocation?.0 != rect
-        self.absoluteLocation = (rect, containerSize)
-        
-        if sizeUpdated {
-            if self.shouldBeAnimating {
-                self.imageNode.layer.removeAnimation(forKey: "shimmer")
-                self.addImageAnimation()
-            }
-        }
-        
-        if frameUpdated {
-            self.imageNodeContainer.frame = CGRect(origin: CGPoint(x: -rect.minX, y: -rect.minY), size: containerSize)
-        }
-        
-        self.updateAnimation()
-    }
-    
-    private func updateAnimation() {
-        let shouldBeAnimating = self.isCurrentlyInHierarchy && self.absoluteLocation != nil
-        if shouldBeAnimating != self.shouldBeAnimating {
-            self.shouldBeAnimating = shouldBeAnimating
-            if shouldBeAnimating {
-                self.addImageAnimation()
-            } else {
-                self.imageNode.layer.removeAnimation(forKey: "shimmer")
-            }
-        }
-    }
-    
-    private func addImageAnimation() {
-        guard let containerSize = self.absoluteLocation?.1 else {
-            return
-        }
-        let gradientHeight: CGFloat = 250.0
-        self.imageNode.frame = CGRect(origin: CGPoint(x: 0.0, y: -gradientHeight), size: CGSize(width: containerSize.width, height: gradientHeight))
-        let animation = self.imageNode.layer.makeAnimation(from: 0.0 as NSNumber, to: (containerSize.height + gradientHeight) as NSNumber, keyPath: "position.y", timingFunction: CAMediaTimingFunctionName.easeOut.rawValue, duration: 1.3 * 1.0, delay: 0.0, mediaTimingFunction: nil, removeOnCompletion: true, additive: true)
-        animation.repeatCount = Float.infinity
-        animation.beginTime = 1.0
-        self.imageNode.layer.add(animation, forKey: "shimmer")
-    }
-}
-
-private final class ChatListShimmerNode: ASDisplayNode {
-    private let backgroundColorNode: ASDisplayNode
-    private let effectNode: ShimmerEffectNode
-    private let maskNode: ASImageNode
-    private var currentParams: (size: CGSize, presentationData: PresentationData)?
-    
-    override init() {
-        self.backgroundColorNode = ASDisplayNode()
-        self.effectNode = ShimmerEffectNode()
-        self.maskNode = ASImageNode()
-        
-        super.init()
-        
-        self.isUserInteractionEnabled = false
-        
-        self.addSubnode(self.backgroundColorNode)
-        self.addSubnode(self.effectNode)
-        self.addSubnode(self.maskNode)
-    }
-    
-    func update(context: AccountContext, animationCache: AnimationCache, animationRenderer: MultiAnimationRenderer, size: CGSize, presentationData: PresentationData, transition: ContainedViewLayoutTransition) {
-        if self.currentParams?.size != size || self.currentParams?.presentationData !== presentationData {
-            self.currentParams = (size, presentationData)
-                        
-            let chatListPresentationData = ChatListPresentationData(theme: presentationData.theme, fontSize: presentationData.chatFontSize, strings: presentationData.strings, dateTimeFormat: presentationData.dateTimeFormat, nameSortOrder: presentationData.nameSortOrder, nameDisplayOrder: presentationData.nameDisplayOrder, disableAnimations: true)
-            
-            let peer1: EnginePeer = .user(TelegramUser(id: EnginePeer.Id(namespace: Namespaces.Peer.CloudUser, id: EnginePeer.Id.Id._internalFromInt64Value(0)), accessHash: nil, firstName: "FirstName", lastName: nil, username: nil, phone: nil, photo: [], botInfo: nil, restrictionInfo: nil, flags: [], emojiStatus: nil, usernames: []))
-            let timestamp1: Int32 = 100000
-            let peers: [EnginePeer.Id: EnginePeer] = [:]
-            let interaction = ChatListNodeInteraction(context: context, animationCache: animationCache, animationRenderer: animationRenderer, activateSearch: {}, peerSelected: { _, _, _, _ in }, disabledPeerSelected: { _, _ in }, togglePeerSelected: { _, _ in }, togglePeersSelection: { _, _ in }, additionalCategorySelected: { _ in
-            }, messageSelected: { _, _, _, _ in}, groupSelected: { _ in }, addContact: { _ in }, setPeerIdWithRevealedOptions: { _, _ in }, setItemPinned: { _, _ in }, setPeerMuted: { _, _ in }, setPeerThreadMuted: { _, _, _ in }, deletePeer: { _, _ in }, deletePeerThread: { _, _ in }, setPeerThreadStopped: { _, _, _ in }, setPeerThreadPinned: { _, _, _ in }, updatePeerGrouping: { _, _ in }, togglePeerMarkedUnread: { _, _ in}, toggleArchivedFolderHiddenByDefault: {}, toggleThreadsSelection: { _, _ in }, hidePsa: { _ in }, activateChatPreview: { _, _, gesture, _ in
-                gesture?.cancel()
-            }, present: { _ in })
-            
-            let items = (0 ..< 2).map { _ -> ChatListItem in
-                let message = EngineMessage(
-                    stableId: 0,
-                    stableVersion: 0,
-                    id: EngineMessage.Id(peerId: peer1.id, namespace: 0, id: 0),
-                    globallyUniqueId: nil,
-                    groupingKey: nil,
-                    groupInfo: nil,
-                    threadId: nil,
-                    timestamp: timestamp1,
-                    flags: [],
-                    tags: [],
-                    globalTags: [],
-                    localTags: [],
-                    forwardInfo: nil,
-                    author: peer1,
-                    text: "Text",
-                    attributes: [],
-                    media: [],
-                    peers: peers,
-                    associatedMessages: [:],
-                    associatedMessageIds: [],
-                    associatedMedia: [:],
-                    associatedThreadInfo: nil
-                )
-                let readState = EnginePeerReadCounters()
-
-                return ChatListItem(presentationData: chatListPresentationData, context: context, chatListLocation: .chatList(groupId: .root), filterData: nil, index: .chatList(EngineChatList.Item.Index.ChatList(pinningIndex: 0, messageIndex: EngineMessage.Index(id: EngineMessage.Id(peerId: peer1.id, namespace: 0, id: 0), timestamp: timestamp1))), content: .peer(messages: [message], peer: EngineRenderedPeer(peer: peer1), threadInfo: nil, combinedReadState: readState, isRemovedFromTotalUnreadCount: false, presence: nil, hasUnseenMentions: false, hasUnseenReactions: false, draftState: nil, inputActivities: nil, promoInfo: nil, ignoreUnreadBadge: false, displayAsMessage: false, hasFailedMessages: false, forumTopicData: nil), editing: false, hasActiveRevealControls: false, selected: false, header: nil, enableContextActions: false, hiddenOffset: false, interaction: interaction)
-            }
-            
-            var itemNodes: [ChatListItemNode] = []
-            for i in 0 ..< items.count {
-                items[i].nodeConfiguredForParams(async: { f in f() }, params: ListViewItemLayoutParams(width: size.width, leftInset: 0.0, rightInset: 0.0, availableHeight: 100.0), synchronousLoads: false, previousItem: i == 0 ? nil : items[i - 1], nextItem: (i == items.count - 1) ? nil : items[i + 1], completion: { node, apply in
-                    if let itemNode = node as? ChatListItemNode {
-                        itemNodes.append(itemNode)
-                    }
-                    apply().1(ListViewItemApply(isOnScreen: true))
-                })
-            }
-            
-            self.backgroundColorNode.backgroundColor = presentationData.theme.list.mediaPlaceholderColor
-            
-            self.maskNode.image = generateImage(size, rotatedContext: { size, context in
-                context.setFillColor(presentationData.theme.chatList.backgroundColor.cgColor)
-                context.fill(CGRect(origin: CGPoint(), size: size))
-                
-                var currentY: CGFloat = 0.0
-                let fakeLabelPlaceholderHeight: CGFloat = 8.0
-                
-                func fillLabelPlaceholderRect(origin: CGPoint, width: CGFloat) {
-                    let startPoint = origin
-                    let diameter = fakeLabelPlaceholderHeight
-                    context.fillEllipse(in: CGRect(origin: startPoint, size: CGSize(width: diameter, height: diameter)))
-                    context.fillEllipse(in: CGRect(origin: CGPoint(x: startPoint.x + width - diameter, y: startPoint.y), size: CGSize(width: diameter, height: diameter)))
-                    context.fill(CGRect(origin: CGPoint(x: startPoint.x + diameter / 2.0, y: startPoint.y), size: CGSize(width: width - diameter, height: diameter)))
-                }
-                
-                while currentY < size.height {
-                    let sampleIndex = 0
-                    let itemHeight: CGFloat = itemNodes[sampleIndex].contentSize.height
-                    
-                    context.setBlendMode(.copy)
-                    context.setFillColor(UIColor.clear.cgColor)
-                    
-                    context.fillEllipse(in: itemNodes[sampleIndex].avatarNode.frame.offsetBy(dx: 0.0, dy: currentY))
-                    let titleFrame = itemNodes[sampleIndex].titleNode.frame.offsetBy(dx: 0.0, dy: currentY)
-                    fillLabelPlaceholderRect(origin: CGPoint(x: titleFrame.minX, y: floor(titleFrame.midY - fakeLabelPlaceholderHeight / 2.0)), width: 60.0)
-                    
-                    fillLabelPlaceholderRect(origin: CGPoint(x: titleFrame.minX, y: currentY + itemHeight - floor(itemNodes[sampleIndex].titleNode.frame.midY - fakeLabelPlaceholderHeight / 2.0) - fakeLabelPlaceholderHeight), width: 60.0)
-                    
-                    fillLabelPlaceholderRect(origin: CGPoint(x: titleFrame.minX, y: currentY + floor((itemHeight - fakeLabelPlaceholderHeight) / 2.0)), width: 120.0)
-                    fillLabelPlaceholderRect(origin: CGPoint(x: titleFrame.minX + 120.0 + 10.0, y: currentY + floor((itemHeight - fakeLabelPlaceholderHeight) / 2.0)), width: 60.0)
-                    
-                    let dateFrame = itemNodes[sampleIndex].dateNode.frame.offsetBy(dx: 0.0, dy: currentY)
-                    fillLabelPlaceholderRect(origin: CGPoint(x: dateFrame.maxX - 30.0, y: dateFrame.minY), width: 30.0)
-                    
-                    context.setBlendMode(.normal)
-                    context.setFillColor(presentationData.theme.chatList.itemSeparatorColor.cgColor)
-                    context.fill(itemNodes[sampleIndex].separatorNode.frame.offsetBy(dx: 0.0, dy: currentY))
-                    
-                    currentY += itemHeight
-                }
-            })
-            
-            self.effectNode.update(backgroundColor: presentationData.theme.list.mediaPlaceholderColor, foregroundColor: presentationData.theme.list.itemBlocksBackgroundColor.withAlphaComponent(0.4))
-            self.effectNode.updateAbsoluteRect(CGRect(origin: CGPoint(), size: size), within: size)
-        }
-        transition.updateFrame(node: self.backgroundColorNode, frame: CGRect(origin: CGPoint(x: 0.0, y: 0.0), size: size))
-        transition.updateFrame(node: self.maskNode, frame: CGRect(origin: CGPoint(x: 0.0, y: 0.0), size: size))
-        transition.updateFrame(node: self.effectNode, frame: CGRect(origin: CGPoint(x: 0.0, y: 0.0), size: size))
-    }
-}
-
-private final class ChatListContainerItemNode: ASDisplayNode {
+public final class ChatListContainerNode: ASDisplayNode, ASGestureRecognizerDelegate {
     private let context: AccountContext
-    private let animationCache: AnimationCache
-    private let animationRenderer: MultiAnimationRenderer
-    private var presentationData: PresentationData
-    private let becameEmpty: (ChatListFilter?) -> Void
-    private let emptyAction: (ChatListFilter?) -> Void
-    private let secondaryEmptyAction: () -> Void
-    
-    private var floatingHeaderOffset: CGFloat?
-    
-    private(set) var emptyNode: ChatListEmptyNode?
-    var emptyShimmerEffectNode: ChatListShimmerNode?
-    private var shimmerNodeOffset: CGFloat = 0.0
-    let listNode: ChatListNode
-    
-    private var validLayout: (CGSize, UIEdgeInsets, CGFloat)?
-    
-    init(context: AccountContext, location: ChatListControllerLocation, filter: ChatListFilter?, previewing: Bool, controlsHistoryPreload: Bool, presentationData: PresentationData, animationCache: AnimationCache, animationRenderer: MultiAnimationRenderer, becameEmpty: @escaping (ChatListFilter?) -> Void, emptyAction: @escaping (ChatListFilter?) -> Void, secondaryEmptyAction: @escaping () -> Void) {
-        self.context = context
-        self.animationCache = animationCache
-        self.animationRenderer = animationRenderer
-        self.presentationData = presentationData
-        self.becameEmpty = becameEmpty
-        self.emptyAction = emptyAction
-        self.secondaryEmptyAction = secondaryEmptyAction
-        
-        self.listNode = ChatListNode(context: context, location: location, chatListFilter: filter, previewing: previewing, fillPreloadItems: controlsHistoryPreload, mode: .chatList, theme: presentationData.theme, fontSize: presentationData.listsFontSize, strings: presentationData.strings, dateTimeFormat: presentationData.dateTimeFormat, nameSortOrder: presentationData.nameSortOrder, nameDisplayOrder: presentationData.nameDisplayOrder, animationCache: animationCache, animationRenderer: animationRenderer, disableAnimations: true)
-        
-        super.init()
-        
-        self.addSubnode(self.listNode)
-        
-        self.listNode.isEmptyUpdated = { [weak self] isEmptyState, _, transition in
-            guard let strongSelf = self else {
-                return
-            }
-            var needsShimmerNode = false
-            var shimmerNodeOffset: CGFloat = 0.0
-            switch isEmptyState {
-            case let .empty(isLoading, hasArchiveInfo):
-                if hasArchiveInfo {
-                    shimmerNodeOffset = 253.0
-                }
-                if isLoading {
-                    needsShimmerNode = true
-                    
-                    if let emptyNode = strongSelf.emptyNode {
-                        strongSelf.emptyNode = nil
-                        transition.updateAlpha(node: emptyNode, alpha: 0.0, completion: { [weak emptyNode] _ in
-                            emptyNode?.removeFromSupernode()
-                        })
-                    }
-                } else {
-                    if let currentNode = strongSelf.emptyNode {
-                        currentNode.updateIsLoading(isLoading)
-                    } else {
-                        let subject: ChatListEmptyNode.Subject
-                        if let filter = filter {
-                            var showEdit = true
-                            if case let .filter(_, _, _, data) = filter {
-                                if data.excludeRead && data.includePeers.peers.isEmpty && data.includePeers.pinnedPeers.isEmpty {
-                                    showEdit = false
-                                }
-                            }
-                            subject = .filter(showEdit: showEdit)
-                        } else {
-                            if case .forum = location {
-                                subject = .forum
-                            } else {
-                                subject = .chats
-                            }
-                        }
-                        
-                        let emptyNode = ChatListEmptyNode(context: context, subject: subject, isLoading: isLoading, theme: strongSelf.presentationData.theme, strings: strongSelf.presentationData.strings, action: {
-                            self?.emptyAction(filter)
-                        }, secondaryAction: {
-                            self?.secondaryEmptyAction()
-                        })
-                        strongSelf.emptyNode = emptyNode
-                        strongSelf.addSubnode(emptyNode)
-                        if let (size, insets, _) = strongSelf.validLayout {
-                            let emptyNodeFrame = CGRect(origin: CGPoint(x: 0.0, y: insets.top), size: CGSize(width: size.width, height: size.height - insets.top - insets.bottom))
-                            emptyNode.frame = emptyNodeFrame
-                            emptyNode.updateLayout(size: emptyNodeFrame.size, transition: .immediate)
-                        }
-                        emptyNode.alpha = 0.0
-                        transition.updateAlpha(node: emptyNode, alpha: 1.0)
-                    }
-                }
-                if !isLoading {
-                    strongSelf.becameEmpty(filter)
-                }
-            case .notEmpty:
-                if let emptyNode = strongSelf.emptyNode {
-                    strongSelf.emptyNode = nil
-                    transition.updateAlpha(node: emptyNode, alpha: 0.0, completion: { [weak emptyNode] _ in
-                        emptyNode?.removeFromSupernode()
-                    })
-                }
-            }
-            if needsShimmerNode {
-                strongSelf.shimmerNodeOffset = shimmerNodeOffset
-                if strongSelf.emptyShimmerEffectNode == nil {
-                    let emptyShimmerEffectNode = ChatListShimmerNode()
-                    strongSelf.emptyShimmerEffectNode = emptyShimmerEffectNode
-                    strongSelf.insertSubnode(emptyShimmerEffectNode, belowSubnode: strongSelf.listNode)
-                    if let (size, insets, _) = strongSelf.validLayout, let offset = strongSelf.floatingHeaderOffset {
-                        strongSelf.layoutEmptyShimmerEffectNode(node: emptyShimmerEffectNode, size: size, insets: insets, verticalOffset: offset + strongSelf.shimmerNodeOffset, transition: .immediate)
-                    }
-                }
-            } else if let emptyShimmerEffectNode = strongSelf.emptyShimmerEffectNode {
-                strongSelf.emptyShimmerEffectNode = nil
-                let emptyNodeTransition = transition.isAnimated ? transition : .animated(duration: 0.3, curve: .easeInOut)
-                emptyNodeTransition.updateAlpha(node: emptyShimmerEffectNode, alpha: 0.0, completion: { [weak emptyShimmerEffectNode] _ in
-                    emptyShimmerEffectNode?.removeFromSupernode()
-                })
-                strongSelf.listNode.alpha = 0.0
-                emptyNodeTransition.updateAlpha(node: strongSelf.listNode, alpha: 1.0)
-            }
-        }
-        
-        self.listNode.updateFloatingHeaderOffset = { [weak self] offset, transition in
-            guard let strongSelf = self else {
-                return
-            }
-            strongSelf.floatingHeaderOffset = offset
-            if let (size, insets, _) = strongSelf.validLayout, let emptyShimmerEffectNode = strongSelf.emptyShimmerEffectNode {
-                strongSelf.layoutEmptyShimmerEffectNode(node: emptyShimmerEffectNode, size: size, insets: insets, verticalOffset: offset + strongSelf.shimmerNodeOffset, transition: transition)
-            }
-        }
-    }
-    
-    private func layoutEmptyShimmerEffectNode(node: ChatListShimmerNode, size: CGSize, insets: UIEdgeInsets, verticalOffset: CGFloat, transition: ContainedViewLayoutTransition) {
-        node.update(context: self.context, animationCache: self.animationCache, animationRenderer: self.animationRenderer, size: size, presentationData: self.presentationData, transition: .immediate)
-        transition.updateFrameAdditive(node: node, frame: CGRect(origin: CGPoint(x: 0.0, y: verticalOffset), size: size))
-    }
-    
-    func updatePresentationData(_ presentationData: PresentationData) {
-        self.presentationData = presentationData
-        
-        self.listNode.accessibilityPageScrolledString = { row, count in
-            return presentationData.strings.VoiceOver_ScrollStatus(row, count).string
-        }
-        
-        self.listNode.updateThemeAndStrings(theme: presentationData.theme, fontSize: presentationData.listsFontSize, strings: presentationData.strings, dateTimeFormat: presentationData.dateTimeFormat, nameSortOrder: presentationData.nameSortOrder, nameDisplayOrder: presentationData.nameDisplayOrder, disableAnimations: true)
-        
-        self.emptyNode?.updateThemeAndStrings(theme: presentationData.theme, strings: presentationData.strings)
-    }
-    
-    func updateLayout(size: CGSize, insets: UIEdgeInsets, visualNavigationHeight: CGFloat, transition: ContainedViewLayoutTransition) {
-        self.validLayout = (size, insets, visualNavigationHeight)
-        
-        let (duration, curve) = listViewAnimationDurationAndCurve(transition: transition)
-        let updateSizeAndInsets = ListViewUpdateSizeAndInsets(size: size, insets: insets, duration: duration, curve: curve)
-        
-        transition.updateFrame(node: self.listNode, frame: CGRect(origin: CGPoint(), size: size))
-        self.listNode.visualInsets = UIEdgeInsets(top: visualNavigationHeight, left: 0.0, bottom: 0.0, right: 0.0)
-        self.listNode.updateLayout(transition: transition, updateSizeAndInsets: updateSizeAndInsets)
-        
-        if let emptyNode = self.emptyNode {
-            let emptyNodeFrame = CGRect(origin: CGPoint(x: 0.0, y: insets.top), size: CGSize(width: size.width, height: size.height - insets.top - insets.bottom))
-            transition.updateFrame(node: emptyNode, frame: emptyNodeFrame)
-            emptyNode.updateLayout(size: emptyNodeFrame.size, transition: transition)
-        }
-    }
-}
-
-final class ChatListContainerNode: ASDisplayNode, UIGestureRecognizerDelegate {
-    private let context: AccountContext
-    private let location: ChatListControllerLocation
+    private weak var controller: ChatListControllerImpl?
+    let location: ChatListControllerLocation
+    private let chatListMode: ChatListNodeMode
     private let previewing: Bool
+    private let isInlineMode: Bool
     private let controlsHistoryPreload: Bool
     private let filterBecameEmpty: (ChatListFilter?) -> Void
     private let filterEmptyAction: (ChatListFilter?) -> Void
     private let secondaryEmptyAction: () -> Void
+    private let openArchiveSettings: () -> Void
+    
+    fileprivate var onStoriesLockedUpdated: ((Bool) -> Void)?
     
     fileprivate var onFilterSwitch: (() -> Void)?
     
@@ -466,21 +68,49 @@ final class ChatListContainerNode: ASDisplayNode, UIGestureRecognizerDelegate {
     
     private var itemNodes: [ChatListFilterTabEntryId: ChatListContainerItemNode] = [:]
     private var pendingItemNode: (ChatListFilterTabEntryId, ChatListContainerItemNode, Disposable)?
-    private(set) var availableFilters: [ChatListContainerNodeFilter] = [.all]
+    private(set) var availableFilters: [ChatListContainerNodeFilter] = [.all] {
+        didSet {
+            self.availableFiltersPromise.set(self.availableFilters)
+        }
+    }
+    private let availableFiltersPromise = ValuePromise<[ChatListContainerNodeFilter]>([.all], ignoreRepeated: true)
+    var availableFiltersSignal: Signal<[ChatListContainerNodeFilter], NoError> {
+        return self.availableFiltersPromise.get()
+    }
+    
     private var filtersLimit: Int32? = nil
     private var selectedId: ChatListFilterTabEntryId
     
-    private(set) var transitionFraction: CGFloat = 0.0
+    var hintUpdatedStoryExpansion: Bool = false
+    var ignoreStoryUnlockedScrolling: Bool = false
+    var tempTopInset: CGFloat = 0.0 {
+        didSet {
+            for (_, itemNode) in self.itemNodes {
+                itemNode.listNode.tempTopInset = self.tempTopInset
+            }
+            if let pendingItemNode = self.pendingItemNode {
+                pendingItemNode.1.listNode.tempTopInset = self.tempTopInset
+            }
+        }
+    }
+    
+    var initialScrollingOffset: CGFloat?
+    
+    public private(set) var transitionFraction: CGFloat = 0.0
     private var transitionFractionOffset: CGFloat = 0.0
     private var disableItemNodeOperationsWhileAnimating: Bool = false
-    private var validLayout: (layout: ContainerViewLayout, navigationBarHeight: CGFloat, visualNavigationHeight: CGFloat, cleanNavigationBarHeight: CGFloat, isReorderingFilters: Bool, isEditing: Bool)?
+    private var validLayout: (layout: ContainerViewLayout, navigationBarHeight: CGFloat, visualNavigationHeight: CGFloat, originalNavigationHeight: CGFloat, cleanNavigationBarHeight: CGFloat, insets: UIEdgeInsets, isReorderingFilters: Bool, isEditing: Bool, inlineNavigationLocation: ChatListControllerLocation?, inlineNavigationTransitionFraction: CGFloat, storiesInset: CGFloat)?
+    
+    private var scrollingOffset: (navigationHeight: CGFloat, offset: CGFloat)?
     
     private var enableAdjacentFilterLoading: Bool = false
     
     private var panRecognizer: InteractiveTransitionGestureRecognizer?
     
+    let leftSeparatorLayer: SimpleLayer
+    
     private let _ready = Promise<Bool>()
-    var ready: Signal<Bool, NoError> {
+    public var ready: Signal<Bool, NoError> {
         return _ready.get()
     }
     
@@ -490,7 +120,7 @@ final class ChatListContainerNode: ASDisplayNode, UIGestureRecognizerDelegate {
     }
     
     private var currentItemNodeValue: ChatListContainerItemNode?
-    var currentItemNode: ChatListNode {
+    public var currentItemNode: ChatListNode {
         return self.currentItemNodeValue!.listNode
     }
     
@@ -499,10 +129,13 @@ final class ChatListContainerNode: ASDisplayNode, UIGestureRecognizerDelegate {
         return self.currentItemStateValue.get()
     }
     
-    var currentItemFilterUpdated: ((ChatListFilterTabEntryId, CGFloat, ContainedViewLayoutTransition, Bool) -> Void)?
-    var currentItemFilter: ChatListFilterTabEntryId {
+    public var currentItemFilterUpdated: ((ChatListFilterTabEntryId, CGFloat, ContainedViewLayoutTransition, Bool) -> Void)?
+    public var currentItemFilter: ChatListFilterTabEntryId {
         return self.currentItemNode.chatListFilter.flatMap { .filter($0.id) } ?? .all
     }
+    
+    private var didSetupContentOffset = false
+    private var isSettingUpContentOffset = false
     
     private func applyItemNodeAsCurrent(id: ChatListFilterTabEntryId, itemNode: ChatListContainerItemNode) {
         if let previousItemNode = self.currentItemNodeValue {
@@ -516,14 +149,21 @@ final class ChatListContainerNode: ASDisplayNode, UIGestureRecognizerDelegate {
             previousItemNode.listNode.deletePeerThread = nil
             previousItemNode.listNode.setPeerThreadStopped = nil
             previousItemNode.listNode.setPeerThreadPinned = nil
+            previousItemNode.listNode.setPeerThreadHidden = nil
             previousItemNode.listNode.peerSelected = nil
+            previousItemNode.listNode.disabledPeerSelected = nil
             previousItemNode.listNode.groupSelected = nil
             previousItemNode.listNode.updatePeerGrouping = nil
             previousItemNode.listNode.contentOffsetChanged = nil
             previousItemNode.listNode.contentScrollingEnded = nil
+            previousItemNode.listNode.didBeginInteractiveDragging = nil
+            previousItemNode.listNode.endedInteractiveDragging = { _ in }
+            previousItemNode.listNode.shouldStopScrolling = nil
             previousItemNode.listNode.activateChatPreview = nil
+            previousItemNode.listNode.openStories = nil
             previousItemNode.listNode.addedVisibleChatsWithPeerIds = nil
             previousItemNode.listNode.didBeginSelectingChats = nil
+            previousItemNode.listNode.canExpandHiddenItems = nil
             
             previousItemNode.accessibilityElementsHidden = true
         }
@@ -560,8 +200,14 @@ final class ChatListContainerNode: ASDisplayNode, UIGestureRecognizerDelegate {
         itemNode.listNode.setPeerThreadPinned = { [weak self] peerId, threadId, isPinned in
             self?.setPeerThreadPinned?(peerId, threadId, isPinned)
         }
+        itemNode.listNode.setPeerThreadHidden = { [weak self] peerId, threadId, isHidden in
+            self?.setPeerThreadHidden?(peerId, threadId, isHidden)
+        }
         itemNode.listNode.peerSelected = { [weak self] peerId, threadId, animated, activateInput, promoInfo in
             self?.peerSelected?(peerId, threadId, animated, activateInput, promoInfo)
+        }
+        itemNode.listNode.disabledPeerSelected = { [weak self] peerId, threadId, reason in
+            self?.disabledPeerSelected?(peerId, threadId, reason)
         }
         itemNode.listNode.groupSelected = { [weak self] groupId in
             self?.groupSelected?(groupId)
@@ -569,20 +215,147 @@ final class ChatListContainerNode: ASDisplayNode, UIGestureRecognizerDelegate {
         itemNode.listNode.updatePeerGrouping = { [weak self] peerId, group in
             self?.updatePeerGrouping?(peerId, group)
         }
-        itemNode.listNode.contentOffsetChanged = { [weak self] offset in
-            self?.contentOffsetChanged?(offset)
+        itemNode.listNode.contentOffsetChanged = { [weak self, weak itemNode] offset in
+            guard let self, let itemNode else {
+                return
+            }
+            if self.isSettingUpContentOffset {
+                return
+            }
+            
+            if !self.didSetupContentOffset, let initialScrollingOffset = self.initialScrollingOffset {
+                self.initialScrollingOffset = nil
+                self.didSetupContentOffset = true
+                self.isSettingUpContentOffset = true
+                
+                let _ = itemNode.listNode.scrollToOffsetFromTop(initialScrollingOffset, animated: false)
+                
+                let offset = itemNode.listNode.visibleContentOffset()
+                self.contentOffset = offset
+                self.contentOffsetChanged?(offset, self.currentItemNode)
+                
+                self.isSettingUpContentOffset = false
+                return
+            }
+            
+            if !self.isInlineMode, itemNode.listNode.isTracking && !self.currentItemNode.startedScrollingAtUpperBound && self.tempTopInset == 0.0 {
+                if case let .known(value) = offset {
+                    if value < -1.0 {
+                        if let controller = self.controller, let storySubscriptions = controller.orderedStorySubscriptions, shouldDisplayStoriesInChatListHeader(storySubscriptions: storySubscriptions, isHidden: controller.location == .chatList(groupId: .archive)) {
+                            self.currentItemNode.startedScrollingAtUpperBound = true
+                            self.tempTopInset = ChatListNavigationBar.storiesScrollHeight
+                        }
+                    }
+                }
+            }
+            
+            self.contentOffset = offset
+            self.contentOffsetChanged?(offset, self.currentItemNode)
+            
+            if !self.isInlineMode, self.currentItemNode.startedScrollingAtUpperBound && self.tempTopInset != 0.0 {
+                if case let .known(value) = offset {
+                    if value > 4.0 {
+                        self.currentItemNode.startedScrollingAtUpperBound = false
+                        self.tempTopInset = 0.0
+                    } else if value <= -ChatListNavigationBar.storiesScrollHeight {
+                    } else if value > -82.0 {
+                    }
+                } else if case .unknown = offset {
+                    self.currentItemNode.startedScrollingAtUpperBound = false
+                    self.tempTopInset = 0.0
+                }
+            }
+        }
+        itemNode.listNode.didBeginInteractiveDragging = { [weak self] listView in
+            guard let self else {
+                return
+            }
+            
+            self.didBeginInteractiveDragging?(listView)
+            
+            if self.isInlineMode {
+                return
+            }
+            
+            guard let validLayout = self.validLayout else {
+                return
+            }
+            
+            let tempTopInset: CGFloat
+            if validLayout.inlineNavigationLocation != nil {
+                tempTopInset = 0.0
+            } else if self.currentItemNode.startedScrollingAtUpperBound && !self.isInlineMode {
+                if let controller = self.controller, let storySubscriptions = controller.orderedStorySubscriptions, shouldDisplayStoriesInChatListHeader(storySubscriptions: storySubscriptions, isHidden: controller.location == .chatList(groupId: .archive)) {
+                    tempTopInset = ChatListNavigationBar.storiesScrollHeight
+                } else {
+                    tempTopInset = 0.0
+                }
+            } else {
+                tempTopInset = 0.0
+            }
+            if self.tempTopInset != tempTopInset {
+                self.tempTopInset = tempTopInset
+                self.hintUpdatedStoryExpansion = true
+                self.currentItemNode.contentOffsetChanged?(self.currentItemNode.visibleContentOffset())
+                self.hintUpdatedStoryExpansion = false
+            }
+        }
+        itemNode.listNode.endedInteractiveDragging = { [weak self] _ in
+            guard let self else {
+                return
+            }
+            self.endedInteractiveDragging?(self.currentItemNode)
+        }
+        itemNode.listNode.shouldStopScrolling = { [weak self] velocity in
+            guard let self else {
+                return false
+            }
+            return self.shouldStopScrolling?(self.currentItemNode, velocity) ?? false
         }
         itemNode.listNode.contentScrollingEnded = { [weak self] listView in
-            return self?.contentScrollingEnded?(listView) ?? false
+            guard let self else {
+                return false
+            }
+            
+            return self.contentScrollingEnded?(listView) ?? false
+            //DispatchQueue.main.async { [weak self] in
+            //    let _ = self?.contentScrollingEnded?(listView)
+            //}
+            
+            //return false
         }
-        itemNode.listNode.activateChatPreview = { [weak self] item, sourceNode, gesture, location in
-            self?.activateChatPreview?(item, sourceNode, gesture, location)
+        itemNode.listNode.activateChatPreview = { [weak self] item, threadId, sourceNode, gesture, location in
+            self?.activateChatPreview?(item, threadId, sourceNode, gesture, location)
+        }
+        itemNode.listNode.openStories = { [weak self] subject, itemNode in
+            self?.openStories?(subject, itemNode)
         }
         itemNode.listNode.addedVisibleChatsWithPeerIds = { [weak self] ids in
             self?.addedVisibleChatsWithPeerIds?(ids)
         }
         itemNode.listNode.didBeginSelectingChats = { [weak self] in
             self?.didBeginSelectingChats?()
+        }
+        itemNode.listNode.canExpandHiddenItems = { [weak self] in
+            guard let self, let canExpandHiddenItems = self.canExpandHiddenItems else {
+                return false
+            }
+            return canExpandHiddenItems()
+        }
+        itemNode.listNode.openBirthdaySetup = { [weak self] in
+            self?.openBirthdaySetup?()
+        }
+        itemNode.listNode.openPremiumManagement = { [weak self] in
+            self?.openPremiumManagement?()
+        }
+        itemNode.listNode.openStarsTopup = { [weak self] amount in
+            self?.openStarsTopup?(amount)
+        }
+        itemNode.listNode.openWebApp = { [weak self] amount in
+            self?.openWebApp?(amount)
+        }
+        itemNode.listNode.openPhotoSetup = { [weak self] in
+            self?.openPhotoSetup?()
         }
         
         self.currentItemStateValue.set(itemNode.listNode.state |> map { state in
@@ -596,22 +369,35 @@ final class ChatListContainerNode: ASDisplayNode, UIGestureRecognizerDelegate {
             return (state, filterId)
         })
         
-        if self.controlsHistoryPreload {
+        let enablePreload = context.sharedContext.accountManager.sharedData(keys: Set([ApplicationSpecificSharedDataKeys.automaticMediaDownloadSettings]))
+        |> map { sharedData -> Bool in
+            var automaticMediaDownloadSettings: MediaAutoDownloadSettings
+            if let value = sharedData.entries[ApplicationSpecificSharedDataKeys.automaticMediaDownloadSettings]?.get(MediaAutoDownloadSettings.self) {
+                automaticMediaDownloadSettings = value
+            } else {
+                automaticMediaDownloadSettings = MediaAutoDownloadSettings.defaultSettings
+            }
+            return automaticMediaDownloadSettings.energyUsageSettings.autodownloadInBackground
+        }
+        |> distinctUntilChanged
+        
+        if self.controlsHistoryPreload, case .chatList(groupId: .root) = self.location {
             self.context.account.viewTracker.chatListPreloadItems.set(combineLatest(queue: .mainQueue(),
-                context.sharedContext.hasOngoingCall.get(),
-                itemNode.listNode.preloadItems.get()
+                context.sharedContext.enablePreloads.get(),
+                itemNode.listNode.preloadItems.get(),
+                enablePreload
             )
-            |> map { hasOngoingCall, preloadItems -> [ChatHistoryPreloadItem] in
-                if hasOngoingCall {
-                    return []
+            |> map { enablePreloads, preloadItems, enablePreload -> Set<ChatHistoryPreloadItem> in
+                if !enablePreloads || !enablePreload {
+                    return Set()
                 } else {
-                    return preloadItems
+                    return Set(preloadItems)
                 }
             })
         }
     }
     
-    var activateSearch: (() -> Void)?
+    public var activateSearch: (() -> Void)?
     var presentAlert: ((String) -> Void)?
     var present: ((ViewController) -> Void)?
     var push: ((ViewController) -> Void)?
@@ -621,23 +407,55 @@ final class ChatListContainerNode: ASDisplayNode, UIGestureRecognizerDelegate {
     var deletePeerThread: ((EnginePeer.Id, Int64) -> Void)?
     var setPeerThreadStopped: ((EnginePeer.Id, Int64, Bool) -> Void)?
     var setPeerThreadPinned: ((EnginePeer.Id, Int64, Bool) -> Void)?
-    var peerSelected: ((EnginePeer, Int64?, Bool, Bool, ChatListNodeEntryPromoInfo?) -> Void)?
+    var setPeerThreadHidden: ((EnginePeer.Id, Int64, Bool) -> Void)?
+    public var peerSelected: ((EnginePeer, Int64?, Bool, Bool, ChatListNodeEntryPromoInfo?) -> Void)?
+    public var disabledPeerSelected: ((EnginePeer, Int64?, ChatListDisabledPeerReason) -> Void)?
     var groupSelected: ((EngineChatList.Group) -> Void)?
     var updatePeerGrouping: ((EnginePeer.Id, Bool) -> Void)?
-    var contentOffsetChanged: ((ListViewVisibleContentOffset) -> Void)?
-    var contentScrollingEnded: ((ListView) -> Bool)?
-    var activateChatPreview: ((ChatListItem, ASDisplayNode, ContextGesture?, CGPoint?) -> Void)?
+    var contentOffset: ListViewVisibleContentOffset?
+    public var contentOffsetChanged: ((ListViewVisibleContentOffset, ListView) -> Void)?
+    public var contentScrollingEnded: ((ListView) -> Bool)?
+    var didBeginInteractiveDragging: ((ListView) -> Void)?
+    var endedInteractiveDragging: ((ListView) -> Void)?
+    var shouldStopScrolling: ((ListView, CGFloat) -> Bool)?
+    var activateChatPreview: ((ChatListItem, Int64?, ASDisplayNode, ContextGesture?, CGPoint?) -> Void)?
+    var openBirthdaySetup: (() -> Void)?
+    var openPremiumManagement: (() -> Void)?
+    var openStories: ((ChatListNode.OpenStoriesSubject, ASDisplayNode?) -> Void)?
+    var openStarsTopup: ((Int64?) -> Void)?
+    var openWebApp: ((TelegramUser) -> Void)?
+    var openPhotoSetup: (() -> Void)?
     var addedVisibleChatsWithPeerIds: (([EnginePeer.Id]) -> Void)?
     var didBeginSelectingChats: (() -> Void)?
-    var displayFilterLimit: (() -> Void)?
+    var canExpandHiddenItems: (() -> Bool)?
+    public var displayFilterLimit: (() -> Void)?
     
-    init(context: AccountContext, location: ChatListControllerLocation, previewing: Bool, controlsHistoryPreload: Bool, presentationData: PresentationData, animationCache: AnimationCache, animationRenderer: MultiAnimationRenderer, filterBecameEmpty: @escaping (ChatListFilter?) -> Void, filterEmptyAction: @escaping (ChatListFilter?) -> Void, secondaryEmptyAction: @escaping () -> Void) {
+    public init(
+        context: AccountContext,
+        controller: ChatListControllerImpl?,
+        location: ChatListControllerLocation,
+        chatListMode: ChatListNodeMode = .chatList(appendContacts: true),
+        previewing: Bool,
+        controlsHistoryPreload: Bool,
+        isInlineMode: Bool,
+        presentationData: PresentationData,
+        animationCache: AnimationCache,
+        animationRenderer: MultiAnimationRenderer,
+        filterBecameEmpty: @escaping (ChatListFilter?) -> Void,
+        filterEmptyAction: @escaping (ChatListFilter?) -> Void,
+        secondaryEmptyAction: @escaping () -> Void,
+        openArchiveSettings: @escaping () -> Void)
+    {
         self.context = context
+        self.controller = controller
         self.location = location
+        self.chatListMode = chatListMode
         self.previewing = previewing
+        self.isInlineMode = isInlineMode
         self.filterBecameEmpty = filterBecameEmpty
         self.filterEmptyAction = filterEmptyAction
         self.secondaryEmptyAction = secondaryEmptyAction
+        self.openArchiveSettings = openArchiveSettings
         self.controlsHistoryPreload = controlsHistoryPreload
         
         self.presentationData = presentationData
@@ -646,15 +464,23 @@ final class ChatListContainerNode: ASDisplayNode, UIGestureRecognizerDelegate {
         
         self.selectedId = .all
         
+        self.leftSeparatorLayer = SimpleLayer()
+        self.leftSeparatorLayer.isHidden = true
+        self.leftSeparatorLayer.backgroundColor = presentationData.theme.rootController.navigationBar.separatorColor.cgColor
+        
         super.init()
         
-        let itemNode = ChatListContainerItemNode(context: self.context, location: self.location, filter: nil, previewing: self.previewing, controlsHistoryPreload: self.controlsHistoryPreload, presentationData: presentationData, animationCache: self.animationCache, animationRenderer: self.animationRenderer, becameEmpty: { [weak self] filter in
+        self.backgroundColor = presentationData.theme.chatList.backgroundColor
+        
+        let itemNode = ChatListContainerItemNode(context: self.context, controller: self.controller, location: self.location, filter: nil, chatListMode: chatListMode, previewing: self.previewing, isInlineMode: self.isInlineMode, controlsHistoryPreload: self.controlsHistoryPreload, presentationData: presentationData, animationCache: self.animationCache, animationRenderer: self.animationRenderer, becameEmpty: { [weak self] filter in
             self?.filterBecameEmpty(filter)
         }, emptyAction: { [weak self] filter in
             self?.filterEmptyAction(filter)
         }, secondaryEmptyAction: { [weak self] in
             self?.secondaryEmptyAction()
-        })
+        }, openArchiveSettings: { [weak self] in
+            self?.openArchiveSettings()
+        }, autoSetReady: true, isMainTab: nil)
         self.itemNodes[.all] = itemNode
         self.addSubnode(itemNode)
         
@@ -663,39 +489,47 @@ final class ChatListContainerNode: ASDisplayNode, UIGestureRecognizerDelegate {
         self.applyItemNodeAsCurrent(id: .all, itemNode: itemNode)
         
         let panRecognizer = InteractiveTransitionGestureRecognizer(target: self, action: #selector(self.panGesture(_:)), allowedDirections: { [weak self] _ in
-            guard let strongSelf = self, strongSelf.availableFilters.count > 1 else {
+            guard let self, self.availableFilters.count > 1 || (self.controller?.isStoryPostingAvailable == true && !(self.context.sharedContext.callManager?.hasActiveCall ?? false)) else {
                 return []
             }
-            switch strongSelf.currentItemNode.visibleContentOffset() {
+            guard case .chatList(.root) = self.location else {
+                return []
+            }
+            switch self.currentItemNode.visibleContentOffset() {
             case let .known(value):
-                if value < -1.0 {
+                if value < -self.currentItemNode.tempTopInset {
                     return []
                 }
             case .none, .unknown:
                 break
             }
-            if !strongSelf.currentItemNode.isNavigationInAFinalState {
+            if !self.currentItemNode.isNavigationInAFinalState {
                 return []
             }
-            let directions: InteractiveTransitionGestureRecognizerDirections = [.leftCenter, .rightCenter]
-            return directions
+            if self.availableFilters.count > 1 {
+                return [.leftCenter, .rightCenter]
+            } else {
+                return [.rightEdge]
+            }
         }, edgeWidth: .widthMultiplier(factor: 1.0 / 6.0, min: 22.0, max: 80.0))
-        panRecognizer.delegate = self
+        panRecognizer.delegate = self.wrappedGestureRecognizerDelegate
         panRecognizer.delaysTouchesBegan = false
         panRecognizer.cancelsTouchesInView = true
         self.panRecognizer = panRecognizer
         self.view.addGestureRecognizer(panRecognizer)
+        
+        self.view.layer.addSublayer(self.leftSeparatorLayer)
     }
     
     deinit {
         self.pendingItemNode?.2.dispose()
     }
     
-    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+    public func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
         return false
     }
     
-    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+    public func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
         if let _ = otherGestureRecognizer as? InteractiveTransitionGestureRecognizer {
             return false
         }
@@ -714,12 +548,19 @@ final class ChatListContainerNode: ASDisplayNode, UIGestureRecognizerDelegate {
             self.onFilterSwitch?()
             
             self.transitionFractionOffset = 0.0
-            if let (layout, navigationBarHeight, visualNavigationHeight, cleanNavigationBarHeight, isReorderingFilters, isEditing) = self.validLayout, let itemNode = self.itemNodes[self.selectedId] {
+            if let (layout, navigationBarHeight, visualNavigationHeight, originalNavigationHeight, cleanNavigationBarHeight, insets, isReorderingFilters, isEditing, inlineNavigationLocation, inlineNavigationTransitionFraction, storiesInset) = self.validLayout, let itemNode = self.itemNodes[self.selectedId] {
                 for (id, itemNode) in self.itemNodes {
                     if id != selectedId {
                         itemNode.emptyNode?.restartAnimation()
+                        
+                        if let controller = self.controller, let chatListDisplayNode = controller.displayNode as? ChatListControllerNode, let navigationBarComponentView = chatListDisplayNode.navigationBarView.view as? ChatListNavigationBar.View, let clippedScrollOffset = navigationBarComponentView.clippedScrollOffset {
+                            let scrollOffset = clippedScrollOffset
+                            
+                            let _ = itemNode.listNode.scrollToOffsetFromTop(scrollOffset, animated: false)
+                        }
                     }
                 }
+                
                 if let presentationLayer = itemNode.layer.presentation() {
                     self.transitionFraction = presentationLayer.frame.minX / layout.size.width
                     self.transitionFractionOffset = self.transitionFraction
@@ -727,15 +568,17 @@ final class ChatListContainerNode: ASDisplayNode, UIGestureRecognizerDelegate {
                         for (_, itemNode) in self.itemNodes {
                             itemNode.layer.removeAllAnimations()
                         }
-                        self.update(layout: layout, navigationBarHeight: navigationBarHeight, visualNavigationHeight: visualNavigationHeight, cleanNavigationBarHeight: cleanNavigationBarHeight, isReorderingFilters: isReorderingFilters, isEditing: isEditing, transition: .immediate)
+                        self.update(layout: layout, navigationBarHeight: navigationBarHeight, visualNavigationHeight: visualNavigationHeight, originalNavigationHeight: originalNavigationHeight, cleanNavigationBarHeight: cleanNavigationBarHeight, insets: insets, isReorderingFilters: isReorderingFilters, isEditing: isEditing, inlineNavigationLocation: inlineNavigationLocation, inlineNavigationTransitionFraction: inlineNavigationTransitionFraction, storiesInset: storiesInset, transition: .immediate)
                         self.currentItemFilterUpdated?(self.currentItemFilter, self.transitionFraction, .immediate, true)
                     }
                 }
             }
         case .changed:
-            if let (layout, navigationBarHeight, visualNavigationHeight, cleanNavigationBarHeight, isReorderingFilters, isEditing) = self.validLayout, let selectedIndex = self.availableFilters.firstIndex(where: { $0.id == self.selectedId }) {
+            if let (layout, navigationBarHeight, visualNavigationHeight, originalNavigationHeight: originalNavigationHeight, cleanNavigationBarHeight, insets, isReorderingFilters, isEditing, inlineNavigationLocation, inlineNavigationTransitionFraction, storiesInset) = self.validLayout, let selectedIndex = self.availableFilters.firstIndex(where: { $0.id == self.selectedId }) {
                 let translation = recognizer.translation(in: self.view)
                 var transitionFraction = translation.x / layout.size.width
+                
+                var transition: ContainedViewLayoutTransition = .immediate
                 
                 func rubberBandingOffset(offset: CGFloat, bandingStart: CGFloat) -> CGFloat {
                     let bandedOffset = offset - bandingStart
@@ -743,10 +586,25 @@ final class ChatListContainerNode: ASDisplayNode, UIGestureRecognizerDelegate {
                     let coefficient: CGFloat = 0.4
                     return bandingStart + (1.0 - (1.0 / ((bandedOffset * coefficient / range) + 1.0))) * range
                 }
-                
-                if selectedIndex <= 0 && translation.x > 0.0 {
-                    let overscroll = translation.x
-                    transitionFraction = rubberBandingOffset(offset: overscroll, bandingStart: 0.0) / layout.size.width
+                     
+                if case .compact = layout.metrics.widthClass, self.controller?.isStoryPostingAvailable == true && !(self.context.sharedContext.callManager?.hasActiveCall ?? false) {
+                    let cameraIsAlreadyOpened = self.controller?.hasStoryCameraTransition ?? false
+                    if selectedIndex <= 0 && translation.x > 0.0 {
+                        transitionFraction = 0.0
+                        self.controller?.storyCameraPanGestureChanged(transitionFraction: translation.x / layout.size.width)
+                    } else if translation.x <= 0.0 && cameraIsAlreadyOpened {
+                        self.controller?.storyCameraPanGestureChanged(transitionFraction: 0.0)
+                    }
+                    
+                    if cameraIsAlreadyOpened {
+                        transitionFraction = 0.0
+                        return
+                    }
+                } else {
+                    if selectedIndex <= 0 && translation.x > 0.0 {
+                        let overscroll = translation.x
+                        transitionFraction = rubberBandingOffset(offset: overscroll, bandingStart: 0.0) / layout.size.width
+                    }
                 }
                 
                 if selectedIndex >= maxFilterIndex && translation.x < 0.0 {
@@ -755,9 +613,11 @@ final class ChatListContainerNode: ASDisplayNode, UIGestureRecognizerDelegate {
                     
                     if let filtersLimit = self.filtersLimit, selectedIndex >= filtersLimit - 1 {
                         transitionFraction = 0.0
+                        self.transitionFractionOffset = 0.0
                         recognizer.isEnabled = false
                         recognizer.isEnabled = true
                         
+                        transition = .animated(duration: 0.45, curve: .spring)
                         self.displayFilterLimit?()
                     }
                 }
@@ -770,11 +630,11 @@ final class ChatListContainerNode: ASDisplayNode, UIGestureRecognizerDelegate {
                         }
                     }
                 }
-                self.update(layout: layout, navigationBarHeight: navigationBarHeight, visualNavigationHeight: visualNavigationHeight, cleanNavigationBarHeight: cleanNavigationBarHeight, isReorderingFilters: isReorderingFilters, isEditing: isEditing, transition: .immediate)
-                self.currentItemFilterUpdated?(self.currentItemFilter, self.transitionFraction, .immediate, false)
+                self.update(layout: layout, navigationBarHeight: navigationBarHeight, visualNavigationHeight: visualNavigationHeight, originalNavigationHeight: originalNavigationHeight, cleanNavigationBarHeight: cleanNavigationBarHeight, insets: insets, isReorderingFilters: isReorderingFilters, isEditing: isEditing, inlineNavigationLocation: inlineNavigationLocation, inlineNavigationTransitionFraction: inlineNavigationTransitionFraction, storiesInset: storiesInset, transition: .immediate)
+                self.currentItemFilterUpdated?(self.currentItemFilter, self.transitionFraction, transition, false)
             }
         case .cancelled, .ended:
-            if let (layout, navigationBarHeight, visualNavigationHeight, cleanNavigationBarHeight, isReorderingFilters, isEditing) = self.validLayout, let selectedIndex = self.availableFilters.firstIndex(where: { $0.id == self.selectedId }) {
+            if let (layout, navigationBarHeight, visualNavigationHeight, originalNavigationHeight: originalNavigationHeight, cleanNavigationBarHeight, insets, isReorderingFilters, isEditing, inlineNavigationLocation, inlineNavigationTransitionFraction, storiesInset) = self.validLayout, let selectedIndex = self.availableFilters.firstIndex(where: { $0.id == self.selectedId }) {
                 let translation = recognizer.translation(in: self.view)
                 let velocity = recognizer.velocity(in: self.view)
                 var directionIsToRight: Bool?
@@ -797,6 +657,13 @@ final class ChatListContainerNode: ASDisplayNode, UIGestureRecognizerDelegate {
                         directionIsToRight = translation.x > layout.size.width / 2.0
                     }
                 }
+                
+                let hasStoryCameraTransition = self.controller?.hasStoryCameraTransition ?? false
+                if hasStoryCameraTransition {
+                    self.controller?.storyCameraPanGestureEnded(transitionFraction: translation.x / layout.size.width, velocity: velocity.x)
+                }
+                var applyNodeAsCurrent: ChatListFilterTabEntryId?
+                
                 if let directionIsToRight = directionIsToRight {
                     var updatedIndex = selectedIndex
                     if directionIsToRight {
@@ -806,29 +673,48 @@ final class ChatListContainerNode: ASDisplayNode, UIGestureRecognizerDelegate {
                     }
                     let switchToId = self.availableFilters[updatedIndex].id
                     if switchToId != self.selectedId, let itemNode = self.itemNodes[switchToId] {
+                        let _ = itemNode
                         self.selectedId = switchToId
-                        self.applyItemNodeAsCurrent(id: switchToId, itemNode: itemNode)
+                        applyNodeAsCurrent = switchToId
                     }
                 }
                 self.transitionFraction = 0.0
                 let transition: ContainedViewLayoutTransition = .animated(duration: 0.45, curve: .spring)
                 self.disableItemNodeOperationsWhileAnimating = true
-                self.update(layout: layout, navigationBarHeight: navigationBarHeight, visualNavigationHeight: visualNavigationHeight, cleanNavigationBarHeight: cleanNavigationBarHeight, isReorderingFilters: isReorderingFilters, isEditing: isEditing, transition: transition)
-                self.currentItemFilterUpdated?(self.currentItemFilter, self.transitionFraction, transition, false)
+                self.update(layout: layout, navigationBarHeight: navigationBarHeight, visualNavigationHeight: visualNavigationHeight, originalNavigationHeight: originalNavigationHeight, cleanNavigationBarHeight: cleanNavigationBarHeight, insets: insets, isReorderingFilters: isReorderingFilters, isEditing: isEditing, inlineNavigationLocation: inlineNavigationLocation, inlineNavigationTransitionFraction: inlineNavigationTransitionFraction, storiesInset: storiesInset, transition: transition)
                 DispatchQueue.main.async {
                     self.disableItemNodeOperationsWhileAnimating = false
-                    if let (layout, navigationBarHeight, visualNavigationHeight, cleanNavigationBarHeight, isReorderingFilters, isEditing) = self.validLayout {
-                        self.update(layout: layout, navigationBarHeight: navigationBarHeight, visualNavigationHeight: visualNavigationHeight, cleanNavigationBarHeight: cleanNavigationBarHeight, isReorderingFilters: isReorderingFilters, isEditing: isEditing, transition: .immediate)
+                    if let (layout, navigationBarHeight, visualNavigationHeight, originalNavigationHeight, cleanNavigationBarHeight, insets, isReorderingFilters, isEditing, inlineNavigationLocation, inlineNavigationTransitionFraction, storiesInset) = self.validLayout {
+                        self.update(layout: layout, navigationBarHeight: navigationBarHeight, visualNavigationHeight: visualNavigationHeight, originalNavigationHeight: originalNavigationHeight, cleanNavigationBarHeight: cleanNavigationBarHeight, insets: insets, isReorderingFilters: isReorderingFilters, isEditing: isEditing, inlineNavigationLocation: inlineNavigationLocation, inlineNavigationTransitionFraction: inlineNavigationTransitionFraction, storiesInset: storiesInset, transition: .immediate)
                     }
                 }
+                                    
+                if let switchToId = applyNodeAsCurrent, let itemNode = self.itemNodes[switchToId] {
+                    self.applyItemNodeAsCurrent(id: switchToId, itemNode: itemNode)
+                }
+                self.currentItemFilterUpdated?(self.currentItemFilter, self.transitionFraction, transition, false)
             }
         default:
             break
         }
     }
     
-    func updatePresentationData(_ presentationData: PresentationData) {
+    func fixContentOffset(offset: CGFloat) {
+        self.currentItemNode.fixContentOffset(offset: offset)
+    }
+    
+    public func updatePresentationData(_ presentationData: PresentationData) {
         self.presentationData = presentationData
+        
+        if let validLayout = self.validLayout {
+            if let _ = validLayout.inlineNavigationLocation {
+                self.backgroundColor = self.presentationData.theme.chatList.backgroundColor.mixedWith(self.presentationData.theme.chatList.pinnedItemBackgroundColor, alpha: validLayout.inlineNavigationTransitionFraction)
+            } else {
+                self.backgroundColor = self.presentationData.theme.chatList.backgroundColor
+            }
+        }
+        
+        self.leftSeparatorLayer.backgroundColor = self.presentationData.theme.rootController.navigationBar.separatorColor.cgColor
         
         for (_, itemNode) in self.itemNodes {
             itemNode.updatePresentationData(presentationData)
@@ -845,9 +731,9 @@ final class ChatListContainerNode: ASDisplayNode, UIGestureRecognizerDelegate {
         }
     }
     
-    func scrollToTop() {
+    public func scrollToTop(animated: Bool, adjustForTempInset: Bool) {
         if let itemNode = self.itemNodes[self.selectedId] {
-            itemNode.listNode.scrollToPosition(.top)
+            itemNode.listNode.scrollToPosition(.top(adjustForTempInset: adjustForTempInset), animated: animated)
         }
     }
     
@@ -876,7 +762,7 @@ final class ChatListContainerNode: ASDisplayNode, UIGestureRecognizerDelegate {
         }
     }
     
-    func updateAvailableFilters(_ availableFilters: [ChatListContainerNodeFilter], limit: Int32?) {
+    public func updateAvailableFilters(_ availableFilters: [ChatListContainerNodeFilter], limit: Int32?) {
         if self.availableFilters != availableFilters {
             let apply: () -> Void = { [weak self] in
                 guard let strongSelf = self else {
@@ -884,8 +770,8 @@ final class ChatListContainerNode: ASDisplayNode, UIGestureRecognizerDelegate {
                 }
                 strongSelf.availableFilters = availableFilters
                 strongSelf.filtersLimit = limit
-                if let (layout, navigationBarHeight, visualNavigationHeight, cleanNavigationBarHeight, isReorderingFilters, isEditing) = strongSelf.validLayout {
-                    strongSelf.update(layout: layout, navigationBarHeight: navigationBarHeight, visualNavigationHeight: visualNavigationHeight, cleanNavigationBarHeight: cleanNavigationBarHeight, isReorderingFilters: isReorderingFilters, isEditing: isEditing, transition: .immediate)
+                if let (layout, navigationBarHeight, visualNavigationHeight, originalNavigationHeight, cleanNavigationBarHeight, insets, isReorderingFilters, isEditing, inlineNavigationLocation, inlineNavigationTransitionFraction, storiesInset) = strongSelf.validLayout {
+                    strongSelf.update(layout: layout, navigationBarHeight: navigationBarHeight, visualNavigationHeight: visualNavigationHeight, originalNavigationHeight: originalNavigationHeight, cleanNavigationBarHeight: cleanNavigationBarHeight, insets: insets, isReorderingFilters: isReorderingFilters, isEditing: isEditing, inlineNavigationLocation: inlineNavigationLocation, inlineNavigationTransitionFraction: inlineNavigationTransitionFraction, storiesInset: storiesInset, transition: .immediate)
                 }
             }
             if !availableFilters.contains(where: { $0.id == self.selectedId }) {
@@ -898,41 +784,48 @@ final class ChatListContainerNode: ASDisplayNode, UIGestureRecognizerDelegate {
         }
     }
     
-    func updateEnableAdjacentFilterLoading(_ value: Bool) {
+    public func updateEnableAdjacentFilterLoading(_ value: Bool) {
         if value != self.enableAdjacentFilterLoading {
             self.enableAdjacentFilterLoading = value
             
-            if self.enableAdjacentFilterLoading, let (layout, navigationBarHeight, visualNavigationHeight, cleanNavigationBarHeight, isReorderingFilters, isEditing) = self.validLayout {
-                self.update(layout: layout, navigationBarHeight: navigationBarHeight, visualNavigationHeight: visualNavigationHeight, cleanNavigationBarHeight: cleanNavigationBarHeight, isReorderingFilters: isReorderingFilters, isEditing: isEditing, transition: .immediate)
+            if self.enableAdjacentFilterLoading, let (layout, navigationBarHeight, visualNavigationHeight, originalNavigationHeight, cleanNavigationBarHeight, insets, isReorderingFilters, isEditing, inlineNavigationLocation, inlineNavigationTransitionFraction, storiesInset) = self.validLayout {
+                self.update(layout: layout, navigationBarHeight: navigationBarHeight, visualNavigationHeight: visualNavigationHeight, originalNavigationHeight: originalNavigationHeight, cleanNavigationBarHeight: cleanNavigationBarHeight, insets: insets, isReorderingFilters: isReorderingFilters, isEditing: isEditing, inlineNavigationLocation: inlineNavigationLocation, inlineNavigationTransitionFraction: inlineNavigationTransitionFraction, storiesInset: storiesInset, transition: .immediate)
             }
         }
     }
     
-    func switchToFilter(id: ChatListFilterTabEntryId, animated: Bool = true, completion: (() -> Void)? = nil) {
+    public func switchToFilter(id: ChatListFilterTabEntryId, animated: Bool = true, completion: (() -> Void)? = nil) {
         self.onFilterSwitch?()
         if id != self.selectedId, let index = self.availableFilters.firstIndex(where: { $0.id == id }) {
             if let itemNode = self.itemNodes[id] {
-                guard let (layout, navigationBarHeight, visualNavigationHeight, cleanNavigationBarHeight, isReorderingFilters, isEditing) = self.validLayout else {
+                guard let (layout, navigationBarHeight, visualNavigationHeight, originalNavigationHeight, cleanNavigationBarHeight, insets, isReorderingFilters, isEditing, inlineNavigationLocation, inlineNavigationTransitionFraction, storiesInset) = self.validLayout else {
                     return
                 }
-                self.selectedId = id
-                if let currentItemNode = self.currentItemNodeValue {
-                    itemNode.listNode.adjustScrollOffsetForNavigation(isNavigationHidden: currentItemNode.listNode.isNavigationHidden)
+                
+                if let controller = self.controller, let chatListDisplayNode = controller.displayNode as? ChatListControllerNode, let navigationBarComponentView = chatListDisplayNode.navigationBarView.view as? ChatListNavigationBar.View, let clippedScrollOffset = navigationBarComponentView.clippedScrollOffset {
+                    let scrollOffset = clippedScrollOffset
+                    
+                    let _ = itemNode.listNode.scrollToOffsetFromTop(scrollOffset, animated: false)
                 }
+                
+                self.selectedId = id
                 self.applyItemNodeAsCurrent(id: id, itemNode: itemNode)
                 let transition: ContainedViewLayoutTransition = .animated(duration: 0.35, curve: .spring)
-                self.update(layout: layout, navigationBarHeight: navigationBarHeight, visualNavigationHeight: visualNavigationHeight, cleanNavigationBarHeight: cleanNavigationBarHeight, isReorderingFilters: isReorderingFilters, isEditing: isEditing, transition: transition)
+                self.update(layout: layout, navigationBarHeight: navigationBarHeight, visualNavigationHeight: visualNavigationHeight, originalNavigationHeight: originalNavigationHeight, cleanNavigationBarHeight: cleanNavigationBarHeight, insets: insets, isReorderingFilters: isReorderingFilters, isEditing: isEditing, inlineNavigationLocation: inlineNavigationLocation, inlineNavigationTransitionFraction: inlineNavigationTransitionFraction, storiesInset: storiesInset, transition: transition)
                 self.currentItemFilterUpdated?(self.currentItemFilter, self.transitionFraction, transition, false)
                 itemNode.emptyNode?.restartAnimation()
                 completion?()
             } else if self.pendingItemNode == nil {
-                let itemNode = ChatListContainerItemNode(context: self.context, location: self.location, filter: self.availableFilters[index].filter, previewing: self.previewing, controlsHistoryPreload: self.controlsHistoryPreload, presentationData: self.presentationData, animationCache: self.animationCache, animationRenderer: self.animationRenderer, becameEmpty: { [weak self] filter in
+                let itemNode = ChatListContainerItemNode(context: self.context, controller: self.controller, location: self.location, filter: self.availableFilters[index].filter, chatListMode: self.chatListMode, previewing: self.previewing, isInlineMode: self.isInlineMode, controlsHistoryPreload: self.controlsHistoryPreload, presentationData: self.presentationData, animationCache: self.animationCache, animationRenderer: self.animationRenderer, becameEmpty: { [weak self] filter in
                     self?.filterBecameEmpty(filter)
                 }, emptyAction: { [weak self] filter in
                     self?.filterEmptyAction(filter)
                 }, secondaryEmptyAction: { [weak self] in
                     self?.secondaryEmptyAction()
-                })
+                }, openArchiveSettings: { [weak self] in
+                    self?.openArchiveSettings()
+                }, autoSetReady: !animated, isMainTab: index == 0)
+                self.pendingItemNode?.2.dispose()
                 let disposable = MetaDisposable()
                 self.pendingItemNode = (id, itemNode, disposable)
                 
@@ -944,14 +837,22 @@ final class ChatListContainerNode: ASDisplayNode, UIGestureRecognizerDelegate {
                 
                 disposable.set((itemNode.listNode.ready
                 |> take(1)
-                |> deliverOnMainQueue).start(next: { [weak self, weak itemNode] _ in
+                |> deliverOnMainQueue).startStrict(next: { [weak self, weak itemNode] _ in
                     guard let strongSelf = self, let itemNode = itemNode, itemNode === strongSelf.pendingItemNode?.1 else {
                         return
                     }
                     
+                    strongSelf.pendingItemNode?.2.dispose()
                     strongSelf.pendingItemNode = nil
+                    itemNode.listNode.tempTopInset = strongSelf.tempTopInset
                     
-                    guard let (layout, navigationBarHeight, visualNavigationHeight, cleanNavigationBarHeight, isReorderingFilters, isEditing) = strongSelf.validLayout else {
+                    if let controller = strongSelf.controller, let chatListDisplayNode = controller.displayNode as? ChatListControllerNode, let navigationBarComponentView = chatListDisplayNode.navigationBarView.view as? ChatListNavigationBar.View, let clippedScrollOffset = navigationBarComponentView.clippedScrollOffset {
+                        let scrollOffset = clippedScrollOffset
+                        
+                        let _ = itemNode.listNode.scrollToOffsetFromTop(scrollOffset, animated: false)
+                    }
+                    
+                    guard let (layout, navigationBarHeight, visualNavigationHeight, originalNavigationHeight, cleanNavigationBarHeight, insets, isReorderingFilters, isEditing, inlineNavigationLocation, inlineNavigationTransitionFraction, storiesInset) = strongSelf.validLayout else {
                         strongSelf.itemNodes[id] = itemNode
                         strongSelf.addSubnode(itemNode)
                         
@@ -999,14 +900,11 @@ final class ChatListContainerNode: ASDisplayNode, UIGestureRecognizerDelegate {
                         itemNode.frame = itemFrame
                         
                         transition.animatePositionAdditive(node: itemNode, offset: CGPoint(x: -offset, y: 0.0))
-                        
-                        var insets = layout.insets(options: [.input])
-                        insets.top += navigationBarHeight
-                        
-                        insets.left += layout.safeInsets.left
-                        insets.right += layout.safeInsets.right
-                        
-                        itemNode.updateLayout(size: layout.size, insets: insets, visualNavigationHeight: visualNavigationHeight, transition: .immediate)
+                                                
+                        itemNode.updateLayout(size: layout.size, insets: insets, visualNavigationHeight: visualNavigationHeight, originalNavigationHeight: originalNavigationHeight, inlineNavigationLocation: inlineNavigationLocation, inlineNavigationTransitionFraction: inlineNavigationTransitionFraction, storiesInset: storiesInset, transition: .immediate)
+                        if let scrollingOffset = strongSelf.scrollingOffset {
+                            itemNode.updateScrollingOffset(navigationHeight: scrollingOffset.navigationHeight, offset: scrollingOffset.offset, transition: .immediate)
+                        }
                         
                         strongSelf.selectedId = id
                         if let currentItemNode = strongSelf.currentItemNodeValue {
@@ -1014,40 +912,50 @@ final class ChatListContainerNode: ASDisplayNode, UIGestureRecognizerDelegate {
                         }
                         strongSelf.applyItemNodeAsCurrent(id: id, itemNode: itemNode)
                         
-                        strongSelf.update(layout: layout, navigationBarHeight: navigationBarHeight, visualNavigationHeight: visualNavigationHeight, cleanNavigationBarHeight: cleanNavigationBarHeight, isReorderingFilters: isReorderingFilters, isEditing: isEditing, transition: .immediate)
+                        strongSelf.update(layout: layout, navigationBarHeight: navigationBarHeight, visualNavigationHeight: visualNavigationHeight, originalNavigationHeight: originalNavigationHeight, cleanNavigationBarHeight: cleanNavigationBarHeight, insets: insets, isReorderingFilters: isReorderingFilters, isEditing: isEditing, inlineNavigationLocation: inlineNavigationLocation, inlineNavigationTransitionFraction: inlineNavigationTransitionFraction, storiesInset: storiesInset, transition: .immediate)
                         
                         strongSelf.currentItemFilterUpdated?(strongSelf.currentItemFilter, strongSelf.transitionFraction, transition, false)
                     }
                     
                     completion?()
                 }))
+                
+                if let (layout, _, visualNavigationHeight, originalNavigationHeight, _, insets, _, _, inlineNavigationLocation, inlineNavigationTransitionFraction, storiesInset) = self.validLayout {
+                    itemNode.updateLayout(size: layout.size, insets: insets, visualNavigationHeight: visualNavigationHeight, originalNavigationHeight: originalNavigationHeight, inlineNavigationLocation: inlineNavigationLocation, inlineNavigationTransitionFraction: inlineNavigationTransitionFraction, storiesInset: storiesInset, transition: .immediate)
+                    
+                    if let scrollingOffset = self.scrollingOffset {
+                        itemNode.updateScrollingOffset(navigationHeight: scrollingOffset.navigationHeight, offset: scrollingOffset.offset, transition: .immediate)
+                    }
+                    return
+                }
             }
         }
     }
     
-    func update(layout: ContainerViewLayout, navigationBarHeight: CGFloat, visualNavigationHeight: CGFloat, cleanNavigationBarHeight: CGFloat, isReorderingFilters: Bool, isEditing: Bool, transition: ContainedViewLayoutTransition) {
-        self.validLayout = (layout, navigationBarHeight, visualNavigationHeight, cleanNavigationBarHeight, isReorderingFilters, isEditing)
+    func updateScrollingOffset(navigationHeight: CGFloat, offset: CGFloat, transition: ContainedViewLayoutTransition) {
+        self.scrollingOffset = (navigationHeight, offset)
+        for (_, itemNode) in self.itemNodes {
+            itemNode.updateScrollingOffset(navigationHeight: navigationHeight, offset: offset, transition: transition)
+        }
+    }
+    
+    public func update(layout: ContainerViewLayout, navigationBarHeight: CGFloat, visualNavigationHeight: CGFloat, originalNavigationHeight: CGFloat, cleanNavigationBarHeight: CGFloat, insets: UIEdgeInsets, isReorderingFilters: Bool, isEditing: Bool, inlineNavigationLocation: ChatListControllerLocation?, inlineNavigationTransitionFraction: CGFloat, storiesInset: CGFloat, transition: ContainedViewLayoutTransition) {
+        self.validLayout = (layout, navigationBarHeight, visualNavigationHeight, originalNavigationHeight, cleanNavigationBarHeight, insets, isReorderingFilters, isEditing, inlineNavigationLocation, inlineNavigationTransitionFraction, storiesInset)
         
         self._validLayoutReady.set(.single(true))
-        
-        var insets = layout.insets(options: [.input])
-        insets.top += navigationBarHeight
-        
-        insets.left += layout.safeInsets.left
-        insets.right += layout.safeInsets.right
-        
-        if isEditing {
-            if !layout.safeInsets.left.isZero {
-                insets.bottom += 34.0
-            } else {
-                insets.bottom += 49.0
-            }
-        }
         
         transition.updateAlpha(node: self, alpha: isReorderingFilters ? 0.5 : 1.0)
         self.isUserInteractionEnabled = !isReorderingFilters
         
+        if let _ = inlineNavigationLocation {
+            transition.updateBackgroundColor(node: self, color: self.presentationData.theme.chatList.backgroundColor.mixedWith(self.presentationData.theme.chatList.pinnedItemBackgroundColor, alpha: inlineNavigationTransitionFraction))
+        } else {
+            transition.updateBackgroundColor(node: self, color: self.presentationData.theme.chatList.backgroundColor)
+        }
+        
         self.panRecognizer?.isEnabled = !isEditing
+        
+        transition.updateFrame(layer: self.leftSeparatorLayer, frame: CGRect(origin: CGPoint(x: -UIScreenPixel, y: 0.0), size: CGSize(width: UIScreenPixel, height: layout.size.height)))
         
         if let selectedIndex = self.availableFilters.firstIndex(where: { $0.id == self.selectedId }) {
             var validNodeIds: [ChatListFilterTabEntryId] = []
@@ -1056,13 +964,16 @@ final class ChatListContainerNode: ASDisplayNode, UIGestureRecognizerDelegate {
                 validNodeIds.append(id)
                 
                 if self.itemNodes[id] == nil && self.enableAdjacentFilterLoading && !self.disableItemNodeOperationsWhileAnimating {
-                    let itemNode = ChatListContainerItemNode(context: self.context, location: self.location, filter: self.availableFilters[i].filter, previewing: self.previewing, controlsHistoryPreload: self.controlsHistoryPreload, presentationData: self.presentationData, animationCache: self.animationCache, animationRenderer: self.animationRenderer, becameEmpty: { [weak self] filter in
+                    let itemNode = ChatListContainerItemNode(context: self.context, controller: self.controller, location: self.location, filter: self.availableFilters[i].filter, chatListMode: self.chatListMode, previewing: self.previewing, isInlineMode: self.isInlineMode, controlsHistoryPreload: self.controlsHistoryPreload, presentationData: self.presentationData, animationCache: self.animationCache, animationRenderer: self.animationRenderer, becameEmpty: { [weak self] filter in
                         self?.filterBecameEmpty(filter)
                     }, emptyAction: { [weak self] filter in
                         self?.filterEmptyAction(filter)
                     }, secondaryEmptyAction: { [weak self] in
                         self?.secondaryEmptyAction()
-                    })
+                    }, openArchiveSettings: { [weak self] in
+                        self?.openArchiveSettings()
+                    }, autoSetReady: false, isMainTab: i == 0)
+                    itemNode.listNode.tempTopInset = self.tempTopInset
                     self.itemNodes[id] = itemNode
                 }
             }
@@ -1093,7 +1004,18 @@ final class ChatListContainerNode: ASDisplayNode, UIGestureRecognizerDelegate {
                 nodeTransition.updateFrame(node: itemNode, frame: itemFrame, completion: { _ in
                 })
                 
-                itemNode.updateLayout(size: layout.size, insets: insets, visualNavigationHeight: visualNavigationHeight, transition: nodeTransition)
+                var itemInlineNavigationTransitionFraction = inlineNavigationTransitionFraction
+                if indexDistance != 0 {
+                    if itemInlineNavigationTransitionFraction != 0.0 || itemInlineNavigationTransitionFraction != 1.0 {
+                        itemInlineNavigationTransitionFraction = itemNode.validLayout?.inlineNavigationTransitionFraction ?? 0.0
+                    }
+                }
+                
+                itemNode.listNode.isMainTab.set(self.availableFilters.firstIndex(where: { $0.id == id }) == 0 ? true : false)
+                itemNode.updateLayout(size: layout.size, insets: insets, visualNavigationHeight: visualNavigationHeight, originalNavigationHeight: originalNavigationHeight, inlineNavigationLocation: inlineNavigationLocation, inlineNavigationTransitionFraction: itemInlineNavigationTransitionFraction, storiesInset: storiesInset, transition: nodeTransition)
+                if let scrollingOffset = self.scrollingOffset {
+                    itemNode.updateScrollingOffset(navigationHeight: scrollingOffset.navigationHeight, offset: scrollingOffset.offset, transition: nodeTransition)
+                }
                 
                 if wasAdded, case .animated = transition {
                     animateSlidingIds.append(id)
@@ -1118,30 +1040,58 @@ final class ChatListContainerNode: ASDisplayNode, UIGestureRecognizerDelegate {
     }
 }
 
-final class ChatListControllerNode: ASDisplayNode {
+final class ChatListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
     private let context: AccountContext
     private let location: ChatListControllerLocation
     private var presentationData: PresentationData
     private let animationCache: AnimationCache
     private let animationRenderer: MultiAnimationRenderer
     
-    let containerNode: ChatListContainerNode
-    let inlineTabContainerNode: ChatListFilterTabInlineContainerNode
+    let mainContainerNode: ChatListContainerNode
+    
+    var effectiveContainerNode: ChatListContainerNode {
+        if let inlineStackContainerNode = self.inlineStackContainerNode {
+            return inlineStackContainerNode
+        } else {
+            return self.mainContainerNode
+        }
+    }
+    
+    private(set) var inlineStackContainerTransitionFraction: CGFloat = 0.0
+    private(set) var inlineStackContainerNode: ChatListContainerNode?
+    private var inlineContentPanRecognizer: InteractiveTransitionGestureRecognizer?
+    var temporaryContentOffsetChangeTransition: ContainedViewLayoutTransition?
+    
     private var tapRecognizer: UITapGestureRecognizer?
     var navigationBar: NavigationBar?
+    let navigationBarView = ComponentView<Empty>()
     weak var controller: ChatListControllerImpl?
     
     var toolbar: Toolbar?
     private var toolbarNode: ToolbarNode?
     var toolbarActionSelected: ((ToolbarActionOption) -> Void)?
     
+    private var isSearchDisplayControllerActive: Bool = false
+    private var skipSearchDisplayControllerLayout: Bool = false
     private(set) var searchDisplayController: SearchDisplayController?
     
     var isReorderingFilters: Bool = false
     var didBeginSelectingChatsWhileEditing: Bool = false
     var isEditing: Bool = false
     
-    private var containerLayout: (ContainerViewLayout, CGFloat, CGFloat, CGFloat)?
+    var tempAllowAvatarExpansion: Bool = false
+    private var tempDisableStoriesAnimations: Bool = false
+    private var tempNavigationScrollingTransition: ContainedViewLayoutTransition?
+    
+    private var allowOverscrollStoryExpansion: Bool = false
+    private var currentOverscrollStoryExpansionTimestamp: Double?
+    
+    private var allowOverscrollItemExpansion: Bool = false
+    private var currentOverscrollItemExpansionTimestamp: Double?
+    
+    private var containerLayout: (layout: ContainerViewLayout, navigationBarHeight: CGFloat, visualNavigationHeight: CGFloat, cleanNavigationBarHeight: CGFloat, storiesInset: CGFloat)?
+    
+    var contentScrollingEnded: ((ListView) -> Bool)?
     
     var requestDeactivateSearch: (() -> Void)?
     var requestOpenPeerFromSearch: ((EnginePeer, Int64?, Bool) -> Void)?
@@ -1151,9 +1101,10 @@ final class ChatListControllerNode: ASDisplayNode {
     var peerContextAction: ((EnginePeer, ChatListSearchContextActionSource, ASDisplayNode, ContextGesture?, CGPoint?) -> Void)?
     var dismissSelfIfCompletedPresentation: (() -> Void)?
     var isEmptyUpdated: ((Bool) -> Void)?
-    var emptyListAction: (() -> Void)?
+    var emptyListAction: ((EnginePeer.Id?) -> Void)?
     var cancelEditing: (() -> Void)?
-
+    var dismissSearch: (() -> Void)?
+    
     let debugListView = ListView()
     
     init(context: AccountContext, location: ChatListControllerLocation, previewing: Bool, controlsHistoryPreload: Bool, presentationData: PresentationData, animationCache: AnimationCache, animationRenderer: MultiAnimationRenderer, controller: ChatListControllerImpl) {
@@ -1166,15 +1117,16 @@ final class ChatListControllerNode: ASDisplayNode {
         var filterBecameEmpty: ((ChatListFilter?) -> Void)?
         var filterEmptyAction: ((ChatListFilter?) -> Void)?
         var secondaryEmptyAction: (() -> Void)?
-        self.containerNode = ChatListContainerNode(context: context, location: location, previewing: previewing, controlsHistoryPreload: controlsHistoryPreload, presentationData: presentationData, animationCache: animationCache, animationRenderer: animationRenderer, filterBecameEmpty: { filter in
+        var openArchiveSettings: (() -> Void)?
+        self.mainContainerNode = ChatListContainerNode(context: context, controller: controller, location: location, previewing: previewing, controlsHistoryPreload: controlsHistoryPreload, isInlineMode: false, presentationData: presentationData, animationCache: animationCache, animationRenderer: animationRenderer, filterBecameEmpty: { filter in
             filterBecameEmpty?(filter)
         }, filterEmptyAction: { filter in
             filterEmptyAction?(filter)
         }, secondaryEmptyAction: {
             secondaryEmptyAction?()
+        }, openArchiveSettings: {
+            openArchiveSettings?()
         })
-        
-        self.inlineTabContainerNode = ChatListFilterTabInlineContainerNode()
         
         self.controller = controller
         
@@ -1186,8 +1138,23 @@ final class ChatListControllerNode: ASDisplayNode {
         
         self.backgroundColor = presentationData.theme.chatList.backgroundColor
         
-        self.addSubnode(self.containerNode)
-        self.addSubnode(self.inlineTabContainerNode)
+        self.addSubnode(self.mainContainerNode)
+        
+        self.mainContainerNode.contentOffsetChanged = { [weak self] offset, listView in
+            self?.contentOffsetChanged(offset: offset, listView: listView, isPrimary: true)
+        }
+        self.mainContainerNode.contentScrollingEnded = { [weak self] listView in
+            return self?.contentScrollingEnded(listView: listView, isPrimary: true) ?? false
+        }
+        self.mainContainerNode.didBeginInteractiveDragging = { [weak self] listView in
+            self?.didBeginInteractiveDragging(listView: listView, isPrimary: true)
+        }
+        self.mainContainerNode.endedInteractiveDragging = { [weak self] listView in
+            self?.endedInteractiveDragging(listView: listView, isPrimary: true)
+        }
+        self.mainContainerNode.shouldStopScrolling = { [weak self] listView, velocity in
+            return self?.shouldStopScrolling(listView: listView, velocity: velocity, isPrimary: true) ?? false
+        }
         
         self.addSubnode(self.debugListView)
         
@@ -1199,11 +1166,11 @@ final class ChatListControllerNode: ASDisplayNode {
                 strongSelf.dismissSelfIfCompletedPresentation?()
             }
         }
-        filterEmptyAction = { [weak self] filter in
+        filterEmptyAction = { [weak self] _ in
             guard let strongSelf = self else {
                 return
             }
-            strongSelf.emptyListAction?()
+            strongSelf.emptyListAction?(nil)
         }
         
         secondaryEmptyAction = { [weak self] in
@@ -1211,15 +1178,64 @@ final class ChatListControllerNode: ASDisplayNode {
                 return
             }
             
-            let chatController = strongSelf.context.sharedContext.makeChatController(context: strongSelf.context, chatLocation: .peer(id: peerId), subject: nil, botStart: nil, mode: .standard(previewing: false))
+            let chatController = strongSelf.context.sharedContext.makeChatController(context: strongSelf.context, chatLocation: .peer(id: peerId), subject: nil, botStart: nil, mode: .standard(.default), params: nil)
             (controller.navigationController as? NavigationController)?.replaceController(controller, with: chatController, animated: false)
         }
         
-        self.containerNode.onFilterSwitch = { [weak self] in
+        openArchiveSettings = { [weak self] in
+            guard let self, let controller = self.controller else {
+                return
+            }
+            controller.push(self.context.sharedContext.makeArchiveSettingsController(context: self.context))
+        }
+        
+        self.mainContainerNode.onFilterSwitch = { [weak self] in
             if let strongSelf = self {
                 strongSelf.controller?.dismissAllUndoControllers()
             }
         }
+        
+        self.mainContainerNode.onStoriesLockedUpdated = { [weak self] isLocked in
+            guard let self else {
+                return
+            }
+            if isLocked {
+                self.controller?.requestLayout(transition: .animated(duration: 0.4, curve: .spring))
+                //self.controller?.requestLayout(transition: .immediate)
+            } else {
+                self.controller?.requestLayout(transition: .immediate)
+            }
+        }
+        
+        self.mainContainerNode.canExpandHiddenItems = { [weak self] in
+            guard let self, let controller = self.controller else {
+                return false
+            }
+            
+            if let storySubscriptions = controller.orderedStorySubscriptions, shouldDisplayStoriesInChatListHeader(storySubscriptions: storySubscriptions, isHidden: controller.location == .chatList(groupId: .archive)) {
+                if let navigationBarComponentView = self.navigationBarView.view as? ChatListNavigationBar.View {
+                    if navigationBarComponentView.storiesUnlocked {
+                        return true
+                    }
+                }
+                return false
+            } else {
+                return true
+            }
+        }
+        
+        let inlineContentPanRecognizer = InteractiveTransitionGestureRecognizer(target: self, action: #selector(self.inlineContentPanGesture(_:)), allowedDirections: { [weak self] _ in
+            guard let strongSelf = self, strongSelf.inlineStackContainerNode != nil else {
+                return []
+            }
+            let directions: InteractiveTransitionGestureRecognizerDirections = [.rightCenter]
+            return directions
+        }, edgeWidth: .widthMultiplier(factor: 1.0 / 6.0, min: 22.0, max: 80.0))
+        inlineContentPanRecognizer.delegate = self.wrappedGestureRecognizerDelegate
+        inlineContentPanRecognizer.delaysTouchesBegan = false
+        inlineContentPanRecognizer.cancelsTouchesInView = true
+        self.inlineContentPanRecognizer = inlineContentPanRecognizer
+        self.view.addGestureRecognizer(inlineContentPanRecognizer)
     }
     
     override func didLoad() {
@@ -1237,12 +1253,76 @@ final class ChatListControllerNode: ASDisplayNode {
         }
     }
     
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        return false
+    }
+    
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        if let _ = otherGestureRecognizer as? InteractiveTransitionGestureRecognizer {
+            return false
+        }
+        if let _ = otherGestureRecognizer as? UIPanGestureRecognizer {
+            return true
+        }
+        return false
+    }
+    
+    @objc private func inlineContentPanGesture(_ recognizer: UIPanGestureRecognizer) {
+        switch recognizer.state {
+        case .began:
+            break
+        case .changed:
+            if let inlineStackContainerNode = self.inlineStackContainerNode {
+                let translation = recognizer.translation(in: self.view)
+                var transitionFraction = translation.x / inlineStackContainerNode.bounds.width
+                transitionFraction = 1.0 - max(0.0, min(1.0, transitionFraction))
+                self.inlineStackContainerTransitionFraction = transitionFraction
+                self.controller?.requestLayout(transition: .immediate)
+            }
+        case .cancelled, .ended:
+            if let inlineStackContainerNode = self.inlineStackContainerNode {
+                let translation = recognizer.translation(in: self.view)
+                let velocity = recognizer.velocity(in: self.view)
+                var directionIsToRight: Bool?
+                if abs(velocity.x) > 10.0 {
+                    if translation.x > 0.0 {
+                        if velocity.x <= 0.0 {
+                            directionIsToRight = nil
+                        } else {
+                            directionIsToRight = true
+                        }
+                    } else {
+                        if velocity.x >= 0.0 {
+                            directionIsToRight = nil
+                        } else {
+                            directionIsToRight = false
+                        }
+                    }
+                } else {
+                    if abs(translation.x) > inlineStackContainerNode.bounds.width / 2.0 {
+                        directionIsToRight = translation.x > inlineStackContainerNode.bounds.width / 2.0
+                    }
+                }
+                
+                if let directionIsToRight = directionIsToRight, directionIsToRight {
+                    self.controller?.setInlineChatList(location: nil)
+                } else {
+                    self.inlineStackContainerTransitionFraction = 1.0
+                    self.controller?.requestLayout(transition: .animated(duration: 0.4, curve: .spring))
+                }
+            }
+        default:
+            break
+        }
+    }
+    
     func updatePresentationData(_ presentationData: PresentationData) {
         self.presentationData = presentationData
         
         self.backgroundColor = self.presentationData.theme.chatList.backgroundColor
         
-        self.containerNode.updatePresentationData(presentationData)
+        self.mainContainerNode.updatePresentationData(presentationData)
+        self.inlineStackContainerNode?.updatePresentationData(presentationData)
         self.searchDisplayController?.updatePresentationData(presentationData)
         
         if let toolbarNode = self.toolbarNode {
@@ -1250,8 +1330,204 @@ final class ChatListControllerNode: ASDisplayNode {
         }
     }
     
-    func containerLayoutUpdated(_ layout: ContainerViewLayout, navigationBarHeight: CGFloat, visualNavigationHeight: CGFloat, cleanNavigationBarHeight: CGFloat, transition: ContainedViewLayoutTransition) {
-        self.containerLayout = (layout, navigationBarHeight, visualNavigationHeight, cleanNavigationBarHeight)
+    private func updateNavigationBar(layout: ContainerViewLayout, deferScrollApplication: Bool, transition: ComponentTransition) -> (navigationHeight: CGFloat, storiesInset: CGFloat) {
+        let headerContent = self.controller?.updateHeaderContent()
+        
+        var tabsNode: ASDisplayNode?
+        var tabsNodeIsSearch = false
+        
+        if let value = self.controller?.searchTabsNode {
+            tabsNode = value
+            tabsNodeIsSearch = true
+        } else if let value = self.controller?.tabsNode, self.controller?.hasTabs == true {
+            tabsNode = value
+        }
+        
+        var effectiveStorySubscriptions: EngineStorySubscriptions?
+        if let controller = self.controller, case .forum = controller.location {
+            effectiveStorySubscriptions = nil
+        } else {
+            if let controller = self.controller, let storySubscriptions = controller.orderedStorySubscriptions, shouldDisplayStoriesInChatListHeader(storySubscriptions: storySubscriptions, isHidden: controller.location == .chatList(groupId: .archive)) {
+                effectiveStorySubscriptions = controller.orderedStorySubscriptions
+            } else {
+                effectiveStorySubscriptions = EngineStorySubscriptions(accountItem: nil, items: [], hasMoreToken: nil)
+            }
+        }
+        
+        let navigationBarSize = self.navigationBarView.update(
+            transition: transition,
+            component: AnyComponent(ChatListNavigationBar(
+                context: self.context,
+                theme: self.presentationData.theme,
+                strings: self.presentationData.strings,
+                statusBarHeight: layout.statusBarHeight ?? 0.0,
+                sideInset: layout.safeInsets.left,
+                isSearchActive: self.isSearchDisplayControllerActive,
+                isSearchEnabled: true,
+                primaryContent: headerContent?.primaryContent,
+                secondaryContent: headerContent?.secondaryContent,
+                secondaryTransition: self.inlineStackContainerTransitionFraction,
+                storySubscriptions: effectiveStorySubscriptions,
+                storiesIncludeHidden: self.location == .chatList(groupId: .archive),
+                uploadProgress: self.controller?.storyUploadProgress ?? [:],
+                tabsNode: tabsNode,
+                tabsNodeIsSearch: tabsNodeIsSearch,
+                accessoryPanelContainer: self.controller?.accessoryPanelContainer,
+                accessoryPanelContainerHeight: self.controller?.accessoryPanelContainerHeight ?? 0.0,
+                activateSearch: { [weak self] searchContentNode in
+                    guard let self, let controller = self.controller else {
+                        return
+                    }
+                    
+                    var isForum = false
+                    if case .forum = controller.location {
+                        isForum = true
+                    }
+                    
+                    let filter: ChatListSearchFilter = isForum ? .topics : .chats
+                    
+                    controller.activateSearch(
+                        filter: filter,
+                        query: nil,
+                        skipScrolling: false,
+                        searchContentNode: searchContentNode
+                    )
+                },
+                openStatusSetup: { [weak self] sourceView in
+                    guard let self, let controller = self.controller else {
+                        return
+                    }
+                    controller.openStatusSetup(sourceView: sourceView)
+                },
+                allowAutomaticOrder: { [weak self] in
+                    guard let self, let controller = self.controller else {
+                        return
+                    }
+                    controller.allowAutomaticOrder()
+                }
+            )),
+            environment: {},
+            containerSize: layout.size
+        )
+        if let navigationBarComponentView = self.navigationBarView.view as? ChatListNavigationBar.View {
+            if deferScrollApplication {
+                navigationBarComponentView.deferScrollApplication = true
+            }
+            
+            if navigationBarComponentView.superview == nil {
+                self.view.addSubview(navigationBarComponentView)
+            }
+            transition.setFrame(view: navigationBarComponentView, frame: CGRect(origin: CGPoint(), size: navigationBarSize))
+            
+            return (navigationBarSize.height, 0.0)
+        } else {
+            return (0.0, 0.0)
+        }
+    }
+    
+    private func updateNavigationScrolling(navigationHeight: CGFloat, transition: ContainedViewLayoutTransition) {
+        var mainOffset: CGFloat
+        if let contentOffset = self.mainContainerNode.contentOffset, case let .known(value) = contentOffset {
+            mainOffset = value
+        } else {
+            mainOffset = navigationHeight
+        }
+        
+        self.mainContainerNode.updateScrollingOffset(navigationHeight: navigationHeight, offset: mainOffset, transition: transition)
+        
+        mainOffset = min(mainOffset, ChatListNavigationBar.searchScrollHeight)
+        if abs(mainOffset) < 0.1 {
+            mainOffset = 0.0
+        }
+        
+        let resultingOffset: CGFloat
+        if let inlineStackContainerNode = self.inlineStackContainerNode {
+            var inlineOffset: CGFloat
+            if let contentOffset = inlineStackContainerNode.contentOffset, case let .known(value) = contentOffset {
+                inlineOffset = value
+            } else {
+                inlineOffset = navigationHeight
+            }
+            inlineOffset = min(inlineOffset, ChatListNavigationBar.searchScrollHeight)
+            if abs(inlineOffset) < 0.1 {
+                inlineOffset = 0.0
+            }
+            
+            resultingOffset = mainOffset * (1.0 - self.inlineStackContainerTransitionFraction) + inlineOffset * self.inlineStackContainerTransitionFraction
+        } else {
+            resultingOffset = mainOffset
+        }
+        
+        var offset = resultingOffset
+        if self.isSearchDisplayControllerActive {
+            offset = 0.0
+        }
+        
+        var allowAvatarsExpansion: Bool = true
+        if !self.mainContainerNode.currentItemNode.startedScrollingAtUpperBound && !self.tempAllowAvatarExpansion {
+            if let navigationBarComponentView = self.navigationBarView.view as? ChatListNavigationBar.View {
+                if !navigationBarComponentView.storiesUnlocked {
+                    allowAvatarsExpansion = false
+                }
+            }
+        }
+        
+        if let navigationBarComponentView = self.navigationBarView.view as? ChatListNavigationBar.View {
+            navigationBarComponentView.applyScroll(offset: offset, allowAvatarsExpansion: allowAvatarsExpansion, forceUpdate: false, transition: ComponentTransition(transition).withUserData(ChatListNavigationBar.AnimationHint(
+                disableStoriesAnimations: self.tempDisableStoriesAnimations,
+                crossfadeStoryPeers: false
+            )))
+        }
+        
+        let mainDelta: CGFloat
+        if let _ = self.inlineStackContainerNode {
+            mainDelta = resultingOffset - max(0.0, mainOffset)
+        } else {
+            mainDelta = 0.0
+        }
+        transition.updateSublayerTransformOffset(layer: self.mainContainerNode.layer, offset: CGPoint(x: 0.0, y: -mainDelta))
+    }
+    
+    func requestNavigationBarLayout(transition: ComponentTransition) {
+        guard let (layout, _, _, _, _) = self.containerLayout else {
+            return
+        }
+        let _ = self.updateNavigationBar(layout: layout, deferScrollApplication: false, transition: transition)
+    }
+    
+    func scrollToStories(animated: Bool) {
+        if self.inlineStackContainerNode != nil {
+            return
+        }
+        
+        if let controller = self.controller, let storySubscriptions = controller.orderedStorySubscriptions, shouldDisplayStoriesInChatListHeader(storySubscriptions: storySubscriptions, isHidden: controller.location == .chatList(groupId: .archive)) {
+            let _ = storySubscriptions
+        
+            self.tempAllowAvatarExpansion = true
+            self.tempDisableStoriesAnimations = !animated
+            self.tempNavigationScrollingTransition = animated ? .animated(duration: 0.3, curve: .custom(0.33, 0.52, 0.25, 0.99)) : .immediate
+            self.mainContainerNode.scrollToTop(animated: animated, adjustForTempInset: true)
+            self.tempAllowAvatarExpansion = false
+            self.tempDisableStoriesAnimations = false
+            tempNavigationScrollingTransition = nil
+        }
+    }
+    
+    func containerLayoutUpdated(_ layout: ContainerViewLayout, navigationBarHeight: CGFloat, visualNavigationHeight: CGFloat, cleanNavigationBarHeight: CGFloat, storiesInset: CGFloat, transition: ContainedViewLayoutTransition) {
+        var navigationBarHeight = navigationBarHeight
+        var visualNavigationHeight = visualNavigationHeight
+        var cleanNavigationBarHeight = cleanNavigationBarHeight
+        var storiesInset = storiesInset
+        
+        let navigationBarLayout = self.updateNavigationBar(layout: layout, deferScrollApplication: true, transition: ComponentTransition(transition))
+        self.mainContainerNode.initialScrollingOffset = ChatListNavigationBar.searchScrollHeight + navigationBarLayout.storiesInset
+        
+        navigationBarHeight = navigationBarLayout.navigationHeight
+        visualNavigationHeight = navigationBarLayout.navigationHeight
+        cleanNavigationBarHeight = navigationBarLayout.navigationHeight
+        storiesInset = navigationBarLayout.storiesInset
+        
+        self.containerLayout = (layout, navigationBarHeight, visualNavigationHeight, cleanNavigationBarHeight, storiesInset)
         
         var insets = layout.insets(options: [.input])
         insets.top += navigationBarHeight
@@ -1264,20 +1540,26 @@ final class ChatListControllerNode: ASDisplayNode {
             if layout.metrics.widthClass == .regular {
                 options.insert(.input)
             }
+            
+            var heightInset: CGFloat = 0.0
+            if case .forum = self.location {
+                heightInset = 4.0
+            }
+            
             let bottomInset: CGFloat = layout.insets(options: options).bottom
             if !layout.safeInsets.left.isZero {
                 tabBarHeight = 34.0 + bottomInset
                 insets.bottom += 34.0
             } else {
-                tabBarHeight = 49.0 + bottomInset
-                insets.bottom += 49.0
+                tabBarHeight = 49.0 - heightInset + bottomInset
+                insets.bottom += 49.0 - heightInset
             }
             
-            let tabBarFrame = CGRect(origin: CGPoint(x: 0.0, y: layout.size.height - tabBarHeight), size: CGSize(width: layout.size.width, height: tabBarHeight))
+            let toolbarFrame = CGRect(origin: CGPoint(x: 0.0, y: layout.size.height - tabBarHeight), size: CGSize(width: layout.size.width, height: tabBarHeight))
             
             if let toolbarNode = self.toolbarNode {
-                transition.updateFrame(node: toolbarNode, frame: tabBarFrame)
-                toolbarNode.updateLayout(size: tabBarFrame.size, leftInset: layout.safeInsets.left, rightInset: layout.safeInsets.right, additionalSideInsets: layout.additionalInsets, bottomInset: bottomInset, toolbar: toolbar, transition: transition)
+                transition.updateFrame(node: toolbarNode, frame: toolbarFrame)
+                toolbarNode.updateLayout(size: toolbarFrame.size, leftInset: layout.safeInsets.left, rightInset: layout.safeInsets.right, additionalSideInsets: layout.additionalInsets, bottomInset: bottomInset, toolbar: toolbar, transition: transition)
             } else {
                 let toolbarNode = ToolbarNode(theme: ToolbarTheme(rootControllerTheme: self.presentationData.theme), displaySeparator: true, left: { [weak self] in
                     self?.toolbarActionSelected?(.left)
@@ -1286,8 +1568,8 @@ final class ChatListControllerNode: ASDisplayNode {
                 }, middle: { [weak self] in
                     self?.toolbarActionSelected?(.middle)
                 })
-                toolbarNode.frame = tabBarFrame
-                toolbarNode.updateLayout(size: tabBarFrame.size, leftInset: layout.safeInsets.left, rightInset: layout.safeInsets.right, additionalSideInsets: layout.additionalInsets, bottomInset: bottomInset, toolbar: toolbar, transition: .immediate)
+                toolbarNode.frame = toolbarFrame
+                toolbarNode.updateLayout(size: toolbarFrame.size, leftInset: layout.safeInsets.left, rightInset: layout.safeInsets.right, additionalSideInsets: layout.additionalInsets, bottomInset: bottomInset, toolbar: toolbar, transition: .immediate)
                 self.addSubnode(toolbarNode)
                 self.toolbarNode = toolbarNode
                 if transition.isAnimated {
@@ -1305,31 +1587,79 @@ final class ChatListControllerNode: ASDisplayNode {
         childrenLayout.intrinsicInsets = UIEdgeInsets(top: visualNavigationHeight, left: childrenLayout.intrinsicInsets.left, bottom: childrenLayout.intrinsicInsets.bottom, right: childrenLayout.intrinsicInsets.right)
         self.controller?.presentationContext.containerLayoutUpdated(childrenLayout, transition: transition)
         
-        transition.updateFrame(node: self.containerNode, frame: CGRect(origin: CGPoint(), size: layout.size))
-        self.containerNode.update(layout: layout, navigationBarHeight: navigationBarHeight, visualNavigationHeight: visualNavigationHeight, cleanNavigationBarHeight: cleanNavigationBarHeight, isReorderingFilters: self.isReorderingFilters, isEditing: self.isEditing, transition: transition)
+        transition.updateFrame(node: self.mainContainerNode, frame: CGRect(origin: CGPoint(), size: layout.size))
+        var mainNavigationBarHeight = navigationBarHeight
+        var cleanMainNavigationBarHeight = cleanNavigationBarHeight
+        var mainInsets = insets
+        if self.inlineStackContainerNode != nil && "".isEmpty {
+            mainNavigationBarHeight = visualNavigationHeight
+            cleanMainNavigationBarHeight = visualNavigationHeight
+            mainInsets.top = visualNavigationHeight
+        }
+        self.mainContainerNode.update(layout: layout, navigationBarHeight: mainNavigationBarHeight, visualNavigationHeight: visualNavigationHeight, originalNavigationHeight: navigationBarHeight, cleanNavigationBarHeight: cleanMainNavigationBarHeight, insets: mainInsets, isReorderingFilters: self.isReorderingFilters, isEditing: self.isEditing, inlineNavigationLocation: self.inlineStackContainerNode?.location, inlineNavigationTransitionFraction: self.inlineStackContainerTransitionFraction, storiesInset: storiesInset, transition: transition)
         
-        transition.updateFrame(node: self.inlineTabContainerNode, frame: CGRect(origin: CGPoint(x: 0.0, y: layout.size.height - layout.intrinsicInsets.bottom - 8.0 - 40.0), size: CGSize(width: layout.size.width, height: 40.0)))
+        if let inlineStackContainerNode = self.inlineStackContainerNode {
+            var inlineStackContainerNodeTransition = transition
+            var animateIn = false
+            if inlineStackContainerNode.supernode == nil {
+                self.insertSubnode(inlineStackContainerNode, aboveSubnode: self.mainContainerNode)
+                inlineStackContainerNodeTransition = .immediate
+                animateIn = true
+            }
+            
+            let inlineSideInset: CGFloat = layout.safeInsets.left + 72.0
+            var inlineStackFrame = CGRect(origin: CGPoint(x: inlineSideInset, y: 0.0), size: CGSize(width: layout.size.width - inlineSideInset, height: layout.size.height))
+            inlineStackFrame.origin.x += (1.0 - self.inlineStackContainerTransitionFraction) * inlineStackFrame.width
+            inlineStackContainerNodeTransition.updateFrame(node: inlineStackContainerNode, frame: inlineStackFrame)
+            var inlineLayout = layout
+            inlineLayout.size.width -= inlineSideInset
+            inlineLayout.safeInsets.left = 0.0
+            inlineLayout.intrinsicInsets.left = 0.0
+            inlineLayout.additionalInsets.left = 0.0
+            
+            var inlineInsets = insets
+            inlineInsets.left = 0.0
+            
+            let inlineNavigationHeight: CGFloat = navigationBarLayout.navigationHeight - navigationBarLayout.storiesInset
+            
+            inlineStackContainerNode.update(layout: inlineLayout, navigationBarHeight: inlineNavigationHeight, visualNavigationHeight: inlineNavigationHeight, originalNavigationHeight: inlineNavigationHeight, cleanNavigationBarHeight: inlineNavigationHeight, insets: inlineInsets, isReorderingFilters: self.isReorderingFilters, isEditing: self.isEditing, inlineNavigationLocation: nil, inlineNavigationTransitionFraction: 0.0, storiesInset: storiesInset, transition: inlineStackContainerNodeTransition)
+            
+            if animateIn {
+                transition.animatePosition(node: inlineStackContainerNode, from: CGPoint(x: inlineStackContainerNode.position.x + inlineStackContainerNode.bounds.width + UIScreenPixel, y: inlineStackContainerNode.position.y))
+            }
+        }
         
         self.tapRecognizer?.isEnabled = self.isReorderingFilters
         
         if let searchDisplayController = self.searchDisplayController {
-            searchDisplayController.containerLayoutUpdated(layout, navigationBarHeight: cleanNavigationBarHeight, transition: transition)
+            if !self.skipSearchDisplayControllerLayout {
+                searchDisplayController.containerLayoutUpdated(layout, navigationBarHeight: cleanNavigationBarHeight, transition: transition)
+            }
+        }
+        
+        self.updateNavigationScrolling(navigationHeight: navigationBarLayout.navigationHeight, transition: transition)
+        
+        if let navigationBarComponentView = self.navigationBarView.view as? ChatListNavigationBar.View {
+            navigationBarComponentView.deferScrollApplication = false
+            navigationBarComponentView.applyCurrentScroll(transition: ComponentTransition(transition))
         }
     }
     
     func activateSearch(placeholderNode: SearchBarPlaceholderNode, displaySearchFilters: Bool, hasDownloads: Bool, initialFilter: ChatListSearchFilter, navigationController: NavigationController?) -> (ASDisplayNode, (Bool) -> Void)? {
-        guard let (containerLayout, _, _, cleanNavigationBarHeight) = self.containerLayout, let navigationBar = self.navigationBar, self.searchDisplayController == nil else {
+        guard let (containerLayout, _, _, cleanNavigationBarHeight, _) = self.containerLayout, self.searchDisplayController == nil else {
             return nil
         }
         
-        var filter: ChatListNodePeersFilter = []
-        if case .forum = self.location {
-            filter.insert(.excludeRecent)
+        let effectiveLocation = self.inlineStackContainerNode?.location ?? self.location
+        
+        let filter: ChatListNodePeersFilter = []
+        if case .forum = effectiveLocation {
+            //filter.insert(.excludeRecent)
         }
         
-        let contentNode = ChatListSearchContainerNode(context: self.context, animationCache: self.animationCache, animationRenderer: self.animationRenderer, filter: filter, location: location, displaySearchFilters: displaySearchFilters, hasDownloads: hasDownloads, initialFilter: initialFilter, openPeer: { [weak self] peer, _, threadId, dismissSearch in
+        let contentNode = ChatListSearchContainerNode(context: self.context, animationCache: self.animationCache, animationRenderer: self.animationRenderer, filter: filter, requestPeerType: nil, location: effectiveLocation, displaySearchFilters: displaySearchFilters, hasDownloads: hasDownloads, initialFilter: initialFilter, openPeer: { [weak self] peer, _, threadId, dismissSearch in
             self?.requestOpenPeerFromSearch?(peer, threadId, dismissSearch)
-        }, openDisabledPeer: { _, _ in
+        }, openDisabledPeer: { _, _, _ in
         }, openRecentPeerOptions: { [weak self] peer in
             self?.requestOpenRecentPeerOptions?(peer)
         }, openMessage: { [weak self] peer, threadId, messageId, deactivateOnAction in
@@ -1344,41 +1674,61 @@ final class ChatListControllerNode: ASDisplayNode {
             self?.controller?.present(c, in: .window(.root), with: a)
         }, presentInGlobalOverlay: { [weak self] c, a in
             self?.controller?.presentInGlobalOverlay(c, with: a)
-        }, navigationController: navigationController)
+        }, navigationController: navigationController, parentController: { [weak self] in
+            return self?.controller
+        })
+        contentNode.dismissSearch = { [weak self] in
+            self?.dismissSearch?()
+        }
         
-        self.searchDisplayController = SearchDisplayController(presentationData: self.presentationData, contentNode: contentNode, cancel: { [weak self] in
+        self.searchDisplayController = SearchDisplayController(presentationData: self.presentationData, mode: .list, contentNode: contentNode, cancel: { [weak self] in
             if let requestDeactivateSearch = self?.requestDeactivateSearch {
                 requestDeactivateSearch()
             }
         })
-        self.containerNode.accessibilityElementsHidden = true
+        self.mainContainerNode.accessibilityElementsHidden = true
+        self.inlineStackContainerNode?.accessibilityElementsHidden = true
                 
         return (contentNode.filterContainerNode, { [weak self] focus in
             guard let strongSelf = self else {
                 return
             }
+            
+            strongSelf.isSearchDisplayControllerActive = true
+            
             strongSelf.searchDisplayController?.containerLayoutUpdated(containerLayout, navigationBarHeight: cleanNavigationBarHeight, transition: .immediate)
-            strongSelf.searchDisplayController?.activate(insertSubnode: { [weak self, weak placeholderNode] subnode, isSearchBar in
-                if let strongSelf = self, let strongPlaceholderNode = placeholderNode {
-                    if isSearchBar {
-                        strongPlaceholderNode.supernode?.insertSubnode(subnode, aboveSubnode: strongPlaceholderNode)
-                    } else {
-                        strongSelf.insertSubnode(subnode, belowSubnode: navigationBar)
+            strongSelf.searchDisplayController?.activate(insertSubnode: { [weak self] subnode, isSearchBar in
+                guard let self else {
+                    return
+                }
+                
+                if isSearchBar {
+                    if let navigationBarComponentView = self.navigationBarView.view as? ChatListNavigationBar.View {
+                        navigationBarComponentView.addSubnode(subnode)
                     }
+                } else {
+                    self.insertSubnode(subnode, aboveSubnode: self.debugListView)
                 }
             }, placeholder: placeholderNode, focus: focus)
+            
+            strongSelf.controller?.requestLayout(transition: .animated(duration: 0.5, curve: .spring))
         })
     }
     
     func deactivateSearch(placeholderNode: SearchBarPlaceholderNode, animated: Bool) -> (() -> Void)? {
         if let searchDisplayController = self.searchDisplayController {
-            searchDisplayController.deactivate(placeholder: placeholderNode, animated: animated)
+            self.isSearchDisplayControllerActive = false
             self.searchDisplayController = nil
-            self.containerNode.accessibilityElementsHidden = false
+            self.mainContainerNode.accessibilityElementsHidden = false
+            self.inlineStackContainerNode?.accessibilityElementsHidden = false
             
-            return { [weak self] in
-                if let strongSelf = self, let (layout, _, _, cleanNavigationBarHeight) = strongSelf.containerLayout {
+            return { [weak self, weak placeholderNode] in
+                if let strongSelf = self, let placeholderNode, let (layout, _, _, cleanNavigationBarHeight, _) = strongSelf.containerLayout {
+                    searchDisplayController.deactivate(placeholder: placeholderNode, animated: animated)
+                    
                     searchDisplayController.containerLayoutUpdated(layout, navigationBarHeight: cleanNavigationBarHeight, transition: .animated(duration: 0.4, curve: .spring))
+                    
+                    strongSelf.controller?.requestLayout(transition: .animated(duration: 0.4, curve: .spring))
                 }
             }
         } else {
@@ -1386,15 +1736,318 @@ final class ChatListControllerNode: ASDisplayNode {
         }
     }
     
+    func clearHighlightAnimated(_ animated: Bool) {
+        self.mainContainerNode.currentItemNode.clearHighlightAnimated(true)
+        self.inlineStackContainerNode?.currentItemNode.clearHighlightAnimated(true)
+    }
+    
+    private var contentOffsetSyncLockedIn: Bool = false
+    
+    func willScrollToTop() {
+        if let navigationBarComponentView = self.navigationBarView.view as? ChatListNavigationBar.View {
+            navigationBarComponentView.applyScroll(offset: 0.0, allowAvatarsExpansion: false, transition: ComponentTransition(animation: .curve(duration: 0.3, curve: .slide)))
+        }
+    }
+    
+    private func contentOffsetChanged(offset: ListViewVisibleContentOffset, listView: ListView, isPrimary: Bool) {
+        guard let containerLayout = self.containerLayout else {
+            return
+        }
+        self.updateNavigationScrolling(navigationHeight: containerLayout.navigationBarHeight, transition: self.tempNavigationScrollingTransition ?? .immediate)
+        
+        if listView.isDragging {
+            var overscrollSelectedId: EnginePeer.Id?
+            var overscrollHiddenChatItemsAllowed = false
+            if let controller = self.controller, let componentView = controller.chatListHeaderView(), let storyPeerListView = componentView.storyPeerListView() {
+                overscrollSelectedId = storyPeerListView.overscrollSelectedId
+                overscrollHiddenChatItemsAllowed = storyPeerListView.overscrollHiddenChatItemsAllowed
+            }
+            
+            if let chatListNode = listView as? ChatListNode {
+                if chatListNode.hasItemsToBeRevealed() {
+                    overscrollSelectedId = nil
+                }
+            }
+            
+            if let controller = self.controller {
+                if let peerId = overscrollSelectedId {
+                    if self.allowOverscrollStoryExpansion && self.inlineStackContainerNode == nil && isPrimary {
+                        let timestamp = CACurrentMediaTime()
+                        if let _ = self.currentOverscrollStoryExpansionTimestamp {
+                        } else {
+                            self.currentOverscrollStoryExpansionTimestamp = timestamp
+                        }
+                        
+                        if let currentOverscrollStoryExpansionTimestamp = self.currentOverscrollStoryExpansionTimestamp, currentOverscrollStoryExpansionTimestamp <= timestamp - 0.0 {
+                            self.allowOverscrollStoryExpansion = false
+                            self.currentOverscrollStoryExpansionTimestamp = nil
+                            self.allowOverscrollItemExpansion = false
+                            self.currentOverscrollItemExpansionTimestamp = nil
+                            HapticFeedback().tap()
+                            
+                            controller.openStories(peerId: peerId)
+                        }
+                    }
+                } else {
+                    if !overscrollHiddenChatItemsAllowed {
+                        var manuallyAllow = false
+                        
+                        if isPrimary {
+                            if let storySubscriptions = controller.orderedStorySubscriptions, shouldDisplayStoriesInChatListHeader(storySubscriptions: storySubscriptions, isHidden: controller.location == .chatList(groupId: .archive)) {
+                            } else {
+                                manuallyAllow = true
+                            }
+                        } else {
+                            manuallyAllow = true
+                        }
+                        
+                        if manuallyAllow, case let .known(value) = offset, value + listView.tempTopInset <= -40.0 {
+                            overscrollHiddenChatItemsAllowed = true
+                        }
+                    }
+                
+                    if overscrollHiddenChatItemsAllowed {
+                        if self.allowOverscrollItemExpansion {
+                            let timestamp = CACurrentMediaTime()
+                            if let _ = self.currentOverscrollItemExpansionTimestamp {
+                            } else {
+                                self.currentOverscrollItemExpansionTimestamp = timestamp
+                            }
+                            
+                            if let currentOverscrollItemExpansionTimestamp = self.currentOverscrollItemExpansionTimestamp, currentOverscrollItemExpansionTimestamp <= timestamp - 0.0 {
+                                self.allowOverscrollItemExpansion = false
+                                
+                                if isPrimary {
+                                    self.mainContainerNode.currentItemNode.revealScrollHiddenItem()
+                                } else {
+                                    self.inlineStackContainerNode?.currentItemNode.revealScrollHiddenItem()
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    private func shouldStopScrolling(listView: ListView, velocity: CGFloat, isPrimary: Bool) -> Bool {
+        if abs(velocity) > 0.8 {
+            return false
+        }
+        
+        if !isPrimary || self.inlineStackContainerNode == nil {
+        } else {
+            return false
+        }
+        
+        guard let navigationBarComponentView = self.navigationBarView.view as? ChatListNavigationBar.View else {
+            return false
+        }
+        
+        if let clippedScrollOffset = navigationBarComponentView.clippedScrollOffset {
+            let searchScrollOffset = clippedScrollOffset
+            if searchScrollOffset > 0.0 && searchScrollOffset < ChatListNavigationBar.searchScrollHeight {
+                return true
+            } else if clippedScrollOffset < 0.0 && clippedScrollOffset > -listView.tempTopInset {
+                return true
+            }
+        }
+        
+        return false
+    }
+    
+    private func didBeginInteractiveDragging(listView: ListView, isPrimary: Bool) {
+        if isPrimary {
+            if let chatListNode = listView as? ChatListNode, !chatListNode.hasItemsToBeRevealed() {
+                self.allowOverscrollStoryExpansion = true
+            } else {
+                self.allowOverscrollStoryExpansion = false
+            }
+        }
+        self.allowOverscrollItemExpansion = true
+    }
+    
+    private func endedInteractiveDragging(listView: ListView, isPrimary: Bool) {
+        if isPrimary {
+            self.allowOverscrollStoryExpansion = false
+            self.currentOverscrollStoryExpansionTimestamp = nil
+        }
+        self.allowOverscrollItemExpansion = false
+        self.currentOverscrollItemExpansionTimestamp = nil
+    }
+    
+    private func contentScrollingEnded(listView: ListView, isPrimary: Bool) -> Bool {
+        if !isPrimary || self.inlineStackContainerNode == nil {
+        } else {
+            return false
+        }
+        
+        guard let navigationBarComponentView = self.navigationBarView.view as? ChatListNavigationBar.View else {
+            return false
+        }
+        
+        if let clippedScrollOffset = navigationBarComponentView.clippedScrollOffset {
+            let searchScrollOffset = clippedScrollOffset
+            if searchScrollOffset > 0.0 && searchScrollOffset < ChatListNavigationBar.searchScrollHeight {
+                if searchScrollOffset < ChatListNavigationBar.searchScrollHeight * 0.5 {
+                    let _ = listView.scrollToOffsetFromTop(0.0, animated: true)
+                } else {
+                    let _ = listView.scrollToOffsetFromTop(ChatListNavigationBar.searchScrollHeight, animated: true)
+                }
+                return true
+            } else if clippedScrollOffset < 0.0 && clippedScrollOffset > -listView.tempTopInset {
+                if navigationBarComponentView.storiesUnlocked {
+                    let _ = listView.scrollToOffsetFromTop(-listView.tempTopInset, animated: true)
+                } else {
+                    let _ = listView.scrollToOffsetFromTop(0.0, animated: true)
+                }
+                return true
+            }
+        }
+        
+        return false
+    }
+    
+    func makeInlineChatList(location: ChatListControllerLocation) -> ChatListContainerNode {
+        var forumPeerId: EnginePeer.Id?
+        if case let .forum(peerId) = location {
+            forumPeerId = peerId
+        }
+        
+        let inlineStackContainerNode = ChatListContainerNode(context: self.context, controller: self.controller, location: location, previewing: false, controlsHistoryPreload: false, isInlineMode: true, presentationData: self.presentationData, animationCache: self.animationCache, animationRenderer: self.animationRenderer, filterBecameEmpty: { _ in }, filterEmptyAction: { [weak self] _ in self?.emptyListAction?(forumPeerId) }, secondaryEmptyAction: {}, openArchiveSettings: {})
+        return inlineStackContainerNode
+    }
+    
+    func setInlineChatList(inlineStackContainerNode: ChatListContainerNode?) {
+        if let inlineStackContainerNode = inlineStackContainerNode {
+            if self.inlineStackContainerNode !== inlineStackContainerNode {
+                if let navigationBarComponentView = self.navigationBarView.view as? ChatListNavigationBar.View {
+                    if navigationBarComponentView.storiesUnlocked {
+                        let _ = self.mainContainerNode.currentItemNode.scrollToOffsetFromTop(self.mainContainerNode.currentItemNode.tempTopInset, animated: true)
+                    }
+                }
+                
+                inlineStackContainerNode.leftSeparatorLayer.isHidden = false
+                
+                inlineStackContainerNode.presentAlert = self.mainContainerNode.presentAlert
+                inlineStackContainerNode.present = self.mainContainerNode.present
+                inlineStackContainerNode.push = self.mainContainerNode.push
+                inlineStackContainerNode.deletePeerChat = self.mainContainerNode.deletePeerChat
+                inlineStackContainerNode.deletePeerThread = self.mainContainerNode.deletePeerThread
+                inlineStackContainerNode.setPeerThreadStopped = self.mainContainerNode.setPeerThreadStopped
+                inlineStackContainerNode.setPeerThreadPinned = self.mainContainerNode.setPeerThreadPinned
+                inlineStackContainerNode.setPeerThreadHidden = self.mainContainerNode.setPeerThreadHidden
+                inlineStackContainerNode.peerSelected = self.mainContainerNode.peerSelected
+                inlineStackContainerNode.groupSelected = self.mainContainerNode.groupSelected
+                inlineStackContainerNode.updatePeerGrouping = self.mainContainerNode.updatePeerGrouping
+                
+                inlineStackContainerNode.contentOffsetChanged = { [weak self] offset, listView in
+                    self?.contentOffsetChanged(offset: offset, listView: listView, isPrimary: false)
+                }
+                inlineStackContainerNode.didBeginInteractiveDragging = { [weak self] listView in
+                    self?.didBeginInteractiveDragging(listView: listView, isPrimary: false)
+                }
+                inlineStackContainerNode.endedInteractiveDragging = { [weak self] listView in
+                    self?.endedInteractiveDragging(listView: listView, isPrimary: false)
+                }
+                inlineStackContainerNode.shouldStopScrolling = { [weak self] listView, velocity in
+                    return self?.shouldStopScrolling(listView: listView, velocity: velocity, isPrimary: false) ?? false
+                }
+                inlineStackContainerNode.contentScrollingEnded = { [weak self] listView in
+                    return self?.contentScrollingEnded(listView: listView, isPrimary: false) ?? false
+                }
+                
+                inlineStackContainerNode.activateChatPreview = self.mainContainerNode.activateChatPreview
+                inlineStackContainerNode.openStories = self.mainContainerNode.openStories
+                inlineStackContainerNode.addedVisibleChatsWithPeerIds = self.mainContainerNode.addedVisibleChatsWithPeerIds
+                inlineStackContainerNode.didBeginSelectingChats = self.mainContainerNode.didBeginSelectingChats
+                inlineStackContainerNode.displayFilterLimit = nil
+                
+                let previousInlineStackContainerNode = self.inlineStackContainerNode
+                
+                if let navigationBarComponentView = self.navigationBarView.view as? ChatListNavigationBar.View, let clippedScrollOffset = navigationBarComponentView.clippedScrollOffset {
+                    let scrollOffset = max(0.0, clippedScrollOffset)
+                    inlineStackContainerNode.initialScrollingOffset = scrollOffset
+                }
+                
+                self.inlineStackContainerNode = inlineStackContainerNode
+                self.inlineStackContainerTransitionFraction = 1.0
+                
+                if let _ = self.containerLayout {
+                    let transition: ContainedViewLayoutTransition = .animated(duration: 0.5, curve: .spring)
+                    
+                    if let contentOffset = self.mainContainerNode.contentOffset, case let .known(offset) = contentOffset, offset < 0.0 {
+                        if let containerLayout = self.containerLayout {
+                            self.updateNavigationScrolling(navigationHeight: containerLayout.navigationBarHeight, transition: transition)
+                            self.mainContainerNode.scrollToTop(animated: true, adjustForTempInset: false)
+                        }
+                    }
+                    
+                    if let previousInlineStackContainerNode {
+                        transition.updatePosition(node: previousInlineStackContainerNode, position: CGPoint(x: previousInlineStackContainerNode.position.x + previousInlineStackContainerNode.bounds.width + UIScreenPixel, y: previousInlineStackContainerNode.position.y), completion: { [weak previousInlineStackContainerNode] _ in
+                            previousInlineStackContainerNode?.removeFromSupernode()
+                        })
+                    }
+                    
+                    self.controller?.requestLayout(transition: transition)
+                } else {
+                    previousInlineStackContainerNode?.removeFromSupernode()
+                }
+            }
+        } else {
+            if let inlineStackContainerNode = self.inlineStackContainerNode {
+                self.inlineStackContainerNode = nil
+                self.inlineStackContainerTransitionFraction = 0.0
+                
+                if let _ = self.containerLayout {
+                    let transition: ContainedViewLayoutTransition = .animated(duration: 0.4, curve: .spring)
+                    
+                    transition.updatePosition(node: inlineStackContainerNode, position: CGPoint(x: inlineStackContainerNode.position.x + inlineStackContainerNode.bounds.width + UIScreenPixel, y: inlineStackContainerNode.position.y), completion: { [weak inlineStackContainerNode] _ in
+                        inlineStackContainerNode?.removeFromSupernode()
+                    })
+                    
+                    self.temporaryContentOffsetChangeTransition = transition
+                    self.tempNavigationScrollingTransition = transition
+                    self.controller?.requestLayout(transition: transition)
+                    self.temporaryContentOffsetChangeTransition = nil
+                    self.tempNavigationScrollingTransition = nil
+                } else {
+                    inlineStackContainerNode.removeFromSupernode()
+                }
+            }
+        }
+    }
+    
     func playArchiveAnimation() {
-        self.containerNode.playArchiveAnimation()
+        self.mainContainerNode.playArchiveAnimation()
     }
     
     func scrollToTop() {
         if let searchDisplayController = self.searchDisplayController {
             searchDisplayController.contentNode.scrollToTop()
+        } else if let inlineStackContainerNode = self.inlineStackContainerNode {
+            inlineStackContainerNode.scrollToTop(animated: true, adjustForTempInset: false)
         } else {
-            self.containerNode.scrollToTop()
+            self.mainContainerNode.scrollToTop(animated: true, adjustForTempInset: false)
         }
     }
+    
+    func scrollToTopIfStoriesAreExpanded() {
+        if let contentOffset = self.mainContainerNode.contentOffset, case let .known(offset) = contentOffset, offset < 0.0 {
+            self.mainContainerNode.scrollToTop(animated: true, adjustForTempInset: false)
+            self.mainContainerNode.tempTopInset = 0.0
+        }
+    }
+}
+
+func shouldDisplayStoriesInChatListHeader(storySubscriptions: EngineStorySubscriptions, isHidden: Bool) -> Bool {
+    if !storySubscriptions.items.isEmpty {
+        return true
+    }
+    if !isHidden, let accountItem = storySubscriptions.accountItem {
+        if accountItem.hasPending || accountItem.storyCount != 0 {
+            return true
+        }
+    }
+    return false
 }

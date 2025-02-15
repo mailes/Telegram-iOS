@@ -134,12 +134,12 @@
         return [strongSelf _itemAtIndexPath:indexPath];
     };
     
-    _selectionChangedDisposable = [[self.selectionContext selectionChangedSignal] startWithNext:^(id next)
+    _selectionChangedDisposable = [[self.selectionContext selectionChangedSignal] startStrictWithNext:^(id next)
     {
         __strong TGMediaAssetsPickerController *strongSelf = weakSelf;
         if (strongSelf != nil)
             return [strongSelf updateSelectionIndexes];
-    }];
+    } file:__FILE_NAME__ line:__LINE__];
 }
 
 - (void)updateSelectionIndexes
@@ -194,7 +194,7 @@
             [strongSelf setTitle:assetGroup.title];
         }
         return [strongSelf->_assetsLibrary assetsOfAssetGroup:assetGroup reversed:reversed];
-    }] deliverOn:[SQueue mainQueue]] startWithNext:^(id next)
+    }] deliverOn:[SQueue mainQueue]] startStrictWithNext:^(id next)
     {
         __strong TGMediaAssetsPickerController *strongSelf = weakSelf;
         if (strongSelf == nil)
@@ -238,7 +238,7 @@
         
         if (strongSelf->_galleryMixin != nil && strongSelf->_fetchResult != nil)
             [strongSelf->_galleryMixin updateWithFetchResult:strongSelf->_fetchResult];
-    }]];
+    } file:__FILE_NAME__ line:__LINE__]];
 }
 
 - (void)viewWillAppear:(BOOL)animated
@@ -435,12 +435,21 @@
             intent = TGPhotoEditorControllerSignupAvatarIntent;
         }
         
+        if (self.forum) {
+            intent |= TGPhotoEditorControllerForumAvatarIntent;
+        }
+        
+        if (self.isSuggesting) {
+            intent |= TGPhotoEditorControllerSuggestingAvatarIntent;
+        }
+        
         id<TGMediaEditableItem> editableItem = asset;
         if (asset.type == TGMediaAssetGifType) {
             editableItem = [[TGCameraCapturedVideo alloc] initWithAsset:asset livePhoto:false];
         }
         
-        TGPhotoEditorController *controller = [[TGPhotoEditorController alloc] initWithContext:_context item:editableItem intent:intent adjustments:nil caption:nil screenImage:thumbnailImage availableTabs:[TGPhotoEditorController defaultTabsForAvatarIntent] selectedTab:TGPhotoEditorCropTab];
+        TGPhotoEditorController *controller = [[TGPhotoEditorController alloc] initWithContext:_context item:editableItem intent:intent adjustments:nil caption:nil screenImage:thumbnailImage availableTabs:[TGPhotoEditorController defaultTabsForAvatarIntent:_intent != TGMediaAssetsControllerSetSignupProfilePhotoIntent] selectedTab:TGPhotoEditorCropTab];
+        controller.modalPresentationStyle = UIModalPresentationFullScreen;
         controller.stickersContext = self.stickersContext;
         controller.editingContext = self.editingContext;
         controller.didFinishRenderingFullSizeImage = ^(UIImage *resultImage)
@@ -451,7 +460,7 @@
             
             [[strongSelf->_assetsLibrary saveAssetWithImage:resultImage] startWithNext:nil];
         };
-        controller.didFinishEditing = ^(id<TGMediaEditAdjustments> adjustments, UIImage *resultImage, __unused UIImage *thumbnailImage, bool hasChanges)
+        controller.didFinishEditing = ^(id<TGMediaEditAdjustments> adjustments, UIImage *resultImage, __unused UIImage *thumbnailImage, bool hasChanges, void(^commit)(void))
         {
             if (!hasChanges)
                 return;
@@ -483,12 +492,12 @@
                         previewImage = thumbnailImage;
                     }
                 }
-                [(TGMediaAssetsController *)strongSelf.navigationController completeWithAvatarVideo:[NSURL fileURLWithPath:filePath] adjustments:videoAdjustments image:previewImage];
+                [(TGMediaAssetsController *)strongSelf.navigationController completeWithAvatarVideo:[NSURL fileURLWithPath:filePath] adjustments:videoAdjustments image:previewImage commit:commit];
             } else {
-                [(TGMediaAssetsController *)strongSelf.navigationController completeWithAvatarImage:resultImage];
+                [(TGMediaAssetsController *)strongSelf.navigationController completeWithAvatarImage:resultImage commit:commit];
             }
         };
-        controller.didFinishEditingVideo = ^(AVAsset *asset, id<TGMediaEditAdjustments> adjustments, UIImage *resultImage, UIImage *thumbnailImage, bool hasChanges) {
+        controller.didFinishEditingVideo = ^(AVAsset *asset, id<TGMediaEditAdjustments> adjustments, UIImage *resultImage, UIImage *thumbnailImage, bool hasChanges, void(^commit)(void)) {
             if (!hasChanges)
                 return;
             
@@ -496,7 +505,7 @@
             if (strongSelf == nil)
                 return;
             
-            [(TGMediaAssetsController *)strongSelf.navigationController completeWithAvatarVideo:asset adjustments:adjustments image:resultImage];
+            [(TGMediaAssetsController *)strongSelf.navigationController completeWithAvatarVideo:asset adjustments:adjustments image:resultImage commit:commit];
         };
         controller.requestThumbnailImage = ^(id<TGMediaEditableItem> editableItem)
         {

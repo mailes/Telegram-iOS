@@ -14,6 +14,7 @@ import TextFormat
 import Lottie
 import GZip
 import HierarchyTrackingLayer
+import TelegramUIPreferences
 
 public final class EmojiStatusComponent: Component {
     public typealias EnvironmentType = Empty
@@ -22,7 +23,7 @@ public final class EmojiStatusComponent: Component {
         case file(file: TelegramMediaFile)
         case customEmoji(fileId: Int64)
         
-        var fileId: MediaId {
+        public var fileId: MediaId {
             switch self {
             case let .file(file):
                 return file.fileId
@@ -49,31 +50,69 @@ public final class EmojiStatusComponent: Component {
         case text(color: UIColor, string: String)
         case animation(content: AnimationContent, size: CGSize, placeholderColor: UIColor, themeColor: UIColor?, loopMode: LoopMode)
         case topic(title: String, color: Int32, size: CGSize)
+        case image(image: UIImage?)
     }
     
-    public let context: AccountContext
+    public let postbox: Postbox
+    public let energyUsageSettings: EnergyUsageSettings
+    public let resolveInlineStickers: ([Int64]) -> Signal<[Int64: TelegramMediaFile], NoError>
     public let animationCache: AnimationCache
     public let animationRenderer: MultiAnimationRenderer
     public let content: Content
+    public let size: CGSize?
     public let isVisibleForAnimations: Bool
     public let useSharedAnimation: Bool
     public let action: (() -> Void)?
     public let emojiFileUpdated: ((TelegramMediaFile?) -> Void)?
     
-    public init(
+    public convenience init(
         context: AccountContext,
         animationCache: AnimationCache,
         animationRenderer: MultiAnimationRenderer,
         content: Content,
+        size: CGSize? = nil,
         isVisibleForAnimations: Bool,
         useSharedAnimation: Bool = false,
         action: (() -> Void)?,
         emojiFileUpdated: ((TelegramMediaFile?) -> Void)? = nil
     ) {
-        self.context = context
+        self.init(
+            postbox: context.account.postbox,
+            energyUsageSettings: context.sharedContext.energyUsageSettings,
+            resolveInlineStickers: { fileIds in
+                return context.engine.stickers.resolveInlineStickers(fileIds: fileIds)
+            },
+            animationCache: animationCache,
+            animationRenderer: animationRenderer,
+            content: content,
+            size: size,
+            isVisibleForAnimations: isVisibleForAnimations,
+            useSharedAnimation: useSharedAnimation,
+            action: action,
+            emojiFileUpdated: emojiFileUpdated
+        )
+    }
+    
+    public init(
+        postbox: Postbox,
+        energyUsageSettings: EnergyUsageSettings,
+        resolveInlineStickers: @escaping ([Int64]) -> Signal<[Int64: TelegramMediaFile], NoError>,
+        animationCache: AnimationCache,
+        animationRenderer: MultiAnimationRenderer,
+        content: Content,
+        size: CGSize? = nil,
+        isVisibleForAnimations: Bool,
+        useSharedAnimation: Bool = false,
+        action: (() -> Void)?,
+        emojiFileUpdated: ((TelegramMediaFile?) -> Void)? = nil
+    ) {
+        self.postbox = postbox
+        self.energyUsageSettings = energyUsageSettings
+        self.resolveInlineStickers = resolveInlineStickers
         self.animationCache = animationCache
         self.animationRenderer = animationRenderer
         self.content = content
+        self.size = size
         self.isVisibleForAnimations = isVisibleForAnimations
         self.useSharedAnimation = useSharedAnimation
         self.action = action
@@ -82,10 +121,13 @@ public final class EmojiStatusComponent: Component {
     
     public func withVisibleForAnimations(_ isVisibleForAnimations: Bool) -> EmojiStatusComponent {
         return EmojiStatusComponent(
-            context: self.context,
+            postbox: self.postbox,
+            energyUsageSettings: self.energyUsageSettings,
+            resolveInlineStickers: self.resolveInlineStickers,
             animationCache: self.animationCache,
             animationRenderer: self.animationRenderer,
             content: self.content,
+            size: self.size,
             isVisibleForAnimations: isVisibleForAnimations,
             useSharedAnimation: self.useSharedAnimation,
             action: self.action,
@@ -94,7 +136,10 @@ public final class EmojiStatusComponent: Component {
     }
     
     public static func ==(lhs: EmojiStatusComponent, rhs: EmojiStatusComponent) -> Bool {
-        if lhs.context !== rhs.context {
+        if lhs.postbox !== rhs.postbox {
+            return false
+        }
+        if lhs.energyUsageSettings != rhs.energyUsageSettings {
             return false
         }
         if lhs.animationCache !== rhs.animationCache {
@@ -104,6 +149,9 @@ public final class EmojiStatusComponent: Component {
             return false
         }
         if lhs.content != rhs.content {
+            return false
+        }
+        if lhs.size != rhs.size {
             return false
         }
         if lhs.isVisibleForAnimations != rhs.isVisibleForAnimations {
@@ -191,7 +239,9 @@ public final class EmojiStatusComponent: Component {
             }
         }
         
-        func update(component: EmojiStatusComponent, availableSize: CGSize, state: EmptyComponentState, environment: Environment<EnvironmentType>, transition: Transition) -> CGSize {
+        func update(component: EmojiStatusComponent, availableSize: CGSize, state: EmptyComponentState, environment: Environment<EnvironmentType>, transition: ComponentTransition) -> CGSize {
+            let availableSize = component.size ?? availableSize
+            
             self.state = state
             
             var iconImage: UIImage?
@@ -201,6 +251,8 @@ public final class EmojiStatusComponent: Component {
             var emojiLoopMode: LoopMode?
             var emojiSize = CGSize()
             
+            var iconTintColor: UIColor?
+            
             self.isUserInteractionEnabled = component.action != nil
             
             //let previousContent = self.component?.content
@@ -209,40 +261,35 @@ public final class EmojiStatusComponent: Component {
                 case .none:
                     iconImage = nil
                 case let .premium(color):
-                    if let sourceImage = UIImage(bundleImageName: "Chat/Input/Media/EntityInputPremiumIcon") {
-                        iconImage = generateImage(sourceImage.size, contextGenerator: { size, context in
-                            if let cgImage = sourceImage.cgImage {
-                                context.clear(CGRect(origin: CGPoint(), size: size))
-                                let imageSize = CGSize(width: sourceImage.size.width - 8.0, height: sourceImage.size.height - 8.0)
-                                context.clip(to: CGRect(origin: CGPoint(x: floor((size.width - imageSize.width) / 2.0), y: floor((size.height - imageSize.height) / 2.0)), size: imageSize), mask: cgImage)
-                                
-                                context.setFillColor(color.cgColor)
-                                context.fill(CGRect(origin: CGPoint(), size: size))
-                            }
-                        }, opaque: false)
+                    iconTintColor = color
+                    
+                    if case .premium = self.component?.content, let image = self.iconView?.image {
+                        iconImage = image
                     } else {
-                        iconImage = nil
+                        if let sourceImage = UIImage(bundleImageName: "Chat/Input/Media/EntityInputPremiumIcon") {
+                            iconImage = generateImage(sourceImage.size, contextGenerator: { size, context in
+                                if let cgImage = sourceImage.cgImage {
+                                    context.clear(CGRect(origin: CGPoint(), size: size))
+                                    let imageSize = CGSize(width: sourceImage.size.width - 8.0, height: sourceImage.size.height - 8.0)
+                                    context.clip(to: CGRect(origin: CGPoint(x: floor((size.width - imageSize.width) / 2.0), y: floor((size.height - imageSize.height) / 2.0)), size: imageSize), mask: cgImage)
+                                    
+                                    context.setFillColor(UIColor.white.cgColor)
+                                    context.fill(CGRect(origin: CGPoint(), size: size))
+                                }
+                            }, opaque: false)?.withRenderingMode(.alwaysTemplate)
+                        } else {
+                            iconImage = nil
+                        }
                     }
                 case let .topic(title, color, realSize):
-                    func generateTopicColors(_ color: Int32) -> ([UInt32], [UInt32]) {
-                        return ([0x6FB9F0, 0x0261E4], [0x026CB5, 0x064BB7])
-                    }
-                    
-                    let topicColors: [Int32: ([UInt32], [UInt32])] = [
-                        0x6FB9F0: ([0x6FB9F0, 0x0261E4], [0x026CB5, 0x064BB7]),
-                        0xFFD67E: ([0xFFD67E, 0xFC8601], [0xDA9400, 0xFA5F00]),
-                        0xCB86DB: ([0xCB86DB, 0x9338AF], [0x812E98, 0x6F2B87]),
-                        0x8EEE98: ([0x8EEE98, 0x02B504], [0x02A01B, 0x009716]),
-                        0xFF93B2: ([0xFF93B2, 0xE23264], [0xFC447A, 0xC80C46]),
-                        0xFB6F5F: ([0xFB6F5F, 0xD72615], [0xDC1908, 0xB61506])
-                    ]
-                    let colors = topicColors[color] ?? generateTopicColors(color)
-                    
+                    let colors = topicIconColors(for: color)
                     if let image = generateTopicIcon(title: title, backgroundColors: colors.0.map(UIColor.init(rgb:)), strokeColors: colors.1.map(UIColor.init(rgb:)), size: realSize) {
                         iconImage = image
                     } else {
                         iconImage = nil
                     }
+                case let .image(image):
+                    iconImage = image
                 case let .verified(fillColor, foregroundColor, sizeType):
                     let imageNamePrefix: String
                     switch sizeType {
@@ -353,6 +400,8 @@ public final class EmojiStatusComponent: Component {
                     emojiThemeColor = themeColor
                     emojiLoopMode = loopMode
                     emojiSize = size
+                } else if case let .premium(color) = component.content {
+                    iconTintColor = color
                 }
             }
             
@@ -374,7 +423,19 @@ public final class EmojiStatusComponent: Component {
                         iconView.layer.animateSpring(from: 0.1 as NSNumber, to: 1.0 as NSNumber, keyPath: "transform.scale", duration: 0.5)
                     }
                 }
-                iconView.image = iconImage
+                if iconView.image !== iconImage {
+                    iconView.image = iconImage
+                }
+                
+                if let iconTintColor {
+                    if transition.animation.isImmediate {
+                        iconView.tintColor = iconTintColor
+                    } else {
+                        transition.setTintColor(view: iconView, color: iconTintColor)
+                    }
+                } else {
+                    iconView.tintColor = nil
+                }
                 
                 var useFit = false
                 switch component.content {
@@ -429,7 +490,16 @@ public final class EmojiStatusComponent: Component {
                             loopCount = value
                         }
                         animationLayer = InlineStickerItemLayer(
-                            context: component.context,
+                            context: .custom(InlineStickerItemLayer.Context.Custom(
+                                postbox: component.postbox,
+                                energyUsageSettings: {
+                                    return component.energyUsageSettings
+                                },
+                                resolveInlineStickers: { fileIds in
+                                    return component.resolveInlineStickers(fileIds)
+                                }
+                            )),
+                            userLocation: .other,
                             attemptSynchronousLoad: false,
                             emoji: ChatTextInputTextCustomEmojiAttribute(interactivelySelectedFromPackId: nil, fileId: emojiFile.fileId.id, file: emojiFile),
                             file: emojiFile,
@@ -451,8 +521,11 @@ public final class EmojiStatusComponent: Component {
                     
                     var accentTint = false
                     if let _ = emojiThemeColor {
+                        if emojiFile.isCustomTemplateEmoji {
+                            accentTint = true
+                        }
                         for attribute in emojiFile.attributes {
-                            if case let .CustomEmoji(_, _, packReference) = attribute {
+                            if case let .CustomEmoji(_, _, _, packReference) = attribute {
                                 switch packReference {
                                 case let .id(id, _):
                                     if id == 773947703670341676 || id == 2964141614563343 {
@@ -464,10 +537,11 @@ public final class EmojiStatusComponent: Component {
                             }
                         }
                     }
+                    
                     if accentTint {
-                        animationLayer.contentTintColor = emojiThemeColor
+                        animationLayer.updateTintColor(contentTintColor: emojiThemeColor, dynamicColor: emojiThemeColor, transition: transition)
                     } else {
-                        animationLayer.contentTintColor = nil
+                        animationLayer.updateTintColor(contentTintColor: nil, dynamicColor: nil, transition: transition)
                     }
                     
                     animationLayer.frame = CGRect(origin: CGPoint(), size: size)
@@ -512,7 +586,7 @@ public final class EmojiStatusComponent: Component {
                     }*/
                 } else {
                     if self.emojiFileDisposable == nil {
-                        self.emojiFileDisposable = (component.context.engine.stickers.resolveInlineStickers(fileIds: [emojiFileId])
+                        self.emojiFileDisposable = (component.resolveInlineStickers([emojiFileId])
                         |> deliverOnMainQueue).start(next: { [weak self] result in
                             guard let strongSelf = self else {
                                 return
@@ -571,7 +645,20 @@ public final class EmojiStatusComponent: Component {
         return View(frame: CGRect())
     }
     
-    public func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<EnvironmentType>, transition: Transition) -> CGSize {
+    public func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<EnvironmentType>, transition: ComponentTransition) -> CGSize {
         return view.update(component: self, availableSize: availableSize, state: state, environment: environment, transition: transition)
     }
+}
+
+public func topicIconColors(for color: Int32) -> ([UInt32], [UInt32]) {
+    let topicColors: [Int32: ([UInt32], [UInt32])] = [
+        0x6FB9F0: ([0x6FB9F0, 0x0261E4], [0x026CB5, 0x064BB7]),
+        0xFFD67E: ([0xFFD67E, 0xFC8601], [0xDA9400, 0xFA5F00]),
+        0xCB86DB: ([0xCB86DB, 0x9338AF], [0x812E98, 0x6F2B87]),
+        0x8EEE98: ([0x8EEE98, 0x02B504], [0x02A01B, 0x009716]),
+        0xFF93B2: ([0xFF93B2, 0xE23264], [0xFC447A, 0xC80C46]),
+        0xFB6F5F: ([0xFB6F5F, 0xD72615], [0xDC1908, 0xB61506])
+    ]
+    
+    return topicColors[color] ?? ([0x6FB9F0, 0x0261E4], [0x026CB5, 0x064BB7])
 }

@@ -10,11 +10,17 @@ objc_library(
     hdrs = glob([
         "Public/**/*.h",
     ]),
+    copts = [
+        "-Werror",
+    ],
     includes = [
         "Public",
     ],
     deps = [
-        "//submodules/ffmpeg:ffmpeg",
+        "//submodules/ffmpeg",
+    ],
+    sdk_frameworks = [
+        "CoreMedia",
     ],
     visibility = [
         "//visibility:public",

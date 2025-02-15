@@ -1,5 +1,4 @@
 import Foundation
-import Postbox
 import TelegramCore
 import SwiftSignalKit
 
@@ -7,10 +6,10 @@ public struct ExperimentalUISettings: Codable, Equatable {
     public struct AccountReactionOverrides: Equatable, Codable {
         public struct Item: Equatable, Codable {
             public var key: MessageReaction.Reaction
-            public var messageId: MessageId
-            public var mediaId: MediaId
+            public var messageId: EngineMessage.Id
+            public var mediaId: EngineMedia.Id
             
-            public init(key: MessageReaction.Reaction, messageId: MessageId, mediaId: MediaId) {
+            public init(key: MessageReaction.Reaction, messageId: EngineMessage.Id, mediaId: EngineMedia.Id) {
                 self.key = key
                 self.messageId = messageId
                 self.mediaId = mediaId
@@ -39,14 +38,32 @@ public struct ExperimentalUISettings: Codable, Equatable {
     public var enableVoipTcp: Bool
     public var experimentalCompatibility: Bool
     public var enableDebugDataDisplay: Bool
-    public var acceleratedStickers: Bool
-    public var experimentalBackground: Bool
-    public var snow: Bool
+    public var rippleEffect: Bool
     public var inlineStickers: Bool
     public var localTranscription: Bool
     public var enableReactionOverrides: Bool
+    public var browserExperiment: Bool
     public var accountReactionEffectOverrides: [AccountReactionOverrides]
     public var accountStickerEffectOverrides: [AccountReactionOverrides]
+    public var disableQuickReaction: Bool
+    public var disableLanguageRecognition: Bool
+    public var disableImageContentAnalysis: Bool
+    public var disableBackgroundAnimation: Bool
+    public var logLanguageRecognition: Bool
+    public var storiesExperiment: Bool
+    public var storiesJpegExperiment: Bool
+    public var crashOnMemoryPressure: Bool
+    public var dustEffect: Bool
+    public var disableCallV2: Bool
+    public var experimentalCallMute: Bool
+    public var allowWebViewInspection: Bool
+    public var disableReloginTokens: Bool
+    public var liveStreamV2: Bool
+    public var dynamicStreaming: Bool
+    public var enableLocalTranslation: Bool
+    public var autoBenchmarkReflectors: Bool?
+    public var conferenceCalls: Bool
+    public var playerV2: Bool
     
     public static var defaultSettings: ExperimentalUISettings {
         return ExperimentalUISettings(
@@ -63,14 +80,32 @@ public struct ExperimentalUISettings: Codable, Equatable {
             enableVoipTcp: false,
             experimentalCompatibility: false,
             enableDebugDataDisplay: false,
-            acceleratedStickers: false,
-            experimentalBackground: false,
-            snow: false,
+            rippleEffect: false,
             inlineStickers: false,
             localTranscription: false,
             enableReactionOverrides: false,
+            browserExperiment: false,
             accountReactionEffectOverrides: [],
-            accountStickerEffectOverrides: []
+            accountStickerEffectOverrides: [],
+            disableQuickReaction: false,
+            disableLanguageRecognition: false,
+            disableImageContentAnalysis: false,
+            disableBackgroundAnimation: false,
+            logLanguageRecognition: false,
+            storiesExperiment: false,
+            storiesJpegExperiment: false,
+            crashOnMemoryPressure: false,
+            dustEffect: false,
+            disableCallV2: false,
+            experimentalCallMute: false,
+            allowWebViewInspection: false,
+            disableReloginTokens: false,
+            liveStreamV2: false,
+            dynamicStreaming: false,
+            enableLocalTranslation: false,
+            autoBenchmarkReflectors: nil,
+            conferenceCalls: false,
+            playerV2: false
         )
     }
     
@@ -88,14 +123,32 @@ public struct ExperimentalUISettings: Codable, Equatable {
         enableVoipTcp: Bool,
         experimentalCompatibility: Bool,
         enableDebugDataDisplay: Bool,
-        acceleratedStickers: Bool,
-        experimentalBackground: Bool,
-        snow: Bool,
+        rippleEffect: Bool,
         inlineStickers: Bool,
         localTranscription: Bool,
         enableReactionOverrides: Bool,
+        browserExperiment: Bool,
         accountReactionEffectOverrides: [AccountReactionOverrides],
-        accountStickerEffectOverrides: [AccountReactionOverrides]
+        accountStickerEffectOverrides: [AccountReactionOverrides],
+        disableQuickReaction: Bool,
+        disableLanguageRecognition: Bool,
+        disableImageContentAnalysis: Bool,
+        disableBackgroundAnimation: Bool,
+        logLanguageRecognition: Bool,
+        storiesExperiment: Bool,
+        storiesJpegExperiment: Bool,
+        crashOnMemoryPressure: Bool,
+        dustEffect: Bool,
+        disableCallV2: Bool,
+        experimentalCallMute: Bool,
+        allowWebViewInspection: Bool,
+        disableReloginTokens: Bool,
+        liveStreamV2: Bool,
+        dynamicStreaming: Bool,
+        enableLocalTranslation: Bool,
+        autoBenchmarkReflectors: Bool?,
+        conferenceCalls: Bool,
+        playerV2: Bool
     ) {
         self.keepChatNavigationStack = keepChatNavigationStack
         self.skipReadHistory = skipReadHistory
@@ -110,14 +163,32 @@ public struct ExperimentalUISettings: Codable, Equatable {
         self.enableVoipTcp = enableVoipTcp
         self.experimentalCompatibility = experimentalCompatibility
         self.enableDebugDataDisplay = enableDebugDataDisplay
-        self.acceleratedStickers = acceleratedStickers
-        self.experimentalBackground = experimentalBackground
-        self.snow = snow
+        self.rippleEffect = rippleEffect
         self.inlineStickers = inlineStickers
         self.localTranscription = localTranscription
         self.enableReactionOverrides = enableReactionOverrides
+        self.browserExperiment = browserExperiment
         self.accountReactionEffectOverrides = accountReactionEffectOverrides
         self.accountStickerEffectOverrides = accountStickerEffectOverrides
+        self.disableQuickReaction = disableQuickReaction
+        self.disableLanguageRecognition = disableLanguageRecognition
+        self.disableImageContentAnalysis = disableImageContentAnalysis
+        self.disableBackgroundAnimation = disableBackgroundAnimation
+        self.logLanguageRecognition = logLanguageRecognition
+        self.storiesExperiment = storiesExperiment
+        self.storiesJpegExperiment = storiesJpegExperiment
+        self.crashOnMemoryPressure = crashOnMemoryPressure
+        self.dustEffect = dustEffect
+        self.disableCallV2 = disableCallV2
+        self.experimentalCallMute = experimentalCallMute
+        self.allowWebViewInspection = allowWebViewInspection
+        self.disableReloginTokens = disableReloginTokens
+        self.liveStreamV2 = liveStreamV2
+        self.dynamicStreaming = dynamicStreaming
+        self.enableLocalTranslation = enableLocalTranslation
+        self.autoBenchmarkReflectors = autoBenchmarkReflectors
+        self.conferenceCalls = conferenceCalls
+        self.playerV2 = playerV2
     }
     
     public init(from decoder: Decoder) throws {
@@ -136,14 +207,32 @@ public struct ExperimentalUISettings: Codable, Equatable {
         self.enableVoipTcp = (try container.decodeIfPresent(Int32.self, forKey: "enableVoipTcp") ?? 0) != 0
         self.experimentalCompatibility = (try container.decodeIfPresent(Int32.self, forKey: "experimentalCompatibility") ?? 0) != 0
         self.enableDebugDataDisplay = (try container.decodeIfPresent(Int32.self, forKey: "enableDebugDataDisplay") ?? 0) != 0
-        self.acceleratedStickers = (try container.decodeIfPresent(Int32.self, forKey: "acceleratedStickers") ?? 0) != 0
-        self.experimentalBackground = (try container.decodeIfPresent(Int32.self, forKey: "experimentalBackground") ?? 0) != 0
-        self.snow = (try container.decodeIfPresent(Int32.self, forKey: "snow") ?? 0) != 0
+        self.rippleEffect = (try container.decodeIfPresent(Int32.self, forKey: "rippleEffect") ?? 0) != 0
         self.inlineStickers = (try container.decodeIfPresent(Int32.self, forKey: "inlineStickers") ?? 0) != 0
         self.localTranscription = (try container.decodeIfPresent(Int32.self, forKey: "localTranscription") ?? 0) != 0
         self.enableReactionOverrides = try container.decodeIfPresent(Bool.self, forKey: "enableReactionOverrides") ?? false
+        self.browserExperiment = try container.decodeIfPresent(Bool.self, forKey: "browserExperiment") ?? false
         self.accountReactionEffectOverrides = (try? container.decodeIfPresent([AccountReactionOverrides].self, forKey: "accountReactionEffectOverrides")) ?? []
         self.accountStickerEffectOverrides = (try? container.decodeIfPresent([AccountReactionOverrides].self, forKey: "accountStickerEffectOverrides")) ?? []
+        self.disableQuickReaction = try container.decodeIfPresent(Bool.self, forKey: "disableQuickReaction") ?? false
+        self.disableLanguageRecognition = try container.decodeIfPresent(Bool.self, forKey: "disableLanguageRecognition") ?? false
+        self.disableImageContentAnalysis = try container.decodeIfPresent(Bool.self, forKey: "disableImageContentAnalysis") ?? false
+        self.disableBackgroundAnimation = try container.decodeIfPresent(Bool.self, forKey: "disableBackgroundAnimation") ?? false
+        self.logLanguageRecognition = try container.decodeIfPresent(Bool.self, forKey: "logLanguageRecognition") ?? false
+        self.storiesExperiment = try container.decodeIfPresent(Bool.self, forKey: "storiesExperiment") ?? false
+        self.storiesJpegExperiment = try container.decodeIfPresent(Bool.self, forKey: "storiesJpegExperiment") ?? false
+        self.crashOnMemoryPressure = try container.decodeIfPresent(Bool.self, forKey: "crashOnMemoryPressure") ?? false
+        self.dustEffect = try container.decodeIfPresent(Bool.self, forKey: "dustEffect") ?? false
+        self.disableCallV2 = try container.decodeIfPresent(Bool.self, forKey: "disableCallV2") ?? false
+        self.experimentalCallMute = try container.decodeIfPresent(Bool.self, forKey: "experimentalCallMute") ?? false
+        self.allowWebViewInspection = try container.decodeIfPresent(Bool.self, forKey: "allowWebViewInspection") ?? false
+        self.disableReloginTokens = try container.decodeIfPresent(Bool.self, forKey: "disableReloginTokens") ?? false
+        self.liveStreamV2 = try container.decodeIfPresent(Bool.self, forKey: "liveStreamV2") ?? false
+        self.dynamicStreaming = try container.decodeIfPresent(Bool.self, forKey: "dynamicStreaming_v2") ?? false
+        self.enableLocalTranslation = try container.decodeIfPresent(Bool.self, forKey: "enableLocalTranslation") ?? false
+        self.autoBenchmarkReflectors = try container.decodeIfPresent(Bool.self, forKey: "autoBenchmarkReflectors")
+        self.conferenceCalls = try container.decodeIfPresent(Bool.self, forKey: "conferenceCalls") ?? false
+        self.playerV2 = try container.decodeIfPresent(Bool.self, forKey: "playerV2") ?? false
     }
     
     public func encode(to encoder: Encoder) throws {
@@ -162,14 +251,32 @@ public struct ExperimentalUISettings: Codable, Equatable {
         try container.encode((self.enableVoipTcp ? 1 : 0) as Int32, forKey: "enableVoipTcp")
         try container.encode((self.experimentalCompatibility ? 1 : 0) as Int32, forKey: "experimentalCompatibility")
         try container.encode((self.enableDebugDataDisplay ? 1 : 0) as Int32, forKey: "enableDebugDataDisplay")
-        try container.encode((self.acceleratedStickers ? 1 : 0) as Int32, forKey: "acceleratedStickers")
-        try container.encode((self.experimentalBackground ? 1 : 0) as Int32, forKey: "experimentalBackground")
-        try container.encode((self.snow ? 1 : 0) as Int32, forKey: "snow")
+        try container.encode((self.rippleEffect ? 1 : 0) as Int32, forKey: "rippleEffect")
         try container.encode((self.inlineStickers ? 1 : 0) as Int32, forKey: "inlineStickers")
         try container.encode((self.localTranscription ? 1 : 0) as Int32, forKey: "localTranscription")
         try container.encode(self.enableReactionOverrides, forKey: "enableReactionOverrides")
+        try container.encode(self.browserExperiment, forKey: "browserExperiment")
         try container.encode(self.accountReactionEffectOverrides, forKey: "accountReactionEffectOverrides")
         try container.encode(self.accountStickerEffectOverrides, forKey: "accountStickerEffectOverrides")
+        try container.encode(self.disableQuickReaction, forKey: "disableQuickReaction")
+        try container.encode(self.disableLanguageRecognition, forKey: "disableLanguageRecognition")
+        try container.encode(self.disableImageContentAnalysis, forKey: "disableImageContentAnalysis")
+        try container.encode(self.disableBackgroundAnimation, forKey: "disableBackgroundAnimation")
+        try container.encode(self.logLanguageRecognition, forKey: "logLanguageRecognition")
+        try container.encode(self.storiesExperiment, forKey: "storiesExperiment")
+        try container.encode(self.storiesJpegExperiment, forKey: "storiesJpegExperiment")
+        try container.encode(self.crashOnMemoryPressure, forKey: "crashOnMemoryPressure")
+        try container.encode(self.dustEffect, forKey: "dustEffect")
+        try container.encode(self.disableCallV2, forKey: "disableCallV2")
+        try container.encode(self.experimentalCallMute, forKey: "experimentalCallMute")
+        try container.encode(self.allowWebViewInspection, forKey: "allowWebViewInspection")
+        try container.encode(self.disableReloginTokens, forKey: "disableReloginTokens")
+        try container.encode(self.liveStreamV2, forKey: "liveStreamV2")
+        try container.encode(self.dynamicStreaming, forKey: "dynamicStreaming")
+        try container.encode(self.enableLocalTranslation, forKey: "enableLocalTranslation")
+        try container.encodeIfPresent(self.autoBenchmarkReflectors, forKey: "autoBenchmarkReflectors")
+        try container.encodeIfPresent(self.conferenceCalls, forKey: "conferenceCalls")
+        try container.encodeIfPresent(self.playerV2, forKey: "playerV2")
     }
 }
 
@@ -182,7 +289,7 @@ public func updateExperimentalUISettingsInteractively(accountManager: AccountMan
             } else {
                 currentSettings = .defaultSettings
             }
-            return PreferencesEntry(f(currentSettings))
+            return SharedPreferencesEntry(f(currentSettings))
         })
     }
 }

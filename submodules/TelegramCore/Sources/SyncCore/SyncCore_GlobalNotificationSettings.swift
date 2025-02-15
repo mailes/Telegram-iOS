@@ -4,15 +4,17 @@ public struct MessageNotificationSettings: Codable, Equatable {
     public var enabled: Bool
     public var displayPreviews: Bool
     public var sound: PeerMessageSound
+    public var storySettings: PeerStoryNotificationSettings
     
     public static var defaultSettings: MessageNotificationSettings {
-        return MessageNotificationSettings(enabled: true, displayPreviews: true, sound: defaultCloudPeerNotificationSound)
+        return MessageNotificationSettings(enabled: true, displayPreviews: true, sound: defaultCloudPeerNotificationSound, storySettings: PeerStoryNotificationSettings.default)
     }
     
-    public init(enabled: Bool, displayPreviews: Bool, sound: PeerMessageSound) {
+    public init(enabled: Bool, displayPreviews: Bool, sound: PeerMessageSound, storySettings: PeerStoryNotificationSettings) {
         self.enabled = enabled
         self.displayPreviews = displayPreviews
         self.sound = sound
+        self.storySettings = storySettings
     }
     
     public init(from decoder: Decoder) throws {
@@ -22,6 +24,8 @@ public struct MessageNotificationSettings: Codable, Equatable {
         self.displayPreviews = ((try? container.decode(Int32.self, forKey: "p")) ?? 0) != 0
 
         self.sound = try PeerMessageSound.decodeInline(container)
+        
+        self.storySettings = try container.decodeIfPresent(PeerStoryNotificationSettings.self, forKey: "stor") ?? PeerStoryNotificationSettings(mute: .unmuted, hideSender: .show, sound: defaultCloudPeerNotificationSound)
     }
     
     public func encode(to encoder: Encoder) throws {
@@ -30,6 +34,7 @@ public struct MessageNotificationSettings: Codable, Equatable {
         try container.encode((self.enabled ? 1 : 0) as Int32, forKey: "e")
         try container.encode((self.displayPreviews ? 1 : 0) as Int32, forKey: "p")
         try self.sound.encodeInline(&container)
+        try container.encode(self.storySettings, forKey: "stor")
     }
 }
 
@@ -37,16 +42,18 @@ public struct GlobalNotificationSettingsSet: Codable, Equatable {
     public var privateChats: MessageNotificationSettings
     public var groupChats: MessageNotificationSettings
     public var channels: MessageNotificationSettings
+    public var reactionSettings: PeerReactionNotificationSettings
     public var contactsJoined: Bool
     
     public static var defaultSettings: GlobalNotificationSettingsSet {
-        return GlobalNotificationSettingsSet(privateChats: MessageNotificationSettings.defaultSettings, groupChats: .defaultSettings, channels: .defaultSettings, contactsJoined: true)
+        return GlobalNotificationSettingsSet(privateChats: MessageNotificationSettings.defaultSettings, groupChats: .defaultSettings, channels: .defaultSettings, reactionSettings: .default, contactsJoined: true)
     }
     
-    public init(privateChats: MessageNotificationSettings, groupChats: MessageNotificationSettings, channels: MessageNotificationSettings, contactsJoined: Bool) {
+    public init(privateChats: MessageNotificationSettings, groupChats: MessageNotificationSettings, channels: MessageNotificationSettings, reactionSettings: PeerReactionNotificationSettings, contactsJoined: Bool) {
         self.privateChats = privateChats
         self.groupChats = groupChats
         self.channels = channels
+        self.reactionSettings = reactionSettings
         self.contactsJoined = contactsJoined
     }
     
@@ -56,6 +63,7 @@ public struct GlobalNotificationSettingsSet: Codable, Equatable {
         self.privateChats = try container.decode(MessageNotificationSettings.self, forKey: "p")
         self.groupChats = try container.decode(MessageNotificationSettings.self, forKey: "g")
         self.channels = try container.decode(MessageNotificationSettings.self, forKey: "c")
+        self.reactionSettings = try container.decodeIfPresent(PeerReactionNotificationSettings.self, forKey: "reactionSettings") ?? PeerReactionNotificationSettings.default
 
         self.contactsJoined = (try container.decode(Int32.self, forKey: "contactsJoined")) != 0
     }
@@ -66,6 +74,7 @@ public struct GlobalNotificationSettingsSet: Codable, Equatable {
         try container.encode(self.privateChats, forKey: "p")
         try container.encode(self.groupChats, forKey: "g")
         try container.encode(self.channels, forKey: "c")
+        try container.encode(self.reactionSettings, forKey: "reactionSettings")
         try container.encode((self.contactsJoined ? 1 : 0) as Int32, forKey: "contactsJoined")
     }
 }

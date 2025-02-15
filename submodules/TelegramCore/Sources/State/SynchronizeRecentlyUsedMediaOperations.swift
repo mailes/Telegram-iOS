@@ -15,15 +15,21 @@ func addSynchronizeRecentlyUsedMediaOperation(transaction: Transaction, category
     }
     let peerId = PeerId(0)
     
-    var topOperation: (SynchronizeRecentlyUsedMediaOperation, Int32)?
+    var removeOperations: [(SynchronizeRecentlyUsedMediaOperation, Int32)] = []
     transaction.operationLogEnumerateEntries(peerId: peerId, tag: tag, { entry in
         if let operation = entry.contents as? SynchronizeRecentlyUsedMediaOperation {
-            topOperation = (operation, entry.tagLocalIndex)
+            if case .sync = operation.content {
+                removeOperations.append((operation, entry.tagLocalIndex))
+                return true
+            } else {
+                return false
+            }
+        } else {
+            return false
         }
-        return false
     })
     
-    if let (topOperation, topLocalIndex) = topOperation, case .sync = topOperation.content {
+    for (_, topLocalIndex) in removeOperations {
         let _ = transaction.operationLogRemoveEntry(peerId: peerId, tag: tag, tagLocalIndex: topLocalIndex)
     }
     
@@ -37,6 +43,13 @@ func addRecentlyUsedSticker(transaction: Transaction, fileReference: FileMediaRe
             transaction.addOrMoveToFirstPositionOrderedItemListItem(collectionId: Namespaces.OrderedItemList.CloudRecentStickers, item: OrderedItemListEntry(id: RecentMediaItemId(fileReference.media.fileId).rawValue, contents: entry), removeTailIfCountExceeds: 20)
         }
         addSynchronizeRecentlyUsedMediaOperation(transaction: transaction, category: .stickers, operation: .add(id: resource.fileId, accessHash: resource.accessHash, fileReference: fileReference))
+    }
+}
+
+func _internal_removeRecentlyUsedSticker(transaction: Transaction, fileReference: FileMediaReference) {
+    if let resource = fileReference.media.resource as? CloudDocumentMediaResource {
+        transaction.removeOrderedItemListItem(collectionId: Namespaces.OrderedItemList.CloudRecentStickers, itemId: RecentMediaItemId(fileReference.media.fileId).rawValue)
+        addSynchronizeRecentlyUsedMediaOperation(transaction: transaction, category: .stickers, operation: .remove(id: resource.fileId, accessHash: resource.accessHash))
     }
 }
 

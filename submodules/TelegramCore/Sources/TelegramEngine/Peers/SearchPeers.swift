@@ -4,7 +4,6 @@ import SwiftSignalKit
 import TelegramApi
 import MtProtoKit
 
-
 public struct FoundPeer: Equatable {
     public let peer: Peer
     public let subscribers: Int32?
@@ -19,8 +18,15 @@ public struct FoundPeer: Equatable {
     }
 }
 
-func _internal_searchPeers(account: Account, query: String) -> Signal<([FoundPeer], [FoundPeer]), NoError> {
-    let searchResult = account.network.request(Api.functions.contacts.search(q: query, limit: 20), automaticFloodWait: false)
+public enum TelegramSearchPeersScope {
+    case everywhere
+    case channels
+    case groups
+    case privateChats
+}
+
+public func _internal_searchPeers(accountPeerId: PeerId, postbox: Postbox, network: Network, query: String, scope: TelegramSearchPeersScope) -> Signal<([FoundPeer], [FoundPeer]), NoError> {
+    let searchResult = network.request(Api.functions.contacts.search(q: query, limit: 20), automaticFloodWait: false)
     |> map(Optional.init)
     |> `catch` { _ in
         return Signal<Api.contacts.Found?, NoError>.single(nil)
@@ -30,53 +36,107 @@ func _internal_searchPeers(account: Account, query: String) -> Signal<([FoundPee
         if let result = result {
             switch result {
             case let .found(myResults, results, chats, users):
-                return account.postbox.transaction { transaction -> ([FoundPeer], [FoundPeer]) in
-                    var peers: [PeerId: Peer] = [:]
+                return postbox.transaction { transaction -> ([FoundPeer], [FoundPeer]) in
                     var subscribers: [PeerId: Int32] = [:]
-                    for user in users {
-                        if let user = TelegramUser.merge(transaction.getPeer(user.peerId) as? TelegramUser, rhs: user) {
-                            peers[user.id] = user
-                        }
-                    }
+                    
+                    let parsedPeers = AccumulatedPeers(transaction: transaction, chats: chats, users: users)
                     
                     for chat in chats {
                         if let groupOrChannel = parseTelegramGroupOrChannel(chat: chat) {
-                            peers[groupOrChannel.id] = groupOrChannel
                             switch chat {
-                                /*feed*/
-                                case let .channel(_, _, _, _, _, _, _, _, _, _, _, _, participantsCount, _):
-                                    if let participantsCount = participantsCount {
-                                        subscribers[groupOrChannel.id] = participantsCount
-                                    }
-                                default:
-                                    break
+                            case let .channel(_, _, _, _, _, _, _, _, _, _, _, _, participantsCount, _, _, _, _, _, _, _, _):
+                                if let participantsCount = participantsCount {
+                                    subscribers[groupOrChannel.id] = participantsCount
+                                }
+                            default:
+                                break
                             }
                         }
                     }
-                    
-                    updatePeers(transaction: transaction, peers: Array(peers.values), update: { _, updated in
-                        return updated
-                    })
+                                        
+                    updatePeers(transaction: transaction, accountPeerId: accountPeerId, peers: parsedPeers)
                     
                     var renderedMyPeers: [FoundPeer] = []
                     for result in myResults {
                         let peerId: PeerId = result.peerId
-                        if let peer = peers[peerId] {
+                        if let peer = parsedPeers.get(peerId) {
                             if let group = peer as? TelegramGroup, group.migrationReference != nil {
                                 continue
                             }
-                            renderedMyPeers.append(FoundPeer(peer: peer, subscribers: subscribers[peerId]))
+                            if let user = peer as? TelegramUser {
+                                renderedMyPeers.append(FoundPeer(peer: peer, subscribers: user.subscriberCount))
+                            } else {
+                                renderedMyPeers.append(FoundPeer(peer: peer, subscribers: subscribers[peerId]))
+                            }
                         }
                     }
                     
                     var renderedPeers: [FoundPeer] = []
                     for result in results {
                         let peerId: PeerId = result.peerId
-                        if let peer = peers[peerId] {
+                        if let peer = parsedPeers.get(peerId) {
                             if let group = peer as? TelegramGroup, group.migrationReference != nil {
                                 continue
                             }
-                            renderedPeers.append(FoundPeer(peer: peer, subscribers: subscribers[peerId]))
+                            if let user = peer as? TelegramUser {
+                                renderedPeers.append(FoundPeer(peer: peer, subscribers: user.subscriberCount))
+                            } else {
+                                renderedPeers.append(FoundPeer(peer: peer, subscribers: subscribers[peerId]))
+                            }
+                        }
+                    }
+                    
+                    switch scope {
+                    case .everywhere:
+                        break
+                    case .channels:
+                        renderedMyPeers = renderedMyPeers.filter { item in
+                            if let channel = item.peer as? TelegramChannel, case .broadcast = channel.info {
+                                return true
+                            } else {
+                                return false
+                            }
+                        }
+                        renderedPeers = renderedPeers.filter { item in
+                            if let channel = item.peer as? TelegramChannel, case .broadcast = channel.info {
+                                return true
+                            } else {
+                                return false
+                            }
+                        }
+                    case .groups:
+                        renderedMyPeers = renderedMyPeers.filter { item in
+                            if let channel = item.peer as? TelegramChannel, case .group = channel.info {
+                                return true
+                            } else if item.peer is TelegramGroup {
+                                return true
+                            } else {
+                                return false
+                            }
+                        }
+                        renderedPeers = renderedPeers.filter { item in
+                            if let channel = item.peer as? TelegramChannel, case .group = channel.info {
+                                return true
+                            } else if item.peer is TelegramGroup {
+                                return true
+                            } else {
+                                return false
+                            }
+                        }
+                    case .privateChats:
+                        renderedMyPeers = renderedMyPeers.filter { item in
+                            if item.peer is TelegramUser {
+                                return true
+                            } else {
+                                return false
+                            }
+                        }
+                        renderedPeers = renderedPeers.filter { item in
+                            if item.peer is TelegramUser {
+                                return true
+                            } else {
+                                return false
+                            }
                         }
                     }
                     
@@ -91,3 +151,8 @@ func _internal_searchPeers(account: Account, query: String) -> Signal<([FoundPee
     return processedSearchResult
 }
 
+func _internal_searchLocalSavedMessagesPeers(account: Account, query: String, indexNameMapping: [EnginePeer.Id: [PeerIndexNameRepresentation]]) -> Signal<[EnginePeer], NoError> {
+    return account.postbox.transaction { transaction -> [EnginePeer] in
+        return transaction.searchSubPeers(peerId: account.peerId, query: query, indexNameMapping: indexNameMapping).map(EnginePeer.init)
+    }
+}

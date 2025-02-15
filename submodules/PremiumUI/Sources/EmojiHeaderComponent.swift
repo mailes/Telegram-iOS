@@ -3,7 +3,6 @@ import UIKit
 import Display
 import ComponentFlow
 import SwiftSignalKit
-import SceneKit
 import GZip
 import AppBundle
 import LegacyComponents
@@ -13,8 +12,6 @@ import TelegramCore
 import AnimationCache
 import MultiAnimationRenderer
 import EmojiStatusComponent
-
-private let sceneVersion: Int = 3
 
 class EmojiHeaderComponent: Component {
     let context: AccountContext
@@ -50,7 +47,7 @@ class EmojiHeaderComponent: Component {
         return lhs.placeholderColor == rhs.placeholderColor && lhs.accentColor == rhs.accentColor && lhs.fileId == rhs.fileId && lhs.isVisible == rhs.isVisible && lhs.hasIdleAnimations == rhs.hasIdleAnimations
     }
     
-    final class View: UIView, SCNSceneRendererDelegate, ComponentTaggedView {
+    final class View: UIView, ComponentTaggedView {
         final class Tag {
         }
         
@@ -110,7 +107,12 @@ class EmojiHeaderComponent: Component {
             }
                         
             self.statusView.isHidden = false
-            containerView = containerView.subviews[1].subviews[1]
+            if containerView.subviews.count > 1 && containerView.subviews[1].subviews.count > 1 {
+                let candidateView = containerView.subviews[1].subviews[1]
+                if !(candidateView is UIVisualEffectView) {
+                    containerView = candidateView
+                }
+            }
             
             let initialPosition = self.statusView.center
             let targetPosition = self.statusView.superview!.convert(self.statusView.center, to: containerView)
@@ -137,7 +139,7 @@ class EmojiHeaderComponent: Component {
             self.containerView = nil
         }
         
-        func update(component: EmojiHeaderComponent, availableSize: CGSize, transition: Transition) -> CGSize {
+        func update(component: EmojiHeaderComponent, availableSize: CGSize, transition: ComponentTransition) -> CGSize {
             self.hasIdleAnimations = component.hasIdleAnimations
             
             let size = self.statusView.update(
@@ -169,7 +171,7 @@ class EmojiHeaderComponent: Component {
         return View(frame: CGRect())
     }
     
-    func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: Transition) -> CGSize {
+    func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: ComponentTransition) -> CGSize {
         return view.update(component: self, availableSize: availableSize, transition: transition)
     }
 }

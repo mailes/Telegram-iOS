@@ -15,6 +15,16 @@ var testSpringFreeResistance: CGFloat = 0.676197171211243
 var testSpringResistanceScrollingLimits: (CGFloat, CGFloat) = (0.1, 1.0)
 var testSpringScrollingResistance: CGFloat = 0.6721
 
+public struct ListViewItemAnimationOptions {
+    public let short: Bool
+    public let invertOffsetDirection: Bool
+    
+    public init(short: Bool = false, invertOffsetDirection: Bool = false) {
+        self.short = short
+        self.invertOffsetDirection = invertOffsetDirection
+    }
+}
+
 struct ListViewItemSpring {
     let stiffness: CGFloat
     let damping: CGFloat
@@ -52,17 +62,19 @@ public enum ListViewItemNodeVisibility: Equatable {
     case visible(CGFloat, CGRect)
 }
 
-public struct ListViewItemLayoutParams {
+public struct ListViewItemLayoutParams: Equatable {
     public let width: CGFloat
     public let leftInset: CGFloat
     public let rightInset: CGFloat
     public let availableHeight: CGFloat
+    public let isStandalone: Bool
     
-    public init(width: CGFloat, leftInset: CGFloat, rightInset: CGFloat, availableHeight: CGFloat) {
+    public init(width: CGFloat, leftInset: CGFloat, rightInset: CGFloat, availableHeight: CGFloat, isStandalone: Bool = false) {
         self.width = width
         self.leftInset = leftInset
         self.rightInset = rightInset
         self.availableHeight = availableHeight
+        self.isStandalone = isStandalone
     }
 }
 
@@ -88,7 +100,7 @@ open class ListViewItemNode: ASDisplayNode, AccessibilityFocusableNode {
     }
 
     let rotated: Bool
-    final var index: Int?
+    public internal(set) final var index: Int?
     
     public var isHighlightedInOverlay: Bool = false
     
@@ -145,6 +157,10 @@ open class ListViewItemNode: ASDisplayNode, AccessibilityFocusableNode {
     open var visibility: ListViewItemNodeVisibility = .none
     
     open var canBeSelected: Bool {
+        return true
+    }
+    
+    open func visibleForSelection(at point: CGPoint) -> Bool {
         return true
     }
     
@@ -233,7 +249,7 @@ open class ListViewItemNode: ASDisplayNode, AccessibilityFocusableNode {
         self.isLayerBacked = layerBacked
     }
     
-    var apparentHeight: CGFloat = 0.0
+    open var apparentHeight: CGFloat = 0.0
     public private(set) var apparentHeightTransition: (CGFloat, CGFloat)?
     private var _bounds: CGRect = CGRect()
     private var _position: CGPoint = CGPoint()
@@ -571,7 +587,7 @@ open class ListViewItemNode: ASDisplayNode, AccessibilityFocusableNode {
         self.setAnimationForKey("transitionOffset", animation: animation)
     }
     
-    open func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
+    open func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
     }
     
     open func animateAdded(_ currentTimestamp: Double, duration: Double) {

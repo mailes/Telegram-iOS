@@ -116,6 +116,9 @@ static bool notyfyingShiftState = false;
 @implementation UIScrollView (FrameRateRangeOverride)
 
 - (void)fixScrollDisplayLink {
+    if (@available(iOS 16.0, *)) {
+        return;
+    }
     static NSString *scrollHeartbeatKey = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
@@ -158,6 +161,18 @@ static bool notyfyingShiftState = false;
 
 @end
 
+@interface UIFocusSystem (Telegram)
+
+@end
+
+@implementation UIFocusSystem (Telegram)
+
+- (void)_65087dc8_updateFocusIfNeeded {
+    //TODO:Re-enable
+}
+
+@end
+
 @implementation UIViewController (Navigation)
 
 + (void)load
@@ -176,9 +191,12 @@ static bool notyfyingShiftState = false;
         
         [RuntimeUtils swizzleInstanceMethodOfClass:[UIWindow class] currentSelector:@selector(initWithFrame:) newSelector:@selector(_65087dc8_initWithFrame:)];
         
-        if (@available(iOS 15.0, *)) {
+        if (@available(iOS 16.0, *)) {
+        } else if (@available(iOS 15.0, *)) {
             [RuntimeUtils swizzleInstanceMethodOfClass:[CADisplayLink class] currentSelector:@selector(setPreferredFrameRateRange:) newSelector:@selector(_65087dc8_setPreferredFrameRateRange:)];
         }
+        
+        [RuntimeUtils swizzleInstanceMethodOfClass:[UIFocusSystem class] currentSelector:@selector(updateFocusIfNeeded) newSelector:@selector(_65087dc8_updateFocusIfNeeded)];
     });
 }
 
@@ -479,3 +497,7 @@ void applyKeyboardAutocorrection(UITextView * _Nonnull textView) {
 }
 
 @end
+
+void snapshotViewByDrawingInContext(UIView * _Nonnull view) {
+    [view drawViewHierarchyInRect:view.bounds afterScreenUpdates:false];
+}

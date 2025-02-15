@@ -64,6 +64,18 @@ public final class GroupCallPanelData {
         self.activeSpeakers = activeSpeakers
         self.groupCall = groupCall
     }
+    
+    public func withInfo(_ info: GroupCallInfo) -> GroupCallPanelData {
+        return GroupCallPanelData(
+            peerId: self.peerId,
+            isChannel: self.isChannel,
+            info: info,
+            topParticipants: self.topParticipants,
+            participantCount: self.participantCount,
+            activeSpeakers: self.activeSpeakers,
+            groupCall: self.groupCall
+        )
+    }
 }
 
 private final class FakeAudioLevelGenerator {
@@ -101,6 +113,7 @@ public final class GroupCallNavigationAccessoryPanel: ASDisplayNode {
     private var dateTimeFormat: PresentationDateTimeFormat
     
     private let tapAction: () -> Void
+    private let notifyScheduledTapAction: () -> Void
     
     private let contentNode: ASDisplayNode
     
@@ -109,6 +122,9 @@ public final class GroupCallNavigationAccessoryPanel: ASDisplayNode {
     private let joinButton: HighlightableButtonNode
     private let joinButtonTitleNode: ImmediateTextNode
     private let joinButtonBackgroundNode: ASImageNode
+    
+    private var previewImageNode: ASImageNode?
+    private var previewImage: UIImage?
     
     private var audioLevelView: VoiceBlobView?
     
@@ -139,21 +155,23 @@ public final class GroupCallNavigationAccessoryPanel: ASDisplayNode {
     private let membersDisposable = MetaDisposable()
     private let isMutedDisposable = MetaDisposable()
     private let audioLevelDisposable = MetaDisposable()
+    private var imageDisposable: Disposable?
     
     private var callState: PresentationGroupCallState?
     
     private let hapticFeedback = HapticFeedback()
     
     private var currentData: GroupCallPanelData?
-    private var validLayout: (CGSize, CGFloat, CGFloat)?
+    private var validLayout: (CGSize, CGFloat, CGFloat, Bool)?
     
-    public init(context: AccountContext, presentationData: PresentationData, tapAction: @escaping () -> Void) {
+    public init(context: AccountContext, presentationData: PresentationData, tapAction: @escaping () -> Void, notifyScheduledTapAction: @escaping () -> Void) {
         self.context = context
         self.theme = presentationData.theme
         self.strings = presentationData.strings
         self.dateTimeFormat = presentationData.dateTimeFormat
         
         self.tapAction = tapAction
+        self.notifyScheduledTapAction = notifyScheduledTapAction
         
         self.contentNode = ASDisplayNode()
         
@@ -184,6 +202,8 @@ public final class GroupCallNavigationAccessoryPanel: ASDisplayNode {
         self.separatorNode.isLayerBacked = true
         
         super.init()
+        
+        self.clipsToBounds = true
 
         self.addSubnode(self.contentNode)
 
@@ -216,7 +236,7 @@ public final class GroupCallNavigationAccessoryPanel: ASDisplayNode {
         self.joinButton.addSubnode(self.joinButtonBackgroundNode)
         self.joinButton.addSubnode(self.joinButtonTitleNode)
         self.contentNode.addSubnode(self.joinButton)
-        self.joinButton.addTarget(self, action: #selector(self.tapped), forControlEvents: [.touchUpInside])
+        self.joinButton.addTarget(self, action: #selector(self.joinTapped), forControlEvents: [.touchUpInside])
         
         self.micButton.addSubnode(self.micButtonBackgroundNode)
         self.micButton.addSubnode(self.micButtonForegroundNode)
@@ -233,6 +253,8 @@ public final class GroupCallNavigationAccessoryPanel: ASDisplayNode {
         self.isMutedDisposable.dispose()
         self.audioLevelGeneratorTimer?.invalidate()
         self.updateTimer?.invalidate()
+        self.imageDisposable?.dispose()
+        self.audioLevelDisposable.dispose()
     }
     
     public override func didLoad() {
@@ -245,6 +267,14 @@ public final class GroupCallNavigationAccessoryPanel: ASDisplayNode {
     
     @objc private func tapped() {
         self.tapAction()
+    }
+    
+    @objc private func joinTapped() {
+        if let info = self.currentData?.info, let _ = info.scheduleTimestamp, !info.subscribedToScheduled {
+            self.notifyScheduledTapAction()
+        } else {
+            self.tapAction()
+        }
     }
     
     @objc private func micTapped() {
@@ -296,8 +326,8 @@ public final class GroupCallNavigationAccessoryPanel: ASDisplayNode {
         
         self.updateJoinButton()
         
-        if let (size, leftInset, rightInset) = self.validLayout {
-            self.updateLayout(size: size, leftInset: leftInset, rightInset: rightInset, transition: .immediate)
+        if let (size, leftInset, rightInset, isHidden) = self.validLayout {
+            self.updateLayout(size: size, leftInset: leftInset, rightInset: rightInset, isHidden: isHidden, transition: .immediate)
         }
     }
     
@@ -366,6 +396,11 @@ public final class GroupCallNavigationAccessoryPanel: ASDisplayNode {
                 self.avatarsContent = self.avatarsContext.update(peers: [], animated: false)
             } else {
                 self.avatarsContent = self.avatarsContext.update(peers: data.topParticipants.map { EnginePeer($0.peer) }, animated: false)
+                
+                if let imageDisposable = self.imageDisposable {
+                    self.imageDisposable = nil
+                    imageDisposable.dispose()
+                }
             }
             
             self.textNode.attributedText = NSAttributedString(string: membersText, font: Font.regular(13.0), textColor: self.theme.chat.inputPanel.secondaryTextColor)
@@ -398,8 +433,8 @@ public final class GroupCallNavigationAccessoryPanel: ASDisplayNode {
                         strongSelf.avatarsContent = strongSelf.avatarsContext.update(peers: summaryState.topParticipants.map { EnginePeer($0.peer) }, animated: false)
                     }
                     
-                    if let (size, leftInset, rightInset) = strongSelf.validLayout {
-                        strongSelf.updateLayout(size: size, leftInset: leftInset, rightInset: rightInset, transition: .immediate)
+                    if let (size, leftInset, rightInset, isHidden) = strongSelf.validLayout {
+                        strongSelf.updateLayout(size: size, leftInset: leftInset, rightInset: rightInset, isHidden: isHidden, transition: .immediate)
                     }
                 }))
                 
@@ -416,8 +451,8 @@ public final class GroupCallNavigationAccessoryPanel: ASDisplayNode {
                     
                     strongSelf.callState = callState
                     
-                    if let (size, leftInset, rightInset) = strongSelf.validLayout {
-                        strongSelf.updateLayout(size: size, leftInset: leftInset, rightInset: rightInset, transition: transition)
+                    if let (size, leftInset, rightInset, isHidden) = strongSelf.validLayout {
+                        strongSelf.updateLayout(size: size, leftInset: leftInset, rightInset: rightInset, isHidden: isHidden, transition: transition)
                     }
                 }))
                 
@@ -427,7 +462,7 @@ public final class GroupCallNavigationAccessoryPanel: ASDisplayNode {
                         return
                     }
                     
-                    if strongSelf.audioLevelView == nil {
+                    if strongSelf.audioLevelView == nil, strongSelf.context.sharedContext.energyUsageSettings.fullTranslucency {
                         let blobFrame = CGRect(origin: CGPoint(), size: CGSize(width: 36.0, height: 36.0)).insetBy(dx: -12.0, dy: -12.0)
                         
                         let audioLevelView = VoiceBlobView(
@@ -484,8 +519,69 @@ public final class GroupCallNavigationAccessoryPanel: ASDisplayNode {
             updateAudioLevels = true
         }
         
-        if let (size, leftInset, rightInset) = self.validLayout {
-            self.updateLayout(size: size, leftInset: leftInset, rightInset: rightInset, transition: .animated(duration: 0.2, curve: .easeInOut))
+        #if DEBUG
+        if data.info.isStream {
+            if self.imageDisposable == nil {
+                let engine = self.context.engine
+                let info = data.info
+                self.imageDisposable = (engine.calls.getAudioBroadcastDataSource(callId: info.id, accessHash: info.accessHash)
+                |> mapToSignal { source -> Signal<Data?, NoError> in
+                    guard let source else {
+                        return .single(nil)
+                    }
+                    
+                    let time = engine.calls.requestStreamState(dataSource: source, callId: info.id, accessHash: info.accessHash)
+                    |> map { state -> Int64? in
+                        guard let state else {
+                            return nil
+                        }
+                        return state.channels.first?.latestTimestamp
+                    }
+                    
+                    return time
+                    |> mapToSignal { latestTimestamp -> Signal<Data?, NoError> in
+                        guard let latestTimestamp else {
+                            return .single(nil)
+                        }
+                        
+                        let durationMilliseconds: Int64 = 32000
+                        let bufferOffset: Int64 = 1 * durationMilliseconds
+                        let timestampId = (latestTimestamp / durationMilliseconds) * durationMilliseconds - bufferOffset
+                        
+                        return engine.calls.getVideoBroadcastPart(dataSource: source, callId: info.id, accessHash: info.accessHash, timestampIdMilliseconds: timestampId, durationMilliseconds: durationMilliseconds, channelId: 2, quality: 0)
+                        |> mapToSignal { result -> Signal<Data?, NoError> in
+                            switch result.status {
+                            case let .data(data):
+                                return .single(data)
+                            case .notReady, .resyncNeeded, .rejoinNeeded:
+                                return .single(nil)
+                            }
+                        }
+                    }
+                }
+                |> deliverOnMainQueue).start(next: { [weak self] data in
+                    guard let self, let data else {
+                        return
+                    }
+                    
+                    var image: UIImage?
+                    for i in 0 ..< 100 {
+                        image = UIImage(data: data.subdata(in: i ..< data.count))
+                        if image != nil {
+                            break
+                        }
+                    }
+                    self.previewImage = image
+                    if let (size, leftInset, rightInset, isHidden) = self.validLayout {
+                        self.updateLayout(size: size, leftInset: leftInset, rightInset: rightInset, isHidden: isHidden, transition: .animated(duration: 0.2, curve: .easeInOut))
+                    }
+                })
+            }
+        }
+        #endif
+        
+        if let (size, leftInset, rightInset, isHidden) = self.validLayout {
+            self.updateLayout(size: size, leftInset: leftInset, rightInset: rightInset, isHidden: isHidden, transition: .animated(duration: 0.2, curve: .easeInOut))
         }
         
         if updateAudioLevels {
@@ -526,14 +622,15 @@ public final class GroupCallNavigationAccessoryPanel: ASDisplayNode {
         self.avatarsNode.updateAudioLevels(color: self.theme.chat.inputPanel.actionControlFillColor, backgroundColor: self.theme.chat.inputPanel.actionControlFillColor, levels: levels)
     }
     
-    public func updateLayout(size: CGSize, leftInset: CGFloat, rightInset: CGFloat, transition: ContainedViewLayoutTransition) {
-        self.validLayout = (size, leftInset, rightInset)
+    public func updateLayout(size: CGSize, leftInset: CGFloat, rightInset: CGFloat, isHidden: Bool, transition: ContainedViewLayoutTransition) {
+        self.validLayout = (size, leftInset, rightInset, isHidden)
         
         let staticTransition: ContainedViewLayoutTransition = .immediate
         
         let panelHeight = size.height
         
-        transition.updateFrame(node: self.contentNode, frame: CGRect(origin: CGPoint(), size: size))
+        transition.updateFrame(node: self.contentNode, frame: CGRect(origin: CGPoint(x: 0.0, y: isHidden ? -size.height : 0.0), size: size))
+        transition.updateAlpha(node: self.contentNode, alpha: isHidden ? 0.0 : 1.0)
         
         self.tapButton.frame = CGRect(origin: CGPoint(), size: CGSize(width: size.width - 7.0 - 36.0 - 7.0, height: panelHeight))
         
@@ -547,14 +644,18 @@ public final class GroupCallNavigationAccessoryPanel: ASDisplayNode {
         var isChannel = false
         if let currentData = self.currentData {
             if currentData.isChannel || currentData.info.isStream {
-                title = self.strings.VoiceChatChannel_Title
+                if let titleValue = currentData.info.title, !titleValue.isEmpty {
+                    title = titleValue
+                } else {
+                    title = self.strings.VoiceChatChannel_Title
+                }
                 isChannel = true
             }
         }
         var text = self.currentText
         var isScheduled = false
         var isLate = false
-        if let scheduleTime = self.currentData?.info.scheduleTimestamp {
+        if let info = self.currentData?.info, let scheduleTime = info.scheduleTimestamp {
             isScheduled = true
             if let voiceChatTitle = self.currentData?.info.title {
                 title = voiceChatTitle
@@ -564,21 +665,25 @@ public final class GroupCallNavigationAccessoryPanel: ASDisplayNode {
                 text = humanReadableStringForTimestamp(strings: self.strings, dateTimeFormat: self.dateTimeFormat, timestamp: scheduleTime, alwaysShowTime: true, format: HumanReadableStringFormat(dateFormatString: { self.strings.Conversation_ScheduledVoiceChatStartsOnShort($0) }, tomorrowFormatString: { self.strings.Conversation_ScheduledVoiceChatStartsTomorrowShort($0) }, todayFormatString: { self.strings.Conversation_ScheduledVoiceChatStartsTodayShort($0) })).string
             }
             
-            let currentTime = Int32(CFAbsoluteTimeGetCurrent() + kCFAbsoluteTimeIntervalSince1970)
-            let elapsedTime = scheduleTime - currentTime
-            if elapsedTime >= 86400 {
-                joinText = scheduledTimeIntervalString(strings: strings, value: elapsedTime)
-            } else if elapsedTime < 0 {
-                joinText = "-\(textForTimeout(value: abs(elapsedTime)))"
-                isLate = true
+            if info.subscribedToScheduled {
+                let currentTime = Int32(CFAbsoluteTimeGetCurrent() + kCFAbsoluteTimeIntervalSince1970)
+                let elapsedTime = scheduleTime - currentTime
+                if elapsedTime >= 86400 {
+                    joinText = scheduledTimeIntervalString(strings: strings, value: elapsedTime).uppercased()
+                } else if elapsedTime < 0 {
+                    joinText = "-\(textForTimeout(value: abs(elapsedTime)))".uppercased()
+                    isLate = true
+                } else {
+                    joinText = textForTimeout(value: elapsedTime).uppercased()
+                }
             } else {
-                joinText = textForTimeout(value: elapsedTime)
+                joinText = strings.Chat_TitleVideochatPanel_NotifyScheduledButton
             }
             
             if self.updateTimer == nil {
                 let timer = SwiftSignalKit.Timer(timeout: 0.5, repeat: true, completion: { [weak self] in
-                    if let strongSelf = self, let (size, leftInset, rightInset) = strongSelf.validLayout {
-                        strongSelf.updateLayout(size: size, leftInset: leftInset, rightInset: rightInset, transition: .immediate)
+                    if let strongSelf = self, let (size, leftInset, rightInset, isHidden) = strongSelf.validLayout {
+                        strongSelf.updateLayout(size: size, leftInset: leftInset, rightInset: rightInset, isHidden: isHidden, transition: .immediate)
                     }
                 }, queue: Queue.mainQueue())
                 self.updateTimer = timer
@@ -600,7 +705,7 @@ public final class GroupCallNavigationAccessoryPanel: ASDisplayNode {
             self.updateJoinButton()
         }
         
-        self.joinButtonTitleNode.attributedText = NSAttributedString(string: joinText.uppercased(), font: Font.with(size: 15.0, design: .round, weight: .semibold, traits: [.monospacedNumbers]), textColor: isScheduled ? .white : self.theme.chat.inputPanel.actionControlForegroundColor)
+        self.joinButtonTitleNode.attributedText = NSAttributedString(string: joinText, font: Font.with(size: 15.0, design: .round, weight: .semibold, traits: [.monospacedNumbers]), textColor: isScheduled ? .white : self.theme.chat.inputPanel.actionControlForegroundColor)
         
         let joinButtonTitleSize = self.joinButtonTitleNode.updateLayout(CGSize(width: 150.0, height: .greatestFiniteMagnitude))
         let joinButtonSize = CGSize(width: joinButtonTitleSize.width + 20.0, height: 28.0)
@@ -608,6 +713,26 @@ public final class GroupCallNavigationAccessoryPanel: ASDisplayNode {
         staticTransition.updateFrame(node: self.joinButton, frame: joinButtonFrame)
         staticTransition.updateFrame(node: self.joinButtonBackgroundNode, frame: CGRect(origin: CGPoint(), size: joinButtonFrame.size))
         staticTransition.updateFrame(node: self.joinButtonTitleNode, frame: CGRect(origin: CGPoint(x: floorToScreenPixels((joinButtonFrame.width - joinButtonTitleSize.width) / 2.0), y: floorToScreenPixels((joinButtonFrame.height - joinButtonTitleSize.height) / 2.0)), size: joinButtonTitleSize))
+        
+        if let previewImage = self.previewImage {
+            let previewImageNode: ASImageNode
+            if let current = self.previewImageNode {
+                previewImageNode = current
+            } else {
+                previewImageNode = ASImageNode()
+                previewImageNode.clipsToBounds = true
+                previewImageNode.cornerRadius = 8.0
+                previewImageNode.contentMode = .scaleAspectFill
+                self.previewImageNode = previewImageNode
+                self.contentNode.addSubnode(previewImageNode)
+            }
+            previewImageNode.image = previewImage
+            let previewSize = CGSize(width: 40.0, height: 40.0)
+            previewImageNode.frame = CGRect(origin: CGPoint(x: joinButtonFrame.minX - previewSize.width - 8.0, y: joinButtonFrame.minY + floor((joinButtonFrame.height - previewSize.height) / 2.0)), size: previewSize)
+        } else if let previewImageNode = self.previewImageNode {
+            self.previewImageNode = nil
+            previewImageNode.removeFromSupernode()
+        }
         
         let micButtonSize = CGSize(width: 36.0, height: 36.0)
         let micButtonFrame = CGRect(origin: CGPoint(x: size.width - rightInset - 7.0 - micButtonSize.width, y: floor((panelHeight - micButtonSize.height) / 2.0)), size: micButtonSize)
@@ -641,7 +766,7 @@ public final class GroupCallNavigationAccessoryPanel: ASDisplayNode {
         
         self.textNode.attributedText = NSAttributedString(string: text, font: Font.regular(13.0), textColor: self.theme.chat.inputPanel.secondaryTextColor)
         
-        var constrainedWidth = size.width / 2.0 - 56.0
+        var constrainedWidth = size.width - leftInset - rightInset - 32.0 - joinButtonSize.width - 60.0
         if isScheduled {
             constrainedWidth = size.width - 100.0
         }
@@ -665,13 +790,10 @@ public final class GroupCallNavigationAccessoryPanel: ASDisplayNode {
     }
     
     public func animateIn(_ transition: ContainedViewLayoutTransition) {
-        self.clipsToBounds = true
         let contentPosition = self.contentNode.layer.position
-        transition.animatePosition(node: self.contentNode, from: CGPoint(x: contentPosition.x, y: contentPosition.y - 50.0), completion: { [weak self] _ in
-            self?.clipsToBounds = false
-        })
+        transition.animatePosition(node: self.contentNode, from: CGPoint(x: contentPosition.x, y: contentPosition.y - 50.0))
 
-        guard let (size, _, _) = self.validLayout else {
+        guard let (size, _, _, _) = self.validLayout else {
             return
         }
 
@@ -679,14 +801,12 @@ public final class GroupCallNavigationAccessoryPanel: ASDisplayNode {
     }
     
     public func animateOut(_ transition: ContainedViewLayoutTransition, completion: @escaping () -> Void) {
-        self.clipsToBounds = true
         let contentPosition = self.contentNode.layer.position
-        transition.animatePosition(node: self.contentNode, to: CGPoint(x: contentPosition.x, y: contentPosition.y - 50.0), removeOnCompletion: false, completion: { [weak self] _ in
-            self?.clipsToBounds = false
+        transition.animatePosition(node: self.contentNode, to: CGPoint(x: contentPosition.x, y: contentPosition.y - 50.0), removeOnCompletion: false, completion: { _ in
             completion()
         })
 
-        guard let (size, _, _) = self.validLayout else {
+        guard let (size, _, _, _) = self.validLayout else {
             return
         }
 

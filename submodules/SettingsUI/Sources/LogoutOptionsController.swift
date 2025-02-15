@@ -2,7 +2,6 @@ import Foundation
 import UIKit
 import Display
 import SwiftSignalKit
-import Postbox
 import TelegramCore
 import LegacyComponents
 import TelegramPresentationData
@@ -15,6 +14,7 @@ import PresentationDataUtils
 import UrlHandling
 import AccountUtils
 import PremiumUI
+import StorageUsageScreen
 
 private struct LogoutOptionsItemArguments {
     let addAccount: () -> Void
@@ -109,7 +109,7 @@ private enum LogoutOptionsEntry: ItemListNodeEntry, Equatable {
     }
 }
 
-private func logoutOptionsEntries(presentationData: PresentationData, canAddAccounts: Bool, hasPasscode: Bool, hasWallets: Bool) -> [LogoutOptionsEntry] {
+private func logoutOptionsEntries(presentationData: PresentationData, canAddAccounts: Bool, hasPasscode: Bool) -> [LogoutOptionsEntry] {
     var entries: [LogoutOptionsEntry] = []
     entries.append(.alternativeHeader(presentationData.theme, presentationData.strings.LogoutOptions_AlternativeOptionsSection))
     if canAddAccounts {
@@ -158,6 +158,7 @@ public func logoutOptionsController(context: AccountContext, navigationControlle
                 let controller = PremiumLimitScreen(context: context, subject: .accounts, count: Int32(count), action: {
                     let controller = PremiumIntroScreen(context: context, source: .accounts)
                     replaceImpl?(controller)
+                    return true
                 })
                 replaceImpl = { [weak controller] c in
                     controller?.replace(with: c)
@@ -181,7 +182,9 @@ public func logoutOptionsController(context: AccountContext, navigationControlle
         })
         dismissImpl?()
     }, clearCache: {
-        pushControllerImpl?(storageUsageController(context: context))
+        pushControllerImpl?(StorageUsageScreen(context: context, makeStorageUsageExceptionsScreen: { category in
+            return storageUsageExceptionsScreen(context: context, category: category)
+        }))
         dismissImpl?()
     }, changePhoneNumber: {
         let introController = PrivacyIntroController(context: context, mode: .changePhoneNumber(phoneNumber), proceedAction: {
@@ -190,7 +193,7 @@ public func logoutOptionsController(context: AccountContext, navigationControlle
         pushControllerImpl?(introController)
         dismissImpl?()
     }, contactSupport: { [weak navigationController] in
-        let supportPeer = Promise<PeerId?>()
+        let supportPeer = Promise<EnginePeer.Id?>()
         supportPeer.set(context.engine.peers.supportPeerId())
         let presentationData = context.sharedContext.currentPresentationData.with { $0 }
         
@@ -199,6 +202,12 @@ public func logoutOptionsController(context: AccountContext, navigationControlle
             faqUrl = "https://telegram.org/faq#general"
         }
         let resolvedUrl = resolveInstantViewUrl(account: context.account, url: faqUrl)
+        |> mapToSignal { result -> Signal<ResolvedUrl, NoError> in
+            guard case let .result(result) = result else {
+                return .complete()
+            }
+            return .single(result)
+        }
         
         let resolvedUrlPromise = Promise<ResolvedUrl>()
         resolvedUrlPromise.set(resolvedUrl)
@@ -213,10 +222,10 @@ public func logoutOptionsController(context: AccountContext, navigationControlle
                 controller?.dismiss()
                 dismissImpl?()
                 
-                context.sharedContext.openResolvedUrl(resolvedUrl, context: context, urlContext: .generic, navigationController: navigationController, forceExternal: false, openPeer: { peer, navigation in
-                }, sendFile: nil, sendSticker: nil, requestMessageActionUrlAuth: nil, joinVoiceChat: nil, present: { controller, arguments in
+                context.sharedContext.openResolvedUrl(resolvedUrl, context: context, urlContext: .generic, navigationController: navigationController, forceExternal: false, forceUpdate: false, openPeer: { peer, navigation in
+                }, sendFile: nil, sendSticker: nil, sendEmoji: nil, requestMessageActionUrlAuth: nil, joinVoiceChat: nil, present: { controller, arguments in
                     pushControllerImpl?(controller)
-                }, dismissInput: {}, contentContext: nil)
+                }, dismissInput: {}, contentContext: nil, progress: nil, completion: nil)
             })
         }
         
@@ -257,19 +266,12 @@ public func logoutOptionsController(context: AccountContext, navigationControlle
         ])
         presentControllerImpl?(alertController, nil)
     })
-    
-    #if ENABLE_WALLET
-    let hasWallets = context.hasWallets
-    #else
-    let hasWallets: Signal<Bool, NoError> = .single(false)
-    #endif
-    
+        
     let signal = combineLatest(queue: .mainQueue(),
         context.sharedContext.presentationData,
-        context.sharedContext.accountManager.accessChallengeData(),
-        hasWallets
+        context.sharedContext.accountManager.accessChallengeData()
     )
-    |> map { presentationData, accessChallengeData, hasWallets -> (ItemListControllerState, (ItemListNodeState, Any)) in
+    |> map { presentationData, accessChallengeData -> (ItemListControllerState, (ItemListNodeState, Any)) in
         let leftNavigationButton = ItemListNavigationButton(content: .text(presentationData.strings.Common_Cancel), style: .regular, enabled: true, action: {
             dismissImpl?()
         })
@@ -283,7 +285,7 @@ public func logoutOptionsController(context: AccountContext, navigationControlle
         }
         
         let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(presentationData.strings.LogoutOptions_Title), leftNavigationButton: leftNavigationButton, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
-        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: logoutOptionsEntries(presentationData: presentationData, canAddAccounts: canAddAccounts, hasPasscode: hasPasscode, hasWallets: hasWallets), style: .blocks)
+        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: logoutOptionsEntries(presentationData: presentationData, canAddAccounts: canAddAccounts, hasPasscode: hasPasscode), style: .blocks)
         
         return (controllerState, (listState, arguments))
     }

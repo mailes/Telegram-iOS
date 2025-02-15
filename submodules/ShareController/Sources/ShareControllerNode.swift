@@ -9,11 +9,16 @@ import TelegramPresentationData
 import AccountContext
 import TelegramIntents
 import ContextUI
+import ComponentFlow
+import MultilineTextComponent
+import TelegramStringFormatting
+import BundleIconComponent
+import LottieComponent
 
 enum ShareState {
     case preparing(Bool)
     case progress(Float)
-    case done
+    case done([Int64])
 }
 
 enum ShareExternalState {
@@ -21,9 +26,280 @@ enum ShareExternalState {
     case done
 }
 
-final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate {
-    private let sharedContext: SharedAccountContext
-    private var context: AccountContext?
+private final class ShareContentInfoView: UIView {
+    private struct Params: Equatable {
+        var environment: ShareControllerEnvironment
+        var theme: PresentationTheme
+        var strings: PresentationStrings
+        var collectibleItemInfo: TelegramCollectibleItemInfo
+        var availableSize: CGSize
+        
+        init(environment: ShareControllerEnvironment, theme: PresentationTheme, strings: PresentationStrings, collectibleItemInfo: TelegramCollectibleItemInfo, availableSize: CGSize) {
+            self.environment = environment
+            self.theme = theme
+            self.strings = strings
+            self.collectibleItemInfo = collectibleItemInfo
+            self.availableSize = availableSize
+        }
+        
+        static func ==(lhs: Params, rhs: Params) -> Bool {
+            if lhs.environment !== rhs.environment {
+                return false
+            }
+            if lhs.theme !== rhs.theme {
+                return false
+            }
+            if lhs.strings !== rhs.strings {
+                return false
+            }
+            if lhs.collectibleItemInfo != rhs.collectibleItemInfo {
+                return false
+            }
+            if lhs.availableSize != rhs.availableSize {
+                return false
+            }
+            return true
+        }
+    }
+    
+    private struct Layout {
+        var params: Params
+        var size: CGSize
+        
+        init(params: Params, size: CGSize) {
+            self.params = params
+            self.size = size
+        }
+    }
+    
+    private let icon = ComponentView<Empty>()
+    private let text = ComponentView<Empty>()
+    private var currencySymbolIcon: UIImage?
+    private var arrowIcon: UIImage?
+    private let backgroundView: BlurredBackgroundView
+    
+    private var currentLayout: Layout?
+    
+    override init(frame: CGRect) {
+        self.backgroundView = BlurredBackgroundView(color: nil, enableBlur: true)
+        
+        super.init(frame: frame)
+        
+        self.addSubview(self.backgroundView)
+    }
+    
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+    
+    func update(environment: ShareControllerEnvironment, presentationData: PresentationData, collectibleItemInfo: TelegramCollectibleItemInfo, availableSize: CGSize) -> CGSize {
+        let params = Params(
+            environment: environment,
+            theme: presentationData.theme,
+            strings: presentationData.strings,
+            collectibleItemInfo: collectibleItemInfo,
+            availableSize: availableSize
+        )
+        if let currentLayout = self.currentLayout, currentLayout.params == params {
+            return currentLayout.size
+        }
+        let size = self.updateInternal(params: params)
+        self.currentLayout = Layout(params: params, size: size)
+        return size
+    }
+    
+    private func updateInternal(params: Params) -> CGSize {
+        var username: String = ""
+        if case let .username(value) = params.collectibleItemInfo.subject {
+            username = value
+        }
+        
+        let textText = NSMutableAttributedString()
+        
+        let dateText = stringForDate(timestamp: params.collectibleItemInfo.purchaseDate, strings: params.strings)
+        
+        let (rawCryptoCurrencyText, cryptoCurrencySign, _) = formatCurrencyAmountCustom(params.collectibleItemInfo.cryptoCurrencyAmount, currency: params.collectibleItemInfo.cryptoCurrency, customFormat: CurrencyFormatterEntry(
+            symbol: "~",
+            thousandsSeparator: ",",
+            decimalSeparator: ".",
+            symbolOnLeft: true,
+            spaceBetweenAmountAndSymbol: false,
+            decimalDigits: 9
+        ))
+        var cryptoCurrencyText = rawCryptoCurrencyText
+        while cryptoCurrencyText.hasSuffix("0") {
+            cryptoCurrencyText = String(cryptoCurrencyText[cryptoCurrencyText.startIndex ..< cryptoCurrencyText.index(before: cryptoCurrencyText.endIndex)])
+        }
+        if cryptoCurrencyText.hasSuffix(".") {
+            cryptoCurrencyText = String(cryptoCurrencyText[cryptoCurrencyText.startIndex ..< cryptoCurrencyText.index(before: cryptoCurrencyText.endIndex)])
+        }
+        
+        let (currencyText, currencySign, _) = formatCurrencyAmountCustom(params.collectibleItemInfo.currencyAmount, currency: params.collectibleItemInfo.currency)
+        
+        let rawTextString = params.strings.CollectibleItemInfo_UsernameText("@\(username)", params.strings.CollectibleItemInfo_StoreName, dateText, "\(cryptoCurrencySign)\(cryptoCurrencyText)", "\(currencySign)\(currencyText)")
+        textText.append(NSAttributedString(string: rawTextString.string, font: Font.regular(14.0), textColor: .white))
+        for range in rawTextString.ranges {
+            switch range.index {
+            case 0:
+                textText.addAttribute(.font, value: Font.semibold(14.0), range: range.range)
+            case 1:
+                textText.addAttribute(.font, value: Font.semibold(14.0), range: range.range)
+            case 3:
+                textText.addAttribute(.font, value: Font.semibold(14.0), range: range.range)
+            default:
+                break
+            }
+        }
+        
+        let currencySymbolRange = (textText.string as NSString).range(of: "~")
+        
+        if self.currencySymbolIcon == nil {
+            if let templateImage = UIImage(bundleImageName: "Peer Info/CollectibleTonSymbolInline") {
+                self.currencySymbolIcon = generateImage(CGSize(width: templateImage.size.width, height: templateImage.size.height + 2.0), contextGenerator: { size, context in
+                    context.clear(CGRect(origin: CGPoint(), size: size))
+                    if let cgImage = templateImage.cgImage {
+                        context.draw(cgImage, in: CGRect(origin: CGPoint(x: 0.0, y: 4.0), size: CGSize(width: templateImage.size.width - 2.0, height: templateImage.size.height - 2.0)))
+                    }
+                })?.withRenderingMode(.alwaysTemplate)
+            }
+        }
+        
+        if currencySymbolRange.location != NSNotFound, let currencySymbolIcon = self.currencySymbolIcon {
+            textText.replaceCharacters(in: currencySymbolRange, with: "$")
+            textText.addAttribute(.attachment, value: currencySymbolIcon, range: currencySymbolRange)
+            
+            final class RunDelegateData {
+                let ascent: CGFloat
+                let descent: CGFloat
+                let width: CGFloat
+                
+                init(ascent: CGFloat, descent: CGFloat, width: CGFloat) {
+                    self.ascent = ascent
+                    self.descent = descent
+                    self.width = width
+                }
+            }
+            let font = Font.semibold(14.0)
+            let runDelegateData = RunDelegateData(
+                ascent: font.ascender,
+                descent: font.descender,
+                width: currencySymbolIcon.size.width + 4.0
+            )
+            var callbacks = CTRunDelegateCallbacks(
+                version: kCTRunDelegateCurrentVersion,
+                dealloc: { dataRef in
+                    Unmanaged<RunDelegateData>.fromOpaque(dataRef).release()
+                },
+                getAscent: { dataRef in
+                    let data = Unmanaged<RunDelegateData>.fromOpaque(dataRef)
+                    return data.takeUnretainedValue().ascent
+                },
+                getDescent: { dataRef in
+                    let data = Unmanaged<RunDelegateData>.fromOpaque(dataRef)
+                    return data.takeUnretainedValue().descent
+                },
+                getWidth: { dataRef in
+                    let data = Unmanaged<RunDelegateData>.fromOpaque(dataRef)
+                    return data.takeUnretainedValue().width
+                }
+            )
+            
+            if let runDelegate = CTRunDelegateCreate(&callbacks, Unmanaged.passRetained(runDelegateData).toOpaque()) {
+                textText.addAttribute(NSAttributedString.Key(rawValue: kCTRunDelegateAttributeName as String), value: runDelegate, range: currencySymbolRange)
+            }
+        }
+        
+        let accentColor = params.theme.list.itemAccentColor.withMultiplied(hue: 0.933, saturation: 0.61, brightness: 1.0)
+        if self.arrowIcon == nil {
+            if let templateImage = UIImage(bundleImageName: "Settings/TextArrowRight") {
+                let scaleFactor: CGFloat = 0.8
+                let imageSize = CGSize(width: floor(templateImage.size.width * scaleFactor), height: floor(templateImage.size.height * scaleFactor))
+                self.arrowIcon = generateImage(imageSize, contextGenerator: { size, context in
+                    context.clear(CGRect(origin: CGPoint(), size: size))
+                    if let cgImage = templateImage.cgImage {
+                        context.draw(cgImage, in: CGRect(origin: CGPoint(), size: size))
+                    }
+                })?.withRenderingMode(.alwaysTemplate)
+            }
+        }
+        
+        textText.append(NSAttributedString(string: " \(params.strings.CollectibleItemInfo_ShareInlineText_LearnMore)", attributes: [
+            .font: Font.medium(14.0),
+            .foregroundColor: accentColor,
+            NSAttributedString.Key(rawValue: "URL"): ""
+        ]))
+        if let range = textText.string.range(of: ">"), let arrowIcon = self.arrowIcon {
+            textText.addAttribute(.attachment, value: arrowIcon, range: NSRange(range, in: textText.string))
+        }
+        
+        let textInsets = UIEdgeInsets(top: 8.0, left: 50.0, bottom: 8.0, right: 10.0)
+        
+        let textSize = self.text.update(
+            transition: .immediate,
+            component: AnyComponent(MultilineTextComponent(
+                text: .plain(textText),
+                maximumNumberOfLines: 0,
+                lineSpacing: 0.185,
+                highlightColor: accentColor.withMultipliedAlpha(0.1),
+                highlightAction: { attributes in
+                    if let _ = attributes[NSAttributedString.Key(rawValue: "URL")] {
+                        return NSAttributedString.Key(rawValue: "URL")
+                    } else {
+                        return nil
+                    }
+                },
+                tapAction: { [weak self] _, _ in
+                    guard let self, let params = self.currentLayout?.params else {
+                        return
+                    }
+                    if let environment = params.environment as? ShareControllerAppEnvironment {
+                        environment.sharedContext.applicationBindings.openUrl(params.collectibleItemInfo.url)
+                    }
+                }
+            )),
+            environment: {},
+            containerSize: CGSize(width: params.availableSize.width - textInsets.left - textInsets.right, height: 1000.0)
+        )
+        let textFrame = CGRect(origin: CGPoint(x: textInsets.left, y: textInsets.top), size: textSize)
+        if let textView = self.text.view {
+            if textView.superview == nil {
+                self.addSubview(textView)
+            }
+            textView.frame = textFrame
+        }
+        
+        let size = CGSize(width: params.availableSize.width, height: textInsets.top + textSize.height + textInsets.bottom)
+        
+        let iconSize = self.icon.update(
+            transition: .immediate,
+            component: AnyComponent(LottieComponent(
+                content: LottieComponent.AppBundleContent(name: "ToastCollectibleUsernameEmoji"),
+                loop: false
+            )),
+            environment: {},
+            containerSize: CGSize(width: 30.0, height: 30.0)
+        )
+        let iconFrame = CGRect(origin: CGPoint(x: floor((textInsets.left - iconSize.width) * 0.5), y: floor((size.height - iconSize.height) * 0.5)), size: iconSize)
+        if let iconView = self.icon.view as? LottieComponent.View {
+            if iconView.superview == nil {
+                self.addSubview(iconView)
+                iconView.playOnce(delay: 0.1)
+            }
+            iconView.frame = iconFrame
+        }
+        
+        self.backgroundView.updateColor(color: UIColor(rgb: 0x1C2023), transition: .immediate)
+        self.backgroundView.update(size: size, cornerRadius: 16.0, transition: .immediate)
+        self.backgroundView.frame = CGRect(origin: CGPoint(), size: size)
+        
+        return size
+    }
+}
+
+final class ShareControllerNode: ViewControllerTracingNode, ASScrollViewDelegate {
+    private weak var controller: ShareController?
+    private let environment: ShareControllerEnvironment
+    private var context: ShareControllerAccountContext?
     private var presentationData: PresentationData
     private let forceTheme: PresentationTheme?
     private let externalShare: Bool
@@ -32,6 +308,7 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
     private let fromForeignApp: Bool
     private let fromPublicChannel: Bool
     private let segmentedValues: [ShareControllerSegmentedValue]?
+    private let collectibleItemInfo: TelegramCollectibleItemInfo?
     var selectedSegmentedIndex: Int = 0
     
     private let defaultAction: ShareControllerAction?
@@ -47,6 +324,7 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
     
     private let contentContainerNode: ASDisplayNode
     private let contentBackgroundNode: ASImageNode
+    private var contentInfoView: ShareContentInfoView?
     
     private var contentNode: (ASDisplayNode & ShareContentContainerNode)?
     private var previousContentNode: (ASDisplayNode & ShareContentContainerNode)?
@@ -59,16 +337,18 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
     
     var dismiss: ((Bool) -> Void)?
     var cancel: (() -> Void)?
+    var tryShare: ((String, [EnginePeer]) -> Bool)?
     var share: ((String, [PeerId], [PeerId: Int64], Bool, Bool) -> Signal<ShareState, ShareControllerError>)?
     var shareExternal: ((Bool) -> Signal<ShareExternalState, NoError>)?
     var switchToAnotherAccount: (() -> Void)?
     var debugAction: (() -> Void)?
     var openStats: (() -> Void)?
     var completed: (([PeerId]) -> Void)?
+    var enqueued: (([PeerId], [Int64]) -> Void)?
     var present: ((ViewController) -> Void)?
+    var disabledPeerSelected: ((EnginePeer) -> Void)?
     
     let ready = Promise<Bool>()
-    private var didSetReady = false
     
     private var controllerInteraction: ShareControllerInteraction?
     
@@ -86,8 +366,9 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
     
     private let showNames = ValuePromise<Bool>(true)
     
-    init(sharedContext: SharedAccountContext, presentationData: PresentationData, presetText: String?, defaultAction: ShareControllerAction?, requestLayout: @escaping (ContainedViewLayoutTransition) -> Void, presentError: @escaping (String?, String) -> Void, externalShare: Bool, immediateExternalShare: Bool, immediatePeerId: PeerId?, fromForeignApp: Bool, forceTheme: PresentationTheme?, fromPublicChannel: Bool, segmentedValues: [ShareControllerSegmentedValue]?) {
-        self.sharedContext = sharedContext
+    init(controller: ShareController, environment: ShareControllerEnvironment, presentationData: PresentationData, presetText: String?, defaultAction: ShareControllerAction?, requestLayout: @escaping (ContainedViewLayoutTransition) -> Void, presentError: @escaping (String?, String) -> Void, externalShare: Bool, immediateExternalShare: Bool, immediatePeerId: PeerId?, fromForeignApp: Bool, forceTheme: PresentationTheme?, fromPublicChannel: Bool, segmentedValues: [ShareControllerSegmentedValue]?, shareStory: (() -> Void)?, collectibleItemInfo: TelegramCollectibleItemInfo?) {
+        self.controller = controller
+        self.environment = environment
         self.presentationData = presentationData
         self.forceTheme = forceTheme
         self.externalShare = externalShare
@@ -97,6 +378,7 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
         self.presentError = presentError
         self.fromPublicChannel = fromPublicChannel
         self.segmentedValues = segmentedValues
+        self.collectibleItemInfo = collectibleItemInfo
         
         self.presetText = presetText
         
@@ -151,6 +433,8 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
         self.contentBackgroundNode.displayWithoutProcessing = true
         self.contentBackgroundNode.image = roundedBackground
         
+        self.contentInfoView = ShareContentInfoView(frame: CGRect())
+        
         self.actionsBackgroundNode = ASImageNode()
         self.actionsBackgroundNode.isLayerBacked = true
         self.actionsBackgroundNode.displayWithoutProcessing = true
@@ -190,7 +474,7 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
             }
         }
         self.actionButtonNode.contextAction = { [weak self] node, gesture in
-            if let strongSelf = self, let context = strongSelf.context, let node = node as? ContextReferenceContentNode {
+            if let strongSelf = self, let node = node as? ContextReferenceContentNode {
                 let presentationData = strongSelf.presentationData
                 let fromForeignApp = strongSelf.fromForeignApp
                 let items: Signal<ContextController.Items, NoError> =
@@ -236,7 +520,7 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
                     ])
                     return ContextController.Items(content: .list(items), animationCache: nil)
                 }
-                let contextController = ContextController(account: context.account, presentationData: presentationData, source: .reference(ShareContextReferenceContentSource(sourceNode: node, customPosition: CGPoint(x: 0.0, y: -116.0))), items: items, gesture: gesture)
+                let contextController = ContextController(presentationData: presentationData, source: .reference(ShareContextReferenceContentSource(sourceNode: node, customPosition: CGPoint(x: 0.0, y: fromForeignApp ? -116.0 : 0.0))), items: items, gesture: gesture)
                 contextController.immediateItemsTransitionAnimation = true
                 strongSelf.present?(contextController)
             }
@@ -266,14 +550,20 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
                         added = true
                     }
                     
-                    strongSelf.contentNode?.setEnsurePeerVisibleOnLayout(peer.peerId)
+                    if openedTopicList {
+                        Queue.mainQueue().after(0.4) {
+                            strongSelf.contentNode?.setEnsurePeerVisibleOnLayout(peer.peerId)
+                        }
+                    } else {
+                        strongSelf.contentNode?.setEnsurePeerVisibleOnLayout(peer.peerId)
+                    }
                 }
                 
                 if search && added {
                     strongSelf.controllerInteraction!.foundPeers = strongSelf.controllerInteraction!.foundPeers.filter { otherPeer in
-                        return peer.peerId != otherPeer.peerId
+                        return peer.peerId != otherPeer.peer.peerId
                     }
-                    strongSelf.controllerInteraction!.foundPeers.append(peer)
+                    strongSelf.controllerInteraction!.foundPeers.append((peer, false))
                     strongSelf.peersContentNode?.updateFoundPeers()
                 }
                 
@@ -317,6 +607,20 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
                     strongSelf.closePeerTopics(peer.peerId, selected: true)
                 })
             }
+        }, shareStory: shareStory.flatMap { shareStory in
+            return { [weak self] in
+                self?.animateOut(shared: false, completion: { [weak self] in
+                    self?.dismiss?(false)
+                })
+                shareStory()
+            }
+        }, disabledPeerSelected: { [weak self] peer in
+            guard let self else {
+                return
+            }
+            if let peer = peer.peer {
+                self.disabledPeerSelected?(peer)
+            }
         })
         
         self.backgroundColor = nil
@@ -325,7 +629,7 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
         self.dimNode.view.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(self.dimTapGesture(_:))))
         self.addSubnode(self.dimNode)
         
-        self.wrappingScrollNode.view.delegate = self
+        self.wrappingScrollNode.view.delegate = self.wrappedScrollViewDelegate
         self.addSubnode(self.wrappingScrollNode)
         
         self.cancelButtonNode.setTitle(self.presentationData.strings.Common_Cancel, with: Font.medium(20.0), with: self.presentationData.theme.actionSheet.standardActionTextColor, for: .normal)
@@ -336,6 +640,10 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
         self.actionButtonNode.addTarget(self, action: #selector(self.actionButtonPressed), forControlEvents: .touchUpInside)
         
         self.wrappingScrollNode.addSubnode(self.contentBackgroundNode)
+        
+        if let contentInfoView = self.contentInfoView {
+            self.wrappingScrollNode.view.addSubview(contentInfoView)
+        }
         
         self.wrappingScrollNode.addSubnode(self.contentContainerNode)
         self.contentContainerNode.addSubnode(self.actionSeparatorNode)
@@ -377,7 +685,7 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
         
         var didPresent = false
         var presentImpl: (() -> Void)?
-        let threads = threadList(context: context, peerId: mainPeer.id)
+        let threads = threadList(accountPeerId: context.accountPeerId, postbox: context.stateManager.postbox, peerId: mainPeer.id)
         |> deliverOnMainQueue
         |> beforeNext { _ in
             if !didPresent {
@@ -387,7 +695,7 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
         }
         
         let topicsContentNode = ShareTopicsContainerNode(
-            sharedContext: self.sharedContext,
+            environment: self.environment,
             context: context,
             theme: self.presentationData.theme,
             strings: self.presentationData.strings,
@@ -414,12 +722,14 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
             }
             
             if let searchContentNode = strongSelf.contentNode as? ShareSearchContainerNode {
+                searchContentNode.setDidBeginDragging(nil)
                 searchContentNode.setContentOffsetUpdated(nil)
-                let scrollDelta = topicsContentNode.contentGridNode.scrollView.contentOffset.y - searchContentNode.contentGridNode.scrollView.contentOffset.y
+                let scrollDelta = topicsContentNode.contentGridNode.scrollView.contentOffset.y - searchContentNode.effectiveGridNode.scrollView.contentOffset.y
                 if let sourceFrame = searchContentNode.animateOut(peerId: peer.peerId, scrollDelta: scrollDelta) {
                     topicsContentNode.animateIn(sourceFrame: sourceFrame, scrollDelta: scrollDelta)
                 }
             } else if let peersContentNode = strongSelf.peersContentNode {
+                peersContentNode.setDidBeginDragging(nil)
                 peersContentNode.setContentOffsetUpdated(nil)
                 let scrollDelta = topicsContentNode.contentGridNode.scrollView.contentOffset.y - peersContentNode.contentGridNode.scrollView.contentOffset.y
                 if let sourceFrame = peersContentNode.animateOut(peerId: peer.peerId, scrollDelta: scrollDelta) {
@@ -427,6 +737,9 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
                 }
             }
             
+            topicsContentNode.setDidBeginDragging({ [weak self] in
+                self?.contentNodeDidBeginDragging()
+            })
             topicsContentNode.setContentOffsetUpdated({ [weak self] contentOffset, transition in
                 self?.contentNodeOffsetUpdated(contentOffset, transition: transition)
             })
@@ -440,6 +753,7 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
         guard let topicsContentNode = self.topicsContentNode else {
             return
         }
+        topicsContentNode.setDidBeginDragging(nil)
         topicsContentNode.setContentOffsetUpdated(nil)
                 
         if let searchContentNode = self.contentNode as? ShareSearchContainerNode {
@@ -453,12 +767,15 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
         }
 
         if let searchContentNode = self.contentNode as? ShareSearchContainerNode {
+            searchContentNode.setDidBeginDragging({ [weak self] in
+                self?.contentNodeDidBeginDragging()
+            })
             searchContentNode.setContentOffsetUpdated({ [weak self] contentOffset, transition in
                 self?.contentNodeOffsetUpdated(contentOffset, transition: transition)
             })
-            self.contentNodeOffsetUpdated(searchContentNode.contentGridNode.scrollView.contentOffset.y, transition: .animated(duration: 0.4, curve: .spring))
+            self.contentNodeOffsetUpdated(searchContentNode.effectiveGridNode.scrollView.contentOffset.y, transition: .animated(duration: 0.4, curve: .spring))
             
-            let scrollDelta = topicsContentNode.contentGridNode.scrollView.contentOffset.y - searchContentNode.contentGridNode.scrollView.contentOffset.y
+            let scrollDelta = topicsContentNode.contentGridNode.scrollView.contentOffset.y - searchContentNode.effectiveGridNode.scrollView.contentOffset.y
             if let targetFrame = searchContentNode.animateIn(peerId: peerId, scrollDelta: scrollDelta) {
                 topicsContentNode.animateOut(targetFrame: targetFrame, scrollDelta: scrollDelta, completion: { [weak self] in
                     if let topicsContentNode = self?.topicsContentNode {
@@ -468,6 +785,9 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
                 })
             }
         } else if let peersContentNode = self.peersContentNode {
+            peersContentNode.setDidBeginDragging({ [weak self] in
+                self?.contentNodeDidBeginDragging()
+            })
             peersContentNode.setContentOffsetUpdated({ [weak self] contentOffset, transition in
                 self?.contentNodeOffsetUpdated(contentOffset, transition: transition)
             })
@@ -523,6 +843,8 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
         
         self.actionButtonNode.badgeBackgroundColor = presentationData.theme.actionSheet.controlAccentColor
         self.actionButtonNode.badgeTextColor = presentationData.theme.actionSheet.opaqueItemBackgroundColor
+        
+        self.contentNode?.updateTheme(presentationData.theme)
     }
     
     func setActionNodesHidden(_ hidden: Bool, inputField: Bool = false, actions: Bool = false, animated: Bool = true) {
@@ -558,6 +880,7 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
             
             let previous = self.contentNode
             if let previous = previous {
+                previous.setDidBeginDragging(nil)
                 previous.setContentOffsetUpdated(nil)
                 if animated {
                     transition = .animated(duration: 0.4, curve: .spring)
@@ -576,6 +899,8 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
                     previous.removeFromSupernode()
                     self.previousContentNode = nil
                 }
+                
+                self.contentNodeDidBeginDragging()
             } else {
                 transition = .immediate
             }
@@ -586,6 +911,9 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
                     contentNode.frame = previous.frame
                     contentNode.updateLayout(size: previous.bounds.size, isLandscape: layout.size.width > layout.size.height, bottomInset: bottomGridInset, transition: .immediate)
                     
+                    contentNode.setDidBeginDragging({ [weak self] in
+                        self?.contentNodeDidBeginDragging()
+                    })
                     contentNode.setContentOffsetUpdated({ [weak self] contentOffset, transition in
                         self?.contentNodeOffsetUpdated(contentOffset, transition: transition)
                     })
@@ -614,6 +942,9 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
                     }
                 } else {
                     if let contentNode = self.contentNode {
+                        contentNode.setDidBeginDragging({ [weak self] in
+                            self?.contentNodeDidBeginDragging()
+                        })
                         contentNode.setContentOffsetUpdated({ [weak self] contentOffset, transition in
                             self?.contentNodeOffsetUpdated(contentOffset, transition: transition)
                         })
@@ -698,6 +1029,29 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
             
             topicsContentNode.updateLayout(size: gridSize, isLandscape: layout.size.width > layout.size.height, bottomInset: self.contentNode === self.peersContentNode ? bottomGridInset : 0.0, transition: transition)
         }
+        
+        if let controller = self.controller {
+            let subLayout = ContainerViewLayout(
+                size: layout.size,
+                metrics: layout.metrics,
+                deviceMetrics: layout.deviceMetrics,
+                intrinsicInsets: UIEdgeInsets(top: 0.0, left: 4.0, bottom: layout.size.height - contentFrame.maxY - 6.0, right: 4.0),
+                safeInsets: layout.safeInsets,
+                additionalInsets: UIEdgeInsets(),
+                statusBarHeight: nil,
+                inputHeight: nil,
+                inputHeightIsInteractivellyChanging: false,
+                inVoiceOver: false
+            )
+            controller.presentationContext.containerLayoutUpdated(subLayout, transition: transition)
+        }
+    }
+    
+    private func contentNodeDidBeginDragging() {
+        if let contentInfoView = self.contentInfoView, contentInfoView.alpha != 0.0 {
+            ComponentTransition.easeInOut(duration: 0.2).setAlpha(view: contentInfoView, alpha: 0.0)
+            ComponentTransition.easeInOut(duration: 0.2).setScale(view: contentInfoView, scale: 0.5)
+        }
     }
     
     private func contentNodeOffsetUpdated(_ contentOffset: CGFloat, transition: ContainedViewLayoutTransition) {
@@ -732,6 +1086,25 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
                 backgroundFrame.size.height = buttonHeight + 32.0
             }
             transition.updateFrame(node: self.contentBackgroundNode, frame: backgroundFrame)
+            
+            if let contentInfoView = self.contentInfoView, let collectibleItemInfo = self.collectibleItemInfo {
+                let contentInfoSize = contentInfoView.update(
+                    environment: self.environment,
+                    presentationData: self.presentationData,
+                    collectibleItemInfo: collectibleItemInfo,
+                    availableSize: CGSize(width: backgroundFrame.width, height: 1000.0)
+                )
+                let contentInfoFrame = CGRect(origin: CGPoint(x: backgroundFrame.minX, y: backgroundFrame.minY - 8.0 - contentInfoSize.height), size: contentInfoSize)
+                
+                if contentInfoView.bounds.isEmpty {
+                    if contentInfoFrame.minY < 0.0 {
+                        contentInfoView.alpha = 0.0
+                    }
+                }
+                
+                transition.updatePosition(layer: contentInfoView.layer, position: contentInfoFrame.center)
+                transition.updateBounds(layer: contentInfoView.layer, bounds: CGRect(origin: CGPoint(), size: contentInfoFrame.size))
+            }
             
             if let animateContentNodeOffsetFromBackgroundOffset = self.animateContentNodeOffsetFromBackgroundOffset {
                 self.animateContentNodeOffsetFromBackgroundOffset = nil
@@ -770,6 +1143,53 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
     }
     
     func send(peerId: PeerId? = nil, showNames: Bool = true, silently: Bool = false) {
+        let peerIds: [PeerId]
+        if let peerId = peerId {
+            peerIds = [peerId]
+        } else {
+            peerIds = self.controllerInteraction!.selectedPeers.map { $0.peerId }
+        }
+        
+        if let context = self.context, let tryShare = self.tryShare {
+            let _ = (context.stateManager.postbox.combinedView(
+                keys: peerIds.map { peerId in
+                    return PostboxViewKey.basicPeer(peerId)
+                }
+            )
+            |> take(1)
+            |> map { views -> [EnginePeer.Id: EnginePeer?] in
+                var result: [EnginePeer.Id: EnginePeer?] = [:]
+                for peerId in peerIds {
+                    if let view = views.views[PostboxViewKey.basicPeer(peerId)] as? BasicPeerView, let peer = view.peer {
+                        result[peerId] = EnginePeer(peer)
+                    }
+                }
+                return result
+            }
+            |> deliverOnMainQueue).start(next: { [weak self] peers in
+                guard let self else {
+                    return
+                }
+                
+                var mappedPeers: [EnginePeer] = []
+                for peerId in peerIds {
+                    if let maybePeer = peers[peerId], let peer = maybePeer {
+                        mappedPeers.append(peer)
+                    }
+                }
+                
+                if !tryShare(self.inputFieldNode.text, mappedPeers) {
+                    return
+                }
+                
+                self.commitSend(peerId: peerId, showNames: showNames, silently: silently)
+            })
+        } else {
+            self.commitSend(peerId: peerId, showNames: showNames, silently: silently)
+        }
+    }
+    
+    private func commitSend(peerId: PeerId?, showNames: Bool, silently: Bool) {
         if !self.inputFieldNode.text.isEmpty {
             for peer in self.controllerInteraction!.selectedPeers {
                 if case let .channel(channel) = peer.peer, channel.isRestrictedBySlowmode {
@@ -801,7 +1221,7 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
         }
         
         if let context = self.context {
-            donateSendMessageIntent(account: context.account, sharedContext: self.sharedContext, intentContext: .share, peerIds: peerIds)
+            self.environment.donateSendMessageIntent(account: context, peerIds: peerIds)
         }
         
         if let signal = self.share?(self.inputFieldNode.text, peerIds, topicIds, showNames, silently) {
@@ -840,7 +1260,14 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
                 })
                 self.completed?(peerIds)
                 
-                Queue.mainQueue().after(0.44) {
+                let delay: Double
+                if let peerId = peerIds.first, peerIds.count == 1 && peerId == self.context?.accountPeerId {
+                    delay = 0.88
+                } else {
+                    delay = 0.44
+                }
+                
+                Queue.mainQueue().after(delay) {
                     if self.hapticFeedback == nil {
                         self.hapticFeedback = HapticFeedback()
                     }
@@ -858,13 +1285,14 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
                 if fromForeignApp, case let .preparing(long) = status, !transitioned {
                     transitioned = true
                     if long {
-                        strongSelf.transitionToContentNode(ShareProlongedLoadingContainerNode(theme: strongSelf.presentationData.theme, strings: strongSelf.presentationData.strings, forceNativeAppearance: true, account: strongSelf.context?.account, sharedContext: strongSelf.sharedContext), fastOut: true)
+                        strongSelf.transitionToContentNode(ShareProlongedLoadingContainerNode(theme: strongSelf.presentationData.theme, strings: strongSelf.presentationData.strings, forceNativeAppearance: true, postbox: strongSelf.context?.stateManager.postbox, environment: strongSelf.environment), fastOut: true)
                     } else {
                         strongSelf.transitionToContentNode(ShareLoadingContainerNode(theme: strongSelf.presentationData.theme, forceNativeAppearance: true), fastOut: true)
                     }
                 }
                 
-                if case .done = status, !fromForeignApp {
+                if case let .done(correlationIds) = status, !fromForeignApp {
+                    strongSelf.enqueued?(peerIds, correlationIds)
                     strongSelf.dismiss?(true)
                     return
                 }
@@ -889,6 +1317,8 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
                             strongSelf.dismiss?(true)
                         }
                 }
+            }, error: { _ in
+                
             }, completed: {
                 if !wasDone && fromForeignApp {
                     doneImpl(false)
@@ -924,6 +1354,11 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
             return
         }
         self.animatingOut = true
+        
+        if let contentInfoView = self.contentInfoView, contentInfoView.alpha != 0.0 {
+            ComponentTransition.easeInOut(duration: 0.2).setAlpha(view: contentInfoView, alpha: 0.0)
+            ComponentTransition.easeInOut(duration: 0.2).setScale(view: contentInfoView, scale: 0.5)
+        }
         
         if self.contentNode != nil {
             var dimCompleted = false
@@ -965,7 +1400,7 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
         }
     }
     
-    func updatePeers(context: AccountContext, switchableAccounts: [AccountWithInfo], peers: [(EngineRenderedPeer, EnginePeer.Presence?)], accountPeer: EnginePeer, defaultAction: ShareControllerAction?) {
+    func updatePeers(context: ShareControllerAccountContext, switchableAccounts: [ShareControllerSwitchableAccount], peers: [(peer: EngineRenderedPeer, presence: EnginePeer.Presence?, requiresPremiumForMessaging: Bool)], accountPeer: EnginePeer, defaultAction: ShareControllerAction?) {
         self.context = context
         
         if let peersContentNode = self.peersContentNode, peersContentNode.accountPeer.id == accountPeer.id {
@@ -975,27 +1410,74 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
         
         if let peerId = self.immediatePeerId {
             self.immediatePeerId = nil
-            let _ = (context.engine.data.get(TelegramEngine.EngineData.Item.Peer.RenderedPeer(id: peerId))
+            let _ = (context.stateManager.postbox.combinedView(keys: [PostboxViewKey.peer(peerId: peerId, components: [])])
+            |> take(1)
+            |> map { views -> EngineRenderedPeer? in
+                guard let view = views.views[PostboxViewKey.peer(peerId: peerId, components: [])] as? PeerView else {
+                    return nil
+                }
+                var peers: [EnginePeer.Id: EnginePeer] = [:]
+                guard let peer = view.peers[peerId] else {
+                    return nil
+                }
+                peers[peer.id] = EnginePeer(peer)
+
+                if let secretChat = peer as? TelegramSecretChat {
+                    guard let mainPeer = view.peers[secretChat.regularPeerId] else {
+                        return nil
+                    }
+                    peers[mainPeer.id] = EnginePeer(mainPeer)
+                }
+
+                return EngineRenderedPeer(peerId: peerId, peers: peers, associatedMedia: view.media)
+            }
             |> deliverOnMainQueue).start(next: { [weak self] peer in
                 if let strongSelf = self, let peer = peer {
-                    strongSelf.controllerInteraction?.togglePeer(peer, peer.peerId != context.account.peerId)
+                    strongSelf.controllerInteraction?.togglePeer(peer, peer.peerId != context.accountPeerId)
                 }
             })
         }
         
         let animated = self.peersContentNode == nil
-        let peersContentNode = SharePeersContainerNode(sharedContext: self.sharedContext, context: context, switchableAccounts: switchableAccounts, theme: self.presentationData.theme, strings: self.presentationData.strings, nameDisplayOrder: self.presentationData.nameDisplayOrder, peers: peers, accountPeer: accountPeer, controllerInteraction: self.controllerInteraction!, externalShare: self.externalShare, switchToAnotherAccount: { [weak self] in
+        let peersContentNode = SharePeersContainerNode(environment: self.environment, context: context, switchableAccounts: switchableAccounts, theme: self.presentationData.theme, strings: self.presentationData.strings, nameDisplayOrder: self.presentationData.nameDisplayOrder, peers: peers, accountPeer: accountPeer, controllerInteraction: self.controllerInteraction!, externalShare: self.externalShare, switchToAnotherAccount: { [weak self] in
             self?.switchToAnotherAccount?()
         }, debugAction: { [weak self] in
             self?.debugAction?()
-        }, extendedInitialReveal: self.presetText != nil, segmentedValues: self.segmentedValues)
+        }, extendedInitialReveal: self.presetText != nil, segmentedValues: self.segmentedValues, fromPublicChannel: self.fromPublicChannel)
         self.peersContentNode = peersContentNode
         peersContentNode.openSearch = { [weak self] in
-            let _ = (context.engine.peers.recentlySearchedPeers()
+            let signal: Signal<([RecentlySearchedPeer], [EnginePeer.Id: Bool]), NoError> = _internal_recentlySearchedPeers(postbox: context.stateManager.postbox)
             |> take(1)
-            |> deliverOnMainQueue).start(next: { peers in
+            |> mapToSignal { peers -> Signal<([RecentlySearchedPeer], [EnginePeer.Id: Bool]), NoError> in
+                var possiblePremiumRequiredPeers = Set<EnginePeer.Id>()
+                for peer in peers {
+                    if let user = peer.peer.peer as? TelegramUser, user.flags.contains(.requirePremium) {
+                        possiblePremiumRequiredPeers.insert(user.id)
+                    }
+                }
+                
+                if let context = context as? ShareControllerAppAccountContext {
+                    context.context.account.viewTracker.refreshCanSendMessagesForPeerIds(peerIds: Array(possiblePremiumRequiredPeers))
+                }
+                
+                return context.engineData.subscribe(
+                    EngineDataMap(
+                        possiblePremiumRequiredPeers.map(TelegramEngine.EngineData.Item.Peer.IsPremiumRequiredForMessaging.init(id:))
+                    )
+                )
+                |> map { peerRequiresPremiumForMessaging -> ([RecentlySearchedPeer], [EnginePeer.Id: Bool]) in
+                    return (peers, peerRequiresPremiumForMessaging)
+                }
+            }
+            |> take(1)
+            let _ = (signal
+            |> deliverOnMainQueue).startStandalone(next: { peers, peerRequiresPremiumForMessaging in
                 if let strongSelf = self {
-                    let searchContentNode = ShareSearchContainerNode(sharedContext: strongSelf.sharedContext, context: context, theme: strongSelf.presentationData.theme, strings: strongSelf.presentationData.strings, controllerInteraction: strongSelf.controllerInteraction!, recentPeers: peers.filter({ $0.peer.peerId.namespace != Namespaces.Peer.SecretChat }).map({ $0.peer }))
+                    let recentPeers: [(peer: EngineRenderedPeer, requiresPremiumForMessaging: Bool)] = peers.filter({ $0.peer.peerId.namespace != Namespaces.Peer.SecretChat }).map({
+                        (EngineRenderedPeer($0.peer), peerRequiresPremiumForMessaging[$0.peer.peerId] ?? false)
+                    })
+                    
+                    let searchContentNode = ShareSearchContainerNode(environment: strongSelf.environment, context: context, theme: strongSelf.presentationData.theme, strings: strongSelf.presentationData.strings, controllerInteraction: strongSelf.controllerInteraction!, recentPeers: recentPeers)
                     searchContentNode.cancel = {
                         if let strongSelf = self, let peersContentNode = strongSelf.peersContentNode {
                             strongSelf.transitionToContentNode(peersContentNode)
@@ -1082,6 +1564,12 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
             return result
         }
         if self.bounds.contains(point) {
+            if let contentInfoView = self.contentInfoView, contentInfoView.alpha != 0.0 {
+                if let result = contentInfoView.hitTest(self.view.convert(point, to: contentInfoView), with: event) {
+                    return result
+                }
+            }
+            
             if !self.contentBackgroundNode.bounds.contains(self.convert(point, to: self.contentBackgroundNode)) && !self.cancelButtonNode.bounds.contains(self.convert(point, to: self.cancelButtonNode)) {
                 return self.dimNode.view
             }
@@ -1169,7 +1657,7 @@ final class ShareControllerNode: ViewControllerTracingNode, UIScrollViewDelegate
         transition.updateAlpha(node: self.actionSeparatorNode, alpha: 0.0)
         transition.updateAlpha(node: self.actionsBackgroundNode, alpha: 0.0)
         
-        self.transitionToContentNode(ShareProlongedLoadingContainerNode(theme: self.presentationData.theme, strings: self.presentationData.strings, forceNativeAppearance: true, account: self.context?.account, sharedContext: self.sharedContext), fastOut: true)
+        self.transitionToContentNode(ShareProlongedLoadingContainerNode(theme: self.presentationData.theme, strings: self.presentationData.strings, forceNativeAppearance: true, postbox: self.context?.stateManager.postbox, environment: self.environment), fastOut: true)
         let timestamp = CACurrentMediaTime()
         self.shareDisposable.set(signal.start(completed: { [weak self] in
             let minDelay = 0.6
@@ -1260,7 +1748,7 @@ private final class ShareContextReferenceContentSource: ContextReferenceContentS
     }
 }
 
-private func threadList(context: AccountContext, peerId: EnginePeer.Id) -> Signal<EngineChatList, NoError> {
+private func threadList(accountPeerId: EnginePeer.Id, postbox: Postbox, peerId: EnginePeer.Id) -> Signal<EngineChatList, NoError> {
     let viewKey: PostboxViewKey = .messageHistoryThreadIndex(
         id: peerId,
         summaryComponents: ChatListEntrySummaryComponents(
@@ -1268,10 +1756,10 @@ private func threadList(context: AccountContext, peerId: EnginePeer.Id) -> Signa
         )
     )
 
-    return context.account.postbox.combinedView(keys: [viewKey])
+    return postbox.combinedView(keys: [viewKey])
     |> mapToSignal { view -> Signal<CombinedView, NoError> in
-        return context.account.postbox.transaction { transaction -> CombinedView in
-            if let peer = transaction.getPeer(context.account.peerId) {
+        return postbox.transaction { transaction -> CombinedView in
+            if let peer = transaction.getPeer(accountPeerId) {
                 transaction.updatePeersInternal([peer]) { current, _ in
                     return current ?? peer
                 }
@@ -1313,8 +1801,14 @@ private func threadList(context: AccountContext, peerId: EnginePeer.Id) -> Signa
                 hasUnseenMentions: false,
                 hasUnseenReactions: false,
                 forumTopicData: nil,
+                topForumTopicItems: [],
                 hasFailed: false,
-                isContact: false
+                isContact: false,
+                autoremoveTimeout: nil,
+                storyStats: nil,
+                displayAsTopicList: false,
+                isPremiumRequiredToMessage: false,
+                mediaDraftContentType: nil
             ))
         }
         

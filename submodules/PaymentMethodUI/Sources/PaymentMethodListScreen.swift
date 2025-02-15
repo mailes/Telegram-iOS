@@ -3,7 +3,6 @@ import UIKit
 import AsyncDisplayKit
 import Display
 import SwiftSignalKit
-import Postbox
 import TelegramCore
 import TelegramPresentationData
 import TelegramUIPreferences
@@ -113,7 +112,7 @@ private enum InviteLinksListEntry: ItemListNodeEntry {
         let arguments = arguments as! PaymentMethodListScreenArguments
         switch self {
         case let .header(text):
-            return InviteLinkHeaderItem(context: arguments.context, theme: presentationData.theme, text: text, animationName: "Invite", sectionId: self.section)
+            return InviteLinkHeaderItem(context: arguments.context, theme: presentationData.theme, text: NSAttributedString(string: text), animationName: "Invite", sectionId: self.section)
         case let .methodsHeader(text):
             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
         case let .addMethod(text):

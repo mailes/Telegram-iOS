@@ -8,6 +8,7 @@ import Postbox
 import TelegramAudio
 import AccountContext
 import AVKit
+import UniversalMediaPlayer
 
 public final class OverlayUniversalVideoNode: OverlayMediaItemNode, AVPictureInPictureSampleBufferPlaybackDelegate {
     public let content: UniversalVideoContent
@@ -37,7 +38,10 @@ public final class OverlayUniversalVideoNode: OverlayMediaItemNode, AVPictureInP
     public var customClose: (() -> Void)?
     public var controlsAreShowingUpdated: ((Bool) -> Void)?
     
-    public init(postbox: Postbox, audioSession: ManagedAudioSession, manager: UniversalVideoManager, content: UniversalVideoContent, shouldBeDismissed: Signal<Bool, NoError> = .single(false), expand: @escaping () -> Void, close: @escaping () -> Void) {
+    private var statusDisposable: Disposable?
+    private var status: MediaPlayerStatus?
+    
+    public init(context: AccountContext, postbox: Postbox, audioSession: ManagedAudioSession, manager: UniversalVideoManager, content: UniversalVideoContent, shouldBeDismissed: Signal<Bool, NoError> = .single(false), expand: @escaping () -> Void, close: @escaping () -> Void) {
         self.content = content
         self.defaultExpand = expand
         
@@ -58,7 +62,7 @@ public final class OverlayUniversalVideoNode: OverlayMediaItemNode, AVPictureInP
         }, controlsAreShowingUpdated: { value in
             controlsAreShowingUpdatedImpl?(value)
         })
-        self.videoNode = UniversalVideoNode(postbox: postbox, audioSession: audioSession, manager: manager, decoration: decoration, content: content, priority: .overlay)
+        self.videoNode = UniversalVideoNode(context: context, postbox: postbox, audioSession: audioSession, manager: manager, decoration: decoration, content: content, priority: .overlay)
         self.decoration = decoration
         
         super.init()
@@ -124,6 +128,16 @@ public final class OverlayUniversalVideoNode: OverlayMediaItemNode, AVPictureInP
             strongSelf.dismiss()
             closeImpl?()
         })
+        
+        self.statusDisposable = (self.videoNode.status
+        |> deliverOnMainQueue).start(next: { [weak self] status in
+            self?.status = status
+        })
+    }
+    
+    deinit {
+        self.shouldBeDismissedDisposable?.dispose()
+        self.statusDisposable?.dispose()
     }
     
     override public func didLoad() {
@@ -194,7 +208,10 @@ public final class OverlayUniversalVideoNode: OverlayMediaItemNode, AVPictureInP
     }
 
     public func pictureInPictureControllerTimeRangeForPlayback(_ pictureInPictureController: AVPictureInPictureController) -> CMTimeRange {
-        return CMTimeRange(start: CMTime(seconds: 0.0, preferredTimescale: CMTimeScale(30.0)), duration: CMTime(seconds: 10.0, preferredTimescale: CMTimeScale(30.0)))
+        guard let status = self.status else {
+            return CMTimeRange(start: CMTime(seconds: 0.0, preferredTimescale: CMTimeScale(30.0)), duration: CMTime(seconds: 0.0, preferredTimescale: CMTimeScale(30.0)))
+        }
+        return CMTimeRange(start: CMTime(seconds: 0.0, preferredTimescale: CMTimeScale(30.0)), duration: CMTime(seconds: status.duration, preferredTimescale: CMTimeScale(30.0)))
     }
 
     public func pictureInPictureControllerIsPlaybackPaused(_ pictureInPictureController: AVPictureInPictureController) -> Bool {

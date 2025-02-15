@@ -19,6 +19,9 @@ swift_library(
         "//submodules/ChatInterfaceState:ChatInterfaceState",
         "//submodules/TelegramUIPreferences:TelegramUIPreferences",
         "//submodules/TelegramPresentationData:TelegramPresentationData",
+        "//submodules/ChatContextQuery",
+        "//submodules/TooltipUI",
+        "//submodules/AudioWaveform",
     ],
     visibility = [
         "//visibility:public",

@@ -24,18 +24,18 @@ private let backgroundCornerRadius: CGFloat = 11.0
 private let fadeColor = UIColor(rgb: 0x000000, alpha: 0.5)
 private let destructiveColor: UIColor = UIColor(rgb: 0xff3b30)
 
-private class VoiceChatPinButtonNode: HighlightTrackingButtonNode {
+class VoiceChatPinButtonNode: HighlightTrackingButtonNode {
     private let pinButtonIconNode: VoiceChatPinNode
     private let pinButtonClippingnode: ASDisplayNode
     private let pinButtonTitleNode: ImmediateTextNode
     
-    init(presentationData: PresentationData) {
+    init(theme: PresentationTheme, strings: PresentationStrings) {
         self.pinButtonIconNode = VoiceChatPinNode()
         self.pinButtonClippingnode = ASDisplayNode()
         self.pinButtonClippingnode.clipsToBounds = true
     
         self.pinButtonTitleNode = ImmediateTextNode()
-        self.pinButtonTitleNode.attributedText = NSAttributedString(string: presentationData.strings.VoiceChat_Unpin, font: Font.regular(17.0), textColor: .white)
+        self.pinButtonTitleNode.attributedText = NSAttributedString(string: strings.VoiceChat_Unpin, font: Font.regular(17.0), textColor: .white)
         self.pinButtonTitleNode.alpha = 0.0
     
         super.init()
@@ -209,7 +209,7 @@ final class VoiceChatMainStageNode: ASDisplayNode {
         
         let presentationData = context.sharedContext.currentPresentationData.with { $0 }
         
-        self.pinButtonNode = VoiceChatPinButtonNode(presentationData: presentationData)
+        self.pinButtonNode = VoiceChatPinButtonNode(theme: presentationData.theme, strings: presentationData.strings)
         
         self.backdropAvatarNode = ImageNode()
         self.backdropAvatarNode.contentMode = .scaleAspectFill
@@ -661,7 +661,7 @@ final class VoiceChatMainStageNode: ASDisplayNode {
                         return
                     }
                     
-                    if strongSelf.speakingAudioLevelView == nil, value > 0.0 {
+                    if strongSelf.speakingAudioLevelView == nil, value > 0.0, strongSelf.context.sharedContext.energyUsageSettings.fullTranslucency {
                         let audioLevelView = VoiceBlobView(
                             frame: blobFrame,
                             maxLevel: 1.5,

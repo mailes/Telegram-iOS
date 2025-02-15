@@ -64,7 +64,9 @@ public enum ViewControllerNavigationPresentation {
     case modal
     case flatModal
     case standaloneModal
+    case standaloneFlatModal
     case modalInLargeLayout
+    case modalInCompactLayout
 }
 
 public enum TabBarItemContextActionType {
@@ -101,7 +103,9 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
     public final var supportedOrientations: ViewControllerSupportedOrientations = ViewControllerSupportedOrientations(regularSize: .all, compactSize: .allButUpsideDown) {
         didSet {
             if self.supportedOrientations != oldValue {
-                self.window?.invalidateSupportedOrientations()
+                if self.isNodeLoaded {
+                    self.window?.invalidateSupportedOrientations()
+                }
             }
         }
     }
@@ -155,6 +159,8 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
         return self.prefersOnScreenNavigationHidden
     }
     
+    open var previousItem: NavigationPreviousAction?
+    
     open var navigationPresentation: ViewControllerNavigationPresentation = .default
     open var _presentedInModal: Bool = false
     
@@ -166,10 +172,12 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
     
     public private(set) var modalStyleOverlayTransitionFactor: CGFloat = 0.0
     public var modalStyleOverlayTransitionFactorUpdated: ((ContainedViewLayoutTransition) -> Void)?
+    public var customModalStyleOverlayTransitionFactorUpdated: ((ContainedViewLayoutTransition) -> Void)?
     public func updateModalStyleOverlayTransitionFactor(_ value: CGFloat, transition: ContainedViewLayoutTransition) {
         if self.modalStyleOverlayTransitionFactor != value {
             self.modalStyleOverlayTransitionFactor = value
             self.modalStyleOverlayTransitionFactorUpdated?(transition)
+            self.customModalStyleOverlayTransitionFactorUpdated?(transition)
         }
     }
     
@@ -198,6 +206,9 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
     
     public let statusBar: StatusBar
     public let navigationBar: NavigationBar?
+    open var transitionNavigationBar: NavigationBar? {
+        return self.navigationBar
+    }
     public private(set) var toolbar: Toolbar?
     
     public var displayNavigationBar = true
@@ -220,6 +231,10 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
     }
     
     private var navigationBarOrigin: CGFloat = 0.0
+        
+    open var interactiveNavivationGestureEdgeWidth: InteractiveTransitionGestureRecognizerEdgeWidth? {
+        return nil
+    }
 
     open func navigationLayout(layout: ContainerViewLayout) -> NavigationLayout {
         let statusBarHeight: CGFloat = layout.statusBarHeight ?? 0.0
@@ -336,6 +351,23 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
         }
     }
     
+    public var titleSignal: Signal<String?, NoError> {
+        return Signal { [weak self] subscriber in
+            guard let self else {
+                return EmptyDisposable
+            }
+            subscriber.putNext(self.navigationItem.title)
+            let listenerIndex = self.navigationItem.addSetTitleListener { title, _ in
+                subscriber.putNext(title)
+            }
+            return ActionDisposable { [weak self] in
+                if let self {
+                    self.navigationItem.removeSetTitleListener(listenerIndex)
+                }
+            }
+        }
+    }
+    
     public init(navigationBarPresentationData: NavigationBarPresentationData?) {
         self.statusBar = StatusBar()
         if let navigationBarPresentationData = navigationBarPresentationData {
@@ -405,18 +437,19 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
         
         self.navigationBarOrigin = navigationBarFrame.origin.y
 
-        let isLandscape = layout.size.width > layout.size.height
-        
+        var isLandscape = layout.size.width > layout.size.height
+        if case .regular = layout.metrics.widthClass {
+            isLandscape = false
+        }
         if let navigationBar = self.navigationBar {
             if let contentNode = navigationBar.contentNode, case .expansion = contentNode.mode, !self.displayNavigationBar {
                 navigationBarFrame.origin.y -= navigationLayout.defaultContentHeight
                 navigationBarFrame.size.height += contentNode.height + navigationLayout.defaultContentHeight + statusBarHeight
-                //navigationBarFrame.origin.y += contentNode.height + statusBarHeight
             }
             if let _ = navigationBar.contentNode, let _ = navigationBar.secondaryContentNode, !self.displayNavigationBar {
-                navigationBarFrame.size.height += NavigationBar.defaultSecondaryContentHeight
-                //navigationBarFrame.origin.y += NavigationBar.defaultSecondaryContentHeight
+                navigationBarFrame.size.height += navigationBar.secondaryContentHeight
             }
+            
             navigationBar.updateLayout(size: navigationBarFrame.size, defaultHeight: navigationLayout.defaultContentHeight, additionalTopHeight: statusBarHeight, additionalContentHeight: self.additionalNavigationBarHeight, additionalBackgroundHeight: additionalBackgroundHeight, leftInset: layout.safeInsets.left, rightInset: layout.safeInsets.right, appearsHidden: !self.displayNavigationBar, isLandscape: isLandscape, transition: transition)
             if !transition.isAnimated {
                 navigationBar.layer.removeAnimation(forKey: "bounds")
@@ -446,10 +479,6 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
         if let scrollToTopView = self.scrollToTopView {
             scrollToTopView.frame = CGRect(x: 0.0, y: 0.0, width: layout.size.width, height: 10.0)
         }
-    }
-    
-    open func updateModalTransition(_ value: CGFloat, transition: ContainedViewLayoutTransition) {
-        
     }
     
     open func navigationStackConfigurationUpdated(next: [ViewController]) {
@@ -563,7 +592,7 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
         (self.navigationController as? NavigationController)?.pushViewController(controller)
     }
     
-    public func replace(with controller: ViewController) {
+    open func replace(with controller: ViewController) {
         if let navigationController = self.navigationController as? NavigationController {
             var controllers = navigationController.viewControllers
             controllers.removeAll(where: { $0 === self })

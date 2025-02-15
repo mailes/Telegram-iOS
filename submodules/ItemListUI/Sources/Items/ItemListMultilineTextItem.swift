@@ -341,7 +341,7 @@ public class ItemListMultilineTextItemNode: ListViewItemNode {
         }
     }
     
-    override public func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
+    override public func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.4)
     }
     
@@ -414,7 +414,7 @@ public class ItemListMultilineTextItemNode: ListViewItemNode {
                 if let current = self.linkHighlightingNode {
                     linkHighlightingNode = current
                 } else {
-                    linkHighlightingNode = LinkHighlightingNode(color: item.presentationData.theme.list.itemAccentColor.withAlphaComponent(0.5))
+                    linkHighlightingNode = LinkHighlightingNode(color: item.presentationData.theme.list.itemAccentColor.withAlphaComponent(0.2))
                     self.linkHighlightingNode = linkHighlightingNode
                     self.insertSubnode(linkHighlightingNode, belowSubnode: self.textNode)
                 }

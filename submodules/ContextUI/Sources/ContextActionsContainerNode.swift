@@ -104,8 +104,9 @@ private final class InnerActionsContainerNode: ASDisplayNode {
                     }
                 }
             case let .custom(item, _):
-                itemNodes.append(.custom(item.node(presentationData: presentationData, getController: getController, actionSelected: actionSelected)))
-                if i != items.count - 1 {
+                let itemNode = item.node(presentationData: presentationData, getController: getController, actionSelected: actionSelected)
+                itemNodes.append(.custom(itemNode))
+                if i != items.count - 1 && itemNode.needsSeparator {
                     switch items[i + 1] {
                     case .action, .custom:
                         let separatorNode = ASDisplayNode()
@@ -199,7 +200,7 @@ private final class InnerActionsContainerNode: ASDisplayNode {
         if let minimalWidth = minimalWidth, minimalWidth > minActionsWidth {
             minActionsWidth = minimalWidth
         }
-        
+                
         switch widthClass {
         case .compact:
             minActionsWidth = max(minActionsWidth, floor(constrainedWidth / 3.0))
@@ -393,7 +394,18 @@ final class InnerTextSelectionTipContainerNode: ASDisplayNode {
         var icon: UIImage?
         switch tip {
         case .textSelection:
-            var rawText = self.presentationData.strings.ChatContextMenu_TextSelectionTip
+            var rawText = self.presentationData.strings.ChatContextMenu_TextSelectionTip2
+            if let range = rawText.range(of: "|") {
+                rawText.removeSubrange(range)
+                self.text = rawText
+                self.targetSelectionIndex = NSRange(range, in: rawText).lowerBound
+            } else {
+                self.text = rawText
+                self.targetSelectionIndex = 1
+            }
+            icon = UIImage(bundleImageName: "Chat/Context Menu/Tip")
+        case .quoteSelection:
+            var rawText = presentationData.strings.ChatContextMenu_QuoteSelectionTip
             if let range = rawText.range(of: "|") {
                 rawText.removeSubrange(range)
                 self.text = rawText
@@ -425,6 +437,24 @@ final class InnerTextSelectionTipContainerNode: ASDisplayNode {
             self.targetSelectionIndex = nil
             icon = nil
             isUserInteractionEnabled = action != nil
+        case let .starsReactions(topCount):
+            //TODO:localize
+            self.action = nil
+            self.text = "Send \(topCount) or more to highlight your profile"
+            self.targetSelectionIndex = nil
+            icon = nil
+            isUserInteractionEnabled = action != nil
+        case .videoProcessing:
+            self.action = nil
+            self.text = self.presentationData.strings.Chat_VideoProcessingInfo
+            self.targetSelectionIndex = nil
+            icon = nil
+            isUserInteractionEnabled = action != nil
+        case .collageReordering:
+            self.action = nil
+            self.text = self.presentationData.strings.Camera_CollageReorderingInfo
+            self.targetSelectionIndex = nil
+            icon = UIImage(bundleImageName: "Chat/Context Menu/Tip")
         }
         
         self.iconNode = ASImageNode()
@@ -446,9 +476,11 @@ final class InnerTextSelectionTipContainerNode: ASDisplayNode {
         self.highlightBackgroundNode.clipsToBounds = true
         self.highlightBackgroundNode.cornerRadius = 14.0
         
-        let textSelectionNode = TextSelectionNode(theme: TextSelectionTheme(selection: presentationData.theme.contextMenu.primaryColor.withAlphaComponent(0.15), knob: presentationData.theme.contextMenu.primaryColor, knobDiameter: 8.0), strings: presentationData.strings, textNode: self.textNode.textNode, updateIsActive: { _ in
+        let textSelectionNode = TextSelectionNode(theme: TextSelectionTheme(selection: presentationData.theme.contextMenu.primaryColor.withAlphaComponent(0.15), knob: presentationData.theme.contextMenu.primaryColor, knobDiameter: 8.0, isDark: presentationData.theme.overallDarkAppearance), strings: presentationData.strings, textNode: self.textNode.textNode, updateIsActive: { _ in
         }, present: { _, _ in
-        }, rootNode: self, performAction: { _, _ in
+        }, rootNode: { [weak self] in
+            return self
+        }, performAction: { _, _ in
         })
         self.textSelectionNode = textSelectionNode
         
@@ -561,12 +593,12 @@ final class InnerTextSelectionTipContainerNode: ASDisplayNode {
         let textFont = Font.regular(floor(presentationData.listsFontSize.baseDisplaySize * 14.0 / 17.0))
         let boldTextFont = Font.bold(floor(presentationData.listsFontSize.baseDisplaySize * 14.0 / 17.0))
         let textColor = self.presentationData.theme.contextMenu.primaryColor
-        let accentColor = self.presentationData.theme.contextMenu.badgeFillColor
+        let linkColor = self.presentationData.theme.overallDarkAppearance ? UIColor(rgb: 0x64d2ff) : self.presentationData.theme.contextMenu.badgeFillColor
         
         let iconSize = self.iconNode.image?.size ?? CGSize(width: 16.0, height: 16.0)
-                
+        
         let text = self.text.replacingOccurrences(of: "#", with: "# ")
-        let attributedText = NSMutableAttributedString(attributedString: parseMarkdownIntoAttributedString(text, attributes: MarkdownAttributes(body: MarkdownAttributeSet(font: textFont, textColor: textColor), bold: MarkdownAttributeSet(font: boldTextFont, textColor: textColor), link: MarkdownAttributeSet(font: boldTextFont, textColor: accentColor), linkAttribute: { _ in
+        let attributedText = NSMutableAttributedString(attributedString: parseMarkdownIntoAttributedString(text, attributes: MarkdownAttributes(body: MarkdownAttributeSet(font: textFont, textColor: textColor), bold: MarkdownAttributeSet(font: boldTextFont, textColor: textColor), link: MarkdownAttributeSet(font: boldTextFont, textColor: linkColor), linkAttribute: { _ in
             return nil
         })))
         if let file = self.file {
@@ -586,7 +618,7 @@ final class InnerTextSelectionTipContainerNode: ASDisplayNode {
         
         let textRightInset: CGFloat
         if let _ = self.iconNode.image {
-            textRightInset = iconSize.width - 8.0
+            textRightInset = iconSize.width - 2.0
         } else {
             textRightInset = 0.0
         }
@@ -628,7 +660,7 @@ final class InnerTextSelectionTipContainerNode: ASDisplayNode {
         switch presentation {
         case .modal:
             self.shadowNode.isHidden = true
-        case .inline:
+        case .inline, .additional:
             self.shadowNode.isHidden = false
         }
         
@@ -802,7 +834,7 @@ final class ContextActionsContainerNode: ASDisplayNode {
                 
                 strongSelf.tip = tip
                 requestLayout()
-            })
+            }).strict()
         }
     }
     

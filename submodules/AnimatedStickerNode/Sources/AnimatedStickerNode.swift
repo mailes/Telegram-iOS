@@ -168,7 +168,7 @@ public protocol AnimatedStickerNode: ASDisplayNode {
     var visibility: Bool { get set }
     var overrideVisibility: Bool { get set }
     
-    var isPlayingChanged: (Bool) -> Void { get }
+    var isPlayingChanged: (Bool) -> Void { get set }
     
     func cloneCurrentFrame(from otherNode: AnimatedStickerNode?)
     func setup(source: AnimatedStickerNodeSource, width: Int, height: Int, playbackMode: AnimatedStickerPlaybackMode, mode: AnimatedStickerMode)
@@ -201,7 +201,10 @@ public final class DefaultAnimatedStickerNodeImpl: ASDisplayNode, AnimatedSticke
     public var frameUpdated: (Int, Int) -> Void = { _, _ in }
     public private(set) var currentFrameIndex: Int = 0
     public private(set) var currentFrameCount: Int = 0
+    public private(set) var currentFrameRate: Int = 0
     private var playFromIndex: Int?
+    
+    public var frameColorUpdated: ((UIColor) -> Void)?
     
     private let timer = Atomic<SwiftSignalKit.Timer?>(value: nil)
     private let frameSource = Atomic<QueueLocalObject<AnimatedStickerFrameSourceWrapper>?>(value: nil)
@@ -215,7 +218,7 @@ public final class DefaultAnimatedStickerNodeImpl: ASDisplayNode, AnimatedSticke
     public var isPlaying: Bool = false
     private var currentLoopCount: Int = 0
     private var canDisplayFirstFrame: Bool = false
-    private var playbackMode: AnimatedStickerPlaybackMode = .loop
+    public var playbackMode: AnimatedStickerPlaybackMode = .loop
     
     public var stopAtNearestLoop: Bool = false
     
@@ -252,6 +255,18 @@ public final class DefaultAnimatedStickerNodeImpl: ASDisplayNode, AnimatedSticke
     private var overlayColor: (UIColor?, Bool)? = nil
     private var size: CGSize?
     
+    public var dynamicColor: UIColor? {
+        didSet {
+            if let renderer = self.renderer?.renderer as? SoftwareAnimationRenderer {
+                renderer.renderAsTemplateImage = self.dynamicColor != nil
+            }
+            self.renderer?.renderer.view.tintColor = self.dynamicColor
+        }
+    }
+    
+    
+    public var forceSynchronous = false
+    
     public init(useMetalCache: Bool = false) {
         self.queue = sharedQueue
         self.eventsNode = AnimatedStickerNodeDisplayEvents()
@@ -279,12 +294,12 @@ public final class DefaultAnimatedStickerNodeImpl: ASDisplayNode, AnimatedSticke
         if #available(iOS 10.0, *) {
             return CompressedAnimationRenderer()
         } else {
-            return SoftwareAnimationRenderer()
+            return SoftwareAnimationRenderer(templateImageSupport: true)
         }
     })
     
     private static let softwareRendererPool = AnimationRendererPool(generate: {
-        return SoftwareAnimationRenderer()
+        return SoftwareAnimationRenderer(templateImageSupport: true)
     })
     
     private weak var nodeToCopyFrameFrom: DefaultAnimatedStickerNodeImpl?
@@ -295,6 +310,12 @@ public final class DefaultAnimatedStickerNodeImpl: ASDisplayNode, AnimatedSticke
             self.renderer = DefaultAnimatedStickerNodeImpl.hardwareRendererPool.take()
         } else {
             self.renderer = DefaultAnimatedStickerNodeImpl.softwareRendererPool.take()
+            
+            if let renderer = self.renderer?.renderer as? SoftwareAnimationRenderer {
+                renderer.renderAsTemplateImage = self.dynamicColor != nil
+            }
+            self.renderer?.renderer.view.tintColor = self.dynamicColor
+            
             if let contents = self.nodeToCopyFrameFrom?.renderer?.renderer.contents {
                 self.renderer?.renderer.contents = contents
             }
@@ -351,14 +372,14 @@ public final class DefaultAnimatedStickerNodeImpl: ASDisplayNode, AnimatedSticke
                     strongSelf.play(firstFrame: true)
                 }
             }
-            self.disposable.set((source.directDataPath(attemptSynchronously: false)
+            self.disposable.set((source.directDataPath(attemptSynchronously: self.forceSynchronous)
             |> filter { $0 != nil }
-            |> deliverOnMainQueue).start(next: { path in
+            |> deliverOnMainQueue).startStrict(next: { path in
                 f(path!)
             }))
         case .cached:
             self.disposable.set((source.cachedDataPath(width: width, height: height)
-            |> deliverOnMainQueue).start(next: { [weak self] path, complete in
+            |> deliverOnMainQueue).startStrict(next: { [weak self] path, complete in
                 guard let strongSelf = self else {
                     return
                 }
@@ -507,11 +528,17 @@ public final class DefaultAnimatedStickerNodeImpl: ASDisplayNode, AnimatedSticke
                                     strongSelf.reportedStarted = true
                                     strongSelf.started()
                                 }
+                            }, averageColor: strongSelf.frameColorUpdated == nil ? nil : { color in
+                                guard let strongSelf = self else {
+                                    return
+                                }
+                                strongSelf.frameColorUpdated?(color)
                             })
                             
                             strongSelf.frameUpdated(frame.index, frame.totalFrames)
                             strongSelf.currentFrameIndex = frame.index
                             strongSelf.currentFrameCount = frame.totalFrames
+                            strongSelf.currentFrameRate = frameRate
                             
                             if frame.isLastFrame {
                                 var stopped = false
@@ -617,11 +644,17 @@ public final class DefaultAnimatedStickerNodeImpl: ASDisplayNode, AnimatedSticke
                                     strongSelf.reportedStarted = true
                                     strongSelf.started()
                                 }
+                            }, averageColor: strongSelf.frameColorUpdated == nil ? nil : { color in
+                                guard let strongSelf = self else {
+                                    return
+                                }
+                                strongSelf.frameColorUpdated?(color)
                             })
                             
                             strongSelf.frameUpdated(frame.index, frame.totalFrames)
                             strongSelf.currentFrameIndex = frame.index
-                            strongSelf.currentFrameCount = frame.totalFrames;
+                            strongSelf.currentFrameCount = frame.totalFrames
+                            strongSelf.currentFrameRate = frameRate
                             
                             if frame.isLastFrame {
                                 var stopped = false
@@ -683,7 +716,8 @@ public final class DefaultAnimatedStickerNodeImpl: ASDisplayNode, AnimatedSticke
         let frameSourceHolder = self.frameSource
         let timerHolder = self.timer
         let useMetalCache = self.useMetalCache
-        self.queue.async { [weak self] in
+        
+        let action = { [weak self] in
             var maybeFrameSource: AnimatedStickerFrameSource? = frameSourceHolder.with { $0 }?.syncWith { $0 }.value
             if case .timestamp = position {
             } else {
@@ -771,6 +805,11 @@ public final class DefaultAnimatedStickerNodeImpl: ASDisplayNode, AnimatedSticke
                             strongSelf.reportedStarted = true
                             strongSelf.started()
                         }
+                    }, averageColor: strongSelf.frameColorUpdated == nil ? nil : { color in
+                        guard let strongSelf = self else {
+                            return
+                        }
+                        strongSelf.frameColorUpdated?(color)
                     })
 
                     strongSelf.playbackStatus.set(.single(AnimatedStickerStatus(playing: false, duration: duration, timestamp: 0.0)))
@@ -779,6 +818,11 @@ public final class DefaultAnimatedStickerNodeImpl: ASDisplayNode, AnimatedSticke
             frameQueue.with { frameQueue in
                 frameQueue.generateFramesIfNeeded()
             }
+        }
+        if self.forceSynchronous {
+            action()
+        } else {
+            self.queue.async(action)
         }
     }
     

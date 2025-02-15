@@ -19,6 +19,8 @@ import ContextUI
 import UndoUI
 import ItemListPeerActionItem
 import AnimationUI
+import ThemeSettingsThemeItem
+import ThemeAccentColorScreen
 
 private final class ThemePickerControllerArguments {
     let context: AccountContext
@@ -289,7 +291,7 @@ private func themePickerControllerEntries(presentationData: PresentationData, pr
     entries.append(.themes(presentationData.theme, presentationData.strings, chatThemes, themeReference, nightMode, animatedEmojiStickers, presentationThemeSettings.themeSpecificAccentColors, presentationThemeSettings.themeSpecificChatWallpapers))
     
     entries.append(.customHeader(presentationData.theme, presentationData.strings.Themes_BuildOwn.uppercased()))
-    entries.append(.chatPreview(presentationData.theme, presentationData.chatWallpaper, presentationData.chatFontSize, presentationData.chatBubbleCorners, presentationData.strings, presentationData.dateTimeFormat, presentationData.nameDisplayOrder, [ChatPreviewMessageItem(outgoing: false, reply: (presentationData.strings.Appearance_PreviewReplyAuthor, presentationData.strings.Appearance_PreviewReplyText), text: presentationData.strings.Appearance_PreviewIncomingText), ChatPreviewMessageItem(outgoing: true, reply: nil, text: presentationData.strings.Appearance_PreviewOutgoingText)]))
+    entries.append(.chatPreview(presentationData.theme, presentationData.chatWallpaper, presentationData.chatFontSize, presentationData.chatBubbleCorners, presentationData.strings, presentationData.dateTimeFormat, presentationData.nameDisplayOrder, [ChatPreviewMessageItem(outgoing: false, reply: (presentationData.strings.Appearance_PreviewReplyAuthor, presentationData.strings.Appearance_PreviewReplyText), text: presentationData.strings.Appearance_PreviewIncomingText, nameColor: .blue, backgroundEmojiId: nil), ChatPreviewMessageItem(outgoing: true, reply: nil, text: presentationData.strings.Appearance_PreviewOutgoingText, nameColor: .blue, backgroundEmojiId: nil)]))
     
     let generalThemes: [PresentationThemeReference] = availableThemes.filter { reference in
         if case let .cloud(theme) = reference {
@@ -565,7 +567,7 @@ public func themePickerController(context: AccountContext, focusOnItemTag: Theme
                             })
                         })
                         
-                        c.dismiss(completion: {
+                        c?.dismiss(completion: {
                             pushControllerImpl?(controller)
                         })
                     })))
@@ -613,25 +615,25 @@ public func themePickerController(context: AccountContext, focusOnItemTag: Theme
                                 })
                             }))
                             
-                            c.dismiss(completion: {
+                            c?.dismiss(completion: {
                                 pushControllerImpl?(controller)
                             })
                         })
                     })))
                 }
                 items.append(.action(ContextMenuActionItem(text: presentationData.strings.Appearance_ShareTheme, icon: { theme in generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Share"), color: theme.contextMenu.primaryColor) }, action: { c, f in
-                    c.dismiss(completion: {
+                    c?.dismiss(completion: {
                         let shareController = ShareController(context: context, subject: .url("https://t.me/addtheme/\(theme.theme.slug)"), preferredAction: .default)
                         shareController.actionCompleted = {
                             let presentationData = context.sharedContext.currentPresentationData.with { $0 }
-                            presentControllerImpl?(UndoOverlayController(presentationData: presentationData, content: .linkCopied(text: presentationData.strings.Conversation_LinkCopied), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), nil)
+                            presentControllerImpl?(UndoOverlayController(presentationData: presentationData, content: .linkCopied(title: nil, text: presentationData.strings.Conversation_LinkCopied), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), nil)
                         }
                         presentControllerImpl?(shareController, nil)
                     })
                 })))
                 if !theme.theme.isDefault {
                     items.append(.action(ContextMenuActionItem(text: presentationData.strings.Appearance_RemoveTheme, textColor: .destructive, icon: { theme in generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Delete"), color: theme.contextMenu.destructiveColor) }, action: { c, f in
-                        c.dismiss(completion: {
+                        c?.dismiss(completion: {
                             let actionSheet = ActionSheetController(presentationData: presentationData)
                             var items: [ActionSheetItem] = []
                             items.append(ActionSheetButtonItem(title: presentationData.strings.Appearance_RemoveThemeConfirmation, color: .destructive, action: { [weak actionSheet] in
@@ -680,14 +682,14 @@ public func themePickerController(context: AccountContext, focusOnItemTag: Theme
             } else {
                 items.append(.action(ContextMenuActionItem(text: strings.Theme_Context_ChangeColors, icon: { theme in generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/ApplyTheme"), color: theme.contextMenu.primaryColor)
                 }, action: { c, f in
-                    c.dismiss(completion: {
+                    c?.dismiss(completion: {
                         let controller = ThemeAccentColorController(context: context, mode: .colors(themeReference: reference, create: true))
                         pushControllerImpl?(controller)
                     })
                 })))
             }
             
-            let contextController = ContextController(account: context.account, presentationData: presentationData, source: .controller(ContextControllerContentSourceImpl(controller: themeController, sourceNode: node)), items: .single(ContextController.Items(content: .list(items))), gesture: gesture)
+            let contextController = ContextController(presentationData: presentationData, source: .controller(ContextControllerContentSourceImpl(controller: themeController, sourceNode: node)), items: .single(ContextController.Items(content: .list(items))), gesture: gesture)
             presentInGlobalOverlayImpl?(contextController, nil)
         })
     }, colorContextAction: { isCurrent, reference, accentColor, node, gesture in
@@ -813,7 +815,7 @@ public func themePickerController(context: AccountContext, focusOnItemTag: Theme
                                 })
                             })
                             
-                            c.dismiss(completion: {
+                            c?.dismiss(completion: {
                                 pushControllerImpl?(controller)
                             })
                         })))
@@ -866,25 +868,25 @@ public func themePickerController(context: AccountContext, focusOnItemTag: Theme
                                     })
                                 }))
                                 
-                                c.dismiss(completion: {
+                                c?.dismiss(completion: {
                                     pushControllerImpl?(controller)
                                 })
                             })
                         })))
                     }
                     items.append(.action(ContextMenuActionItem(text: presentationData.strings.Appearance_ShareTheme, icon: { theme in generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Share"), color: theme.contextMenu.primaryColor) }, action: { c, f in
-                        c.dismiss(completion: {
+                        c?.dismiss(completion: {
                             let shareController = ShareController(context: context, subject: .url("https://t.me/addtheme/\(cloudTheme.theme.slug)"), preferredAction: .default)
                             shareController.actionCompleted = {
                                 let presentationData = context.sharedContext.currentPresentationData.with { $0 }
-                                presentControllerImpl?(UndoOverlayController(presentationData: presentationData, content: .linkCopied(text: presentationData.strings.Conversation_LinkCopied), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), nil)
+                                presentControllerImpl?(UndoOverlayController(presentationData: presentationData, content: .linkCopied(title: nil, text: presentationData.strings.Conversation_LinkCopied), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), nil)
                             }
                             presentControllerImpl?(shareController, nil)
                         })
                     })))
                     if cloudThemeExists && !cloudTheme.theme.isDefault {
                         items.append(.action(ContextMenuActionItem(text: presentationData.strings.Appearance_RemoveTheme, textColor: .destructive, icon: { theme in generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Delete"), color: theme.contextMenu.destructiveColor) }, action: { c, f in
-                            c.dismiss(completion: {
+                            c?.dismiss(completion: {
                                 let actionSheet = ActionSheetController(presentationData: presentationData)
                                 var items: [ActionSheetItem] = []
                                 items.append(ActionSheetButtonItem(title: presentationData.strings.Appearance_RemoveThemeConfirmation, color: .destructive, action: { [weak actionSheet] in
@@ -936,7 +938,7 @@ public func themePickerController(context: AccountContext, focusOnItemTag: Theme
                     }
                 }
             }
-            let contextController = ContextController(account: context.account, presentationData: presentationData, source: .controller(ContextControllerContentSourceImpl(controller: themeController, sourceNode: node)), items: .single(ContextController.Items(content: .list(items))), gesture: gesture)
+            let contextController = ContextController(presentationData: presentationData, source: .controller(ContextControllerContentSourceImpl(controller: themeController, sourceNode: node)), items: .single(ContextController.Items(content: .list(items))), gesture: gesture)
             presentInGlobalOverlayImpl?(contextController, nil)
         })
     })
@@ -1230,7 +1232,7 @@ public func themePickerController(context: AccountContext, focusOnItemTag: Theme
             wallpaperSignal = cachedWallpaper(account: context.account, slug: file.slug, settings: colorWallpaper.settings)
             |> mapToSignal { cachedWallpaper in
                 if let wallpaper = cachedWallpaper?.wallpaper, case let .file(file) = wallpaper {
-                    let _ = fetchedMediaResource(mediaBox: context.account.postbox.mediaBox, reference: .wallpaper(wallpaper: .slug(file.slug), resource: file.file.resource)).start()
+                    let _ = fetchedMediaResource(mediaBox: context.account.postbox.mediaBox, userLocation: .other, userContentType: .other, reference: .wallpaper(wallpaper: .slug(file.slug), resource: file.file.resource)).start()
 
                     return .single(wallpaper)
     

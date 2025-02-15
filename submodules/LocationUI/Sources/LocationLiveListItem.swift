@@ -1,7 +1,6 @@
 import Foundation
 import UIKit
 import AsyncDisplayKit
-import Postbox
 import Display
 import SwiftSignalKit
 import TelegramCore
@@ -21,7 +20,7 @@ final class LocationLiveListItem: ListViewItem {
     let dateTimeFormat: PresentationDateTimeFormat
     let nameDisplayOrder: PresentationPersonNameOrder
     let context: AccountContext
-    let message: Message
+    let message: EngineMessage
     let distance: Double?
     
     let drivingTime: ExpectedTravelTime
@@ -35,7 +34,7 @@ final class LocationLiveListItem: ListViewItem {
     let transitAction: () -> Void
     let walkingAction: () -> Void
     
-    public init(presentationData: ItemListPresentationData, dateTimeFormat: PresentationDateTimeFormat, nameDisplayOrder: PresentationPersonNameOrder, context: AccountContext, message: Message, distance: Double?, drivingTime: ExpectedTravelTime, transitTime: ExpectedTravelTime, walkingTime: ExpectedTravelTime, action: @escaping () -> Void, longTapAction: @escaping () -> Void = { }, drivingAction: @escaping () -> Void, transitAction: @escaping () -> Void, walkingAction: @escaping () -> Void) {
+    public init(presentationData: ItemListPresentationData, dateTimeFormat: PresentationDateTimeFormat, nameDisplayOrder: PresentationPersonNameOrder, context: AccountContext, message: EngineMessage, distance: Double?, drivingTime: ExpectedTravelTime, transitTime: ExpectedTravelTime, walkingTime: ExpectedTravelTime, action: @escaping () -> Void, longTapAction: @escaping () -> Void = { }, drivingAction: @escaping () -> Void, transitAction: @escaping () -> Void, walkingAction: @escaping () -> Void) {
         self.presentationData = presentationData
         self.dateTimeFormat = dateTimeFormat
         self.nameDisplayOrder = nameDisplayOrder
@@ -179,7 +178,7 @@ final class LocationLiveListItemNode: ListViewItemNode {
             
             var title: String = ""
             if let author = item.message.author {
-                title = EnginePeer(author).displayTitle(strings: item.presentationData.strings, displayOrder: item.nameDisplayOrder)
+                title = author.displayTitle(strings: item.presentationData.strings, displayOrder: item.nameDisplayOrder)
             }
             let titleAttributedString = NSAttributedString(string: title, font: titleFont, textColor: item.presentationData.theme.list.itemPrimaryTextColor)
             let (titleLayout, titleApply) = makeTitleLayout(TextNodeLayoutArguments(attributedString: titleAttributedString, backgroundColor: nil, maximumNumberOfLines: 1, truncationType: .end, constrainedSize: CGSize(width: params.width - leftInset - rightInset - 54.0, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
@@ -306,7 +305,7 @@ final class LocationLiveListItemNode: ListViewItemNode {
                         let avatarSize: CGFloat = 40.0
                         
                         if let peer = item.message.author {
-                            strongSelf.avatarNode.setPeer(context: item.context, theme: item.presentationData.theme, peer: EnginePeer(peer), overrideImage: nil, emptyColor: item.presentationData.theme.list.mediaPlaceholderColor, synchronousLoad: false)
+                            strongSelf.avatarNode.setPeer(context: item.context, theme: item.presentationData.theme, peer: peer, overrideImage: nil, emptyColor: item.presentationData.theme.list.mediaPlaceholderColor, synchronousLoad: false)
                         }
                         
                         strongSelf.avatarNode.frame = CGRect(origin: CGPoint(x: params.leftInset + 15.0, y: 8.0), size: CGSize(width: avatarSize, height: avatarSize))
@@ -322,7 +321,14 @@ final class LocationLiveListItemNode: ListViewItemNode {
                         }
                         
                         let currentTimestamp = Int32(CFAbsoluteTimeGetCurrent() + kCFAbsoluteTimeIntervalSince1970)
-                        if currentTimestamp < item.message.timestamp + liveBroadcastingTimeout {
+                        let remainingTime: Int32
+                        if liveBroadcastingTimeout == liveLocationIndefinitePeriod {
+                            remainingTime = liveLocationIndefinitePeriod
+                        } else {
+                            remainingTime = max(0, item.message.timestamp + liveBroadcastingTimeout - currentTimestamp)
+                        }
+                        
+                        if remainingTime > 0 {
                             let timerNode: ChatMessageLiveLocationTimerNode
                             if let current = strongSelf.timerNode {
                                 timerNode = current
@@ -332,7 +338,7 @@ final class LocationLiveListItemNode: ListViewItemNode {
                                 strongSelf.timerNode = timerNode
                             }
                             let timerSize = CGSize(width: 28.0, height: 28.0)
-                            timerNode.update(backgroundColor: item.presentationData.theme.list.itemAccentColor.withAlphaComponent(0.4), foregroundColor: item.presentationData.theme.list.itemAccentColor, textColor: item.presentationData.theme.list.itemAccentColor, beginTimestamp: Double(item.message.timestamp), timeout: Double(liveBroadcastingTimeout), strings: item.presentationData.strings)
+                            timerNode.update(backgroundColor: item.presentationData.theme.list.itemAccentColor.withAlphaComponent(0.4), foregroundColor: item.presentationData.theme.list.itemAccentColor, textColor: item.presentationData.theme.list.itemAccentColor, beginTimestamp: Double(item.message.timestamp), timeout: Int32(liveBroadcastingTimeout) == liveLocationIndefinitePeriod ? -1.0 : Double(liveBroadcastingTimeout), strings: item.presentationData.strings)
                             timerNode.frame = CGRect(origin: CGPoint(x: contentSize.width - 16.0 - timerSize.width, y: 14.0), size: timerSize)
                         } else if let timerNode = strongSelf.timerNode {
                             strongSelf.timerNode = nil
@@ -392,7 +398,7 @@ final class LocationLiveListItemNode: ListViewItemNode {
         }
     }
     
-    override func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
+    override func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: duration * 0.5)
     }
     

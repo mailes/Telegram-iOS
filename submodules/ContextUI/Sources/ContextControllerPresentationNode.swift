@@ -14,7 +14,9 @@ enum ContextControllerPresentationNodeStateTransition {
 }
 
 protocol ContextControllerPresentationNode: ASDisplayNode {
-    func replaceItems(items: ContextController.Items, animated: Bool)
+    var ready: Signal<Bool, NoError> { get }
+    
+    func replaceItems(items: ContextController.Items, animated: Bool?)
     func pushItems(items: ContextController.Items)
     func popItems()
     func wantsDisplayBelowKeyboard() -> Bool
@@ -26,7 +28,7 @@ protocol ContextControllerPresentationNode: ASDisplayNode {
         stateTransition: ContextControllerPresentationNodeStateTransition?
     )
     
-    func animateOutToReaction(value: MessageReaction.Reaction, targetView: UIView, hideNode: Bool, animateTargetContainer: UIView?, addStandaloneReactionAnimation: ((StandaloneReactionAnimation) -> Void)?, reducedCurve: Bool, completion: @escaping () -> Void)
+    func animateOutToReaction(value: MessageReaction.Reaction, targetView: UIView, hideNode: Bool, animateTargetContainer: UIView?, addStandaloneReactionAnimation: ((StandaloneReactionAnimation) -> Void)?, reducedCurve: Bool, onHit: (() -> Void)?, completion: @escaping () -> Void)
     func cancelReactionAnimation()
     
     func highlightGestureMoved(location: CGPoint, hover: Bool)

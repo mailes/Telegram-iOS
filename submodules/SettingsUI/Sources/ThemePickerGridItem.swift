@@ -18,7 +18,7 @@ import AnimatedStickerNode
 import TelegramAnimatedStickerNode
 import ShimmerEffect
 import StickerResources
-
+import ThemeCarouselItem
 
 private var cachedBorderImages: [String: UIImage] = [:]
 private func generateBorderImage(theme: PresentationTheme, bordered: Bool, selected: Bool) -> UIImage? {
@@ -193,10 +193,14 @@ private final class ThemeGridThemeItemIconNode : ASDisplayNode {
         }
         
         let string: String?
-        if let _ = item.themeReference.emoticon {
-            string = nil
+        if let themeReference = item.themeReference {
+            if let _ = themeReference.emoticon {
+                string = nil
+            } else {
+                string = themeDisplayName(strings: item.strings, reference: themeReference)
+            }
         } else {
-            string = themeDisplayName(strings: item.strings, reference: item.themeReference)
+            string = nil
         }
                 
         let text = NSAttributedString(string: string ?? item.strings.Conversation_Theme_NoTheme, font: Font.bold(14.0), textColor: .white)
@@ -207,16 +211,17 @@ private final class ThemeGridThemeItemIconNode : ASDisplayNode {
         let (_, emojiApply) = makeEmojiLayout(TextNodeLayoutArguments(attributedString: title, backgroundColor: nil, maximumNumberOfLines: 1, truncationType: .end, constrainedSize: CGSize(width: size.width, height: CGFloat.greatestFiniteMagnitude), alignment: .center, cutout: nil, insets: UIEdgeInsets()))
         
         if updatedThemeReference || updatedWallpaper || updatedNightMode || updatedSize {
-            var themeReference = item.themeReference
-            if case .builtin = themeReference, item.nightMode {
-                themeReference = .builtin(.night)
+            if var themeReference = item.themeReference {
+                if case .builtin = themeReference, item.nightMode {
+                    themeReference = .builtin(.night)
+                }
+                
+                let color = item.themeSpecificAccentColors[themeReference.index]
+                let wallpaper = item.themeSpecificChatWallpapers[themeReference.index]
+                
+                self.imageNode.setSignal(themeIconImage(account: item.context.account, accountManager: item.context.sharedContext.accountManager, theme: themeReference, color: color, wallpaper: wallpaper ?? item.wallpaper, nightMode: item.nightMode, emoticon: true, large: true))
+                self.imageNode.backgroundColor = nil
             }
-            
-            let color = item.themeSpecificAccentColors[themeReference.index]
-            let wallpaper = item.themeSpecificChatWallpapers[themeReference.index]
-            
-            self.imageNode.setSignal(themeIconImage(account: item.context.account, accountManager: item.context.sharedContext.accountManager, theme: themeReference, color: color, wallpaper: wallpaper ?? item.wallpaper, nightMode: item.nightMode, emoticon: true, large: true))
-            self.imageNode.backgroundColor = nil
         }
         
         if updatedTheme || updatedSelected {
@@ -272,10 +277,10 @@ private final class ThemeGridThemeItemIconNode : ASDisplayNode {
             animatedStickerNode.autoplay = true
             animatedStickerNode.visibility = true
             
-            self.stickerFetchedDisposable.set(fetchedMediaResource(mediaBox: item.context.account.postbox.mediaBox, reference: MediaResourceReference.media(media: .standalone(media: file), resource: file.resource)).start())
+            self.stickerFetchedDisposable.set(fetchedMediaResource(mediaBox: item.context.account.postbox.mediaBox, userLocation: .other, userContentType: .other, reference: MediaResourceReference.media(media: .standalone(media: file), resource: file.resource)).start())
             
             let thumbnailDimensions = PixelDimensions(width: 512, height: 512)
-            self.placeholderNode.update(backgroundColor: nil, foregroundColor: UIColor(rgb: 0xffffff, alpha: 0.2), shimmeringColor: UIColor(rgb: 0xffffff, alpha: 0.3), data: file.immediateThumbnailData, size: emojiFrame.size, imageSize: thumbnailDimensions.cgSize)
+            self.placeholderNode.update(backgroundColor: nil, foregroundColor: UIColor(rgb: 0xffffff, alpha: 0.2), shimmeringColor: UIColor(rgb: 0xffffff, alpha: 0.3), data: file.immediateThumbnailData, size: emojiFrame.size, enableEffect: item.context.sharedContext.energyUsageSettings.fullTranslucency, imageSize: thumbnailDimensions.cgSize)
             self.placeholderNode.frame = emojiFrame
         }
         
@@ -500,8 +505,10 @@ class ThemeGridThemeItemNode: ListViewItemNode, ItemListItemNode {
                     for theme in item.themes {
                         let selected = item.currentTheme.index == theme.index
                         
-                        let iconItem = ThemeCarouselThemeIconItem(context: item.context, emojiFile: theme.emoticon.flatMap { item.animatedEmojiStickers[$0]?.first?.file }, themeReference: theme, nightMode: item.nightMode, themeSpecificAccentColors: item.themeSpecificAccentColors, themeSpecificChatWallpapers: item.themeSpecificChatWallpapers, selected: selected, theme: item.theme, strings: item.strings, wallpaper: nil, action: { theme in
-                            item.updatedTheme(theme)
+                        let iconItem = ThemeCarouselThemeIconItem(context: item.context, emojiFile: theme.emoticon.flatMap { item.animatedEmojiStickers[$0]?.first?.file }, themeReference: theme, nightMode: item.nightMode, channelMode: false, themeSpecificAccentColors: item.themeSpecificAccentColors, themeSpecificChatWallpapers: item.themeSpecificChatWallpapers, selected: selected, theme: item.theme, strings: item.strings, wallpaper: nil, action: { theme in
+                            if let theme {
+                                item.updatedTheme(theme)
+                            }
                         }, contextAction: nil)
                         
                         validIds.append(theme.index)
@@ -529,7 +536,7 @@ class ThemeGridThemeItemNode: ListViewItemNode, ItemListItemNode {
         }
     }
     
-    override func animateInsertion(_ currentTimestamp: Double, duration: Double, short: Bool) {
+    override func animateInsertion(_ currentTimestamp: Double, duration: Double, options: ListViewItemAnimationOptions) {
         self.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.4)
     }
 

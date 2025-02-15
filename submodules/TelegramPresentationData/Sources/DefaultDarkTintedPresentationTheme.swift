@@ -228,7 +228,8 @@ public func customizeDefaultDarkTintedPresentationTheme(theme: PresentationTheme
                     bottomColor: accentColor?.withMultiplied(hue: 0.98, saturation: 0.268, brightness: 0.39)
                 ),
                 foregroundColor: additionalBackgroundColor
-            )
+            ),
+            storySeenColors: mainForegroundColor.flatMap { mainForegroundColor in PresentationThemeGradientColors(topColor: mainForegroundColor, bottomColor: mainForegroundColor) }
         )
         actionSheet = actionSheet.withUpdated(
             opaqueItemBackgroundColor: mainBackgroundColor,
@@ -449,6 +450,12 @@ public func customizeDefaultDarkTintedPresentationTheme(theme: PresentationTheme
             panelContentControlVibrantOverlayColor: mainSecondaryTextColor?.withAlphaComponent(0.3),
             panelContentControlOpaqueOverlayColor: mainSecondaryTextColor?.withAlphaComponent(0.3),
             panelContentControlOpaqueSelectionColor: mainSecondaryTextColor?.withAlphaComponent(0.3),
+            panelContentVibrantSearchOverlayColor: mainSecondaryTextColor?.withAlphaComponent(0.3),
+            panelContentVibrantSearchOverlaySelectedColor: mainSecondaryTextColor?.withAlphaComponent(0.3),
+            panelContentVibrantSearchOverlayHighlightColor: mainSecondaryTextColor?.withAlphaComponent(0.3 * 0.5),
+            panelContentOpaqueSearchOverlayColor: mainSecondaryTextColor?.withAlphaComponent(0.3),
+            panelContentOpaqueSearchOverlaySelectedColor: mainSecondaryTextColor?.withAlphaComponent(0.3),
+            panelContentOpaqueSearchOverlayHighlightColor: mainSecondaryTextColor?.withAlphaComponent(0.3 * 0.5),
             stickersBackgroundColor: additionalBackgroundColor,
             stickersSectionTextColor: mainSecondaryTextColor?.withAlphaComponent(0.5),
             stickersSearchBackgroundColor: accentColor?.withMultiplied(hue: 1.009, saturation: 0.621, brightness: 0.15),
@@ -714,7 +721,10 @@ public func makeDefaultDarkTintedPresentationTheme(extendingThemeReference: Pres
         secretIconColor: UIColor(rgb: 0x89df9e),
         pinnedArchiveAvatarColor: PresentationThemeArchiveAvatarColors(backgroundColors: PresentationThemeGradientColors(topColor: UIColor(rgb: 0x72d5fd), bottomColor: UIColor(rgb: 0x2a9ef1)), foregroundColor: .white),
         unpinnedArchiveAvatarColor: PresentationThemeArchiveAvatarColors(backgroundColors: PresentationThemeGradientColors(topColor: accentColor.withMultiplied(hue: 0.985, saturation: 0.268, brightness: 0.47), bottomColor: accentColor.withMultiplied(hue: 0.98, saturation: 0.268, brightness: 0.39)), foregroundColor: additionalBackgroundColor),
-        onlineDotColor: UIColor(rgb: 0x4cc91f)
+        onlineDotColor: UIColor(rgb: 0x4cc91f),
+        storyUnseenColors: PresentationThemeGradientColors(topColor: UIColor(rgb: 0x34C76F), bottomColor: UIColor(rgb: 0x3DA1FD)),
+        storyUnseenPrivateColors: PresentationThemeGradientColors(topColor: UIColor(rgb: 0x7CD636), bottomColor: UIColor(rgb: 0x26B470)),
+        storySeenColors: PresentationThemeGradientColors(topColor: mainForegroundColor, bottomColor: mainForegroundColor)
     )
     
     let buttonStrokeColor = accentColor.withMultiplied(hue: 1.014, saturation: 0.56, brightness: 0.64).withAlphaComponent(0.15)
@@ -734,6 +744,10 @@ public func makeDefaultDarkTintedPresentationTheme(extendingThemeReference: Pres
                     reactionInactiveForeground: UIColor(rgb: 0xffffff, alpha: 1.0),
                     reactionActiveBackground: accentColor,
                     reactionActiveForeground: UIColor(rgb: 0xffffff, alpha: 1.0),
+                    reactionStarsInactiveBackground: UIColor(rgb: 0xFEF1D4, alpha: 1.0),
+                    reactionStarsInactiveForeground: UIColor(rgb: 0xD3720A),
+                    reactionStarsActiveBackground: UIColor(rgb: 0xD3720A, alpha: 1.0),
+                    reactionStarsActiveForeground: .white,
                     reactionInactiveMediaPlaceholder: UIColor(rgb: 0x000000, alpha: 0.1),
                     reactionActiveMediaPlaceholder: UIColor(rgb: 0x000000, alpha: 0.1)
                 ),
@@ -746,6 +760,10 @@ public func makeDefaultDarkTintedPresentationTheme(extendingThemeReference: Pres
                     reactionInactiveForeground: UIColor(rgb: 0xffffff, alpha: 1.0),
                     reactionActiveBackground: accentColor,
                     reactionActiveForeground: UIColor(rgb: 0xffffff, alpha: 1.0),
+                    reactionStarsInactiveBackground: UIColor(rgb: 0xFEF1D4, alpha: 1.0),
+                    reactionStarsInactiveForeground: UIColor(rgb: 0xD3720A),
+                    reactionStarsActiveBackground: UIColor(rgb: 0xD3720A, alpha: 1.0),
+                    reactionStarsActiveForeground: .white,
                     reactionInactiveMediaPlaceholder: UIColor(rgb: 0x000000, alpha: 0.1),
                     reactionActiveMediaPlaceholder: UIColor(rgb: 0x000000, alpha: 0.1)
                 )
@@ -762,6 +780,10 @@ public func makeDefaultDarkTintedPresentationTheme(extendingThemeReference: Pres
                     reactionInactiveForeground: UIColor(rgb: 0xffffff),
                     reactionActiveBackground: UIColor(rgb: 0xffffff, alpha: 1.0),
                     reactionActiveForeground: .clear,
+                    reactionStarsInactiveBackground: UIColor(rgb: 0xFEF1D4, alpha: 1.0),
+                    reactionStarsInactiveForeground: UIColor(rgb: 0xD3720A),
+                    reactionStarsActiveBackground: UIColor(rgb: 0xD3720A, alpha: 1.0),
+                    reactionStarsActiveForeground: .white,
                     reactionInactiveMediaPlaceholder: UIColor(rgb: 0x000000, alpha: 0.1),
                     reactionActiveMediaPlaceholder: UIColor(rgb: 0x000000, alpha: 0.1)
                 ),
@@ -774,6 +796,10 @@ public func makeDefaultDarkTintedPresentationTheme(extendingThemeReference: Pres
                     reactionInactiveForeground: UIColor(rgb: 0xffffff),
                     reactionActiveBackground: UIColor(rgb: 0xffffff, alpha: 1.0),
                     reactionActiveForeground: .clear,
+                    reactionStarsInactiveBackground: UIColor(rgb: 0xFEF1D4, alpha: 1.0),
+                    reactionStarsInactiveForeground: UIColor(rgb: 0xD3720A),
+                    reactionStarsActiveBackground: UIColor(rgb: 0xD3720A, alpha: 1.0),
+                    reactionStarsActiveForeground: .white,
                     reactionInactiveMediaPlaceholder: UIColor(rgb: 0x000000, alpha: 0.1),
                     reactionActiveMediaPlaceholder: UIColor(rgb: 0x000000, alpha: 0.1)
                 )
@@ -789,6 +815,10 @@ public func makeDefaultDarkTintedPresentationTheme(extendingThemeReference: Pres
                 reactionInactiveForeground: UIColor(rgb: 0xffffff),
                 reactionActiveBackground: accentColor,
                 reactionActiveForeground: UIColor(rgb: 0xffffff),
+                reactionStarsInactiveBackground: UIColor(rgb: 0xFEF1D4, alpha: 1.0),
+                reactionStarsInactiveForeground: UIColor(rgb: 0xD3720A),
+                reactionStarsActiveBackground: UIColor(rgb: 0xD3720A, alpha: 1.0),
+                reactionStarsActiveForeground: .white,
                 reactionInactiveMediaPlaceholder: UIColor(rgb: 0x000000, alpha: 0.1),
                 reactionActiveMediaPlaceholder: UIColor(rgb: 0x000000, alpha: 0.1)
             ),
@@ -801,6 +831,10 @@ public func makeDefaultDarkTintedPresentationTheme(extendingThemeReference: Pres
                 reactionInactiveForeground: UIColor(rgb: 0xffffff),
                 reactionActiveBackground: accentColor,
                 reactionActiveForeground: UIColor(rgb: 0xffffff),
+                reactionStarsInactiveBackground: UIColor(rgb: 0xFEF1D4, alpha: 1.0),
+                reactionStarsInactiveForeground: UIColor(rgb: 0xD3720A),
+                reactionStarsActiveBackground: UIColor(rgb: 0xD3720A, alpha: 1.0),
+                reactionStarsActiveForeground: .white,
                 reactionInactiveMediaPlaceholder: UIColor(rgb: 0x000000, alpha: 0.1),
                 reactionActiveMediaPlaceholder: UIColor(rgb: 0x000000, alpha: 0.1)
             )
@@ -866,6 +900,12 @@ public func makeDefaultDarkTintedPresentationTheme(extendingThemeReference: Pres
         panelContentControlVibrantSelectionColor: mainSecondaryTextColor.withAlphaComponent(0.1),
         panelContentControlOpaqueOverlayColor: mainSecondaryTextColor.withAlphaComponent(0.1),
         panelContentControlOpaqueSelectionColor: mainSecondaryTextColor.withAlphaComponent(0.1),
+        panelContentVibrantSearchOverlayColor: mainSecondaryTextColor.withAlphaComponent(0.5),
+        panelContentVibrantSearchOverlaySelectedColor: mainSecondaryTextColor.withAlphaComponent(0.5),
+        panelContentVibrantSearchOverlayHighlightColor: mainSecondaryTextColor.withAlphaComponent(0.1),
+        panelContentOpaqueSearchOverlayColor: mainSecondaryTextColor.withAlphaComponent(0.5),
+        panelContentOpaqueSearchOverlaySelectedColor: mainSecondaryTextColor.withAlphaComponent(0.5),
+        panelContentOpaqueSearchOverlayHighlightColor: mainSecondaryTextColor.withAlphaComponent(0.1),
         stickersBackgroundColor: additionalBackgroundColor,
         stickersSectionTextColor: mainSecondaryTextColor.withAlphaComponent(0.5),
         stickersSearchBackgroundColor: accentColor.withMultiplied(hue: 1.009, saturation: 0.621, brightness: 0.15),
@@ -880,6 +920,7 @@ public func makeDefaultDarkTintedPresentationTheme(extendingThemeReference: Pres
         panelSeparatorColor: mainBackgroundColor,
         panelBackgroundColor: accentColor.withMultiplied(hue: 1.048, saturation: 0.378, brightness: 0.13),
         buttonFillColor: accentColor.withMultiplied(hue: 1.0, saturation: 0.085, brightness: 0.38),
+        buttonHighlightColor: UIColor(rgb: 0xffffff, alpha: 0.2),
         buttonStrokeColor: accentColor.withMultiplied(hue: 1.019, saturation: 0.39, brightness: 0.07),
         buttonHighlightedFillColor: accentColor.withMultiplied(hue: 1.0, saturation: 0.085, brightness: 0.38).withAlphaComponent(0.7),
         buttonHighlightedStrokeColor: accentColor.withMultiplied(hue: 1.019, saturation: 0.39, brightness: 0.07),

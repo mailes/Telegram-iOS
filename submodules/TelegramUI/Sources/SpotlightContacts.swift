@@ -1,10 +1,8 @@
 import Foundation
 import UIKit
 import SwiftSignalKit
-import Postbox
 import TelegramCore
 import Display
-
 import CoreSpotlight
 import MobileCoreServices
 
@@ -31,7 +29,7 @@ private struct SpotlightIndexStorageItem: Codable, Equatable {
 private final class SpotlightIndexStorage {
     private let appBasePath: String
     private let basePath: String
-    private var items: [PeerId: SpotlightIndexStorageItem] = [:]
+    private var items: [EnginePeer.Id: SpotlightIndexStorageItem] = [:]
     
     init(appBasePath: String, basePath: String) {
         self.appBasePath = appBasePath
@@ -46,7 +44,7 @@ private final class SpotlightIndexStorage {
         }
     }
     
-    private func path(peerId: PeerId) -> String {
+    private func path(peerId: EnginePeer.Id) -> String {
         return self.basePath + "/p:\(UInt64(bitPattern: peerId.toInt64()))"
     }
     
@@ -70,7 +68,7 @@ private final class SpotlightIndexStorage {
             if let path = url.path, let directoryName = url.lastPathComponent, directoryName.hasPrefix("p:") {
                 let peerIdString = directoryName[directoryName.index(directoryName.startIndex, offsetBy: 2)...]
                 if let peerIdValue = UInt64(peerIdString) {
-                    let peerId = PeerId(Int64(bitPattern: peerIdValue))
+                    let peerId = EnginePeer.Id(Int64(bitPattern: peerIdValue))
                     
                     let item: SpotlightIndexStorageItem
                     if let itemData = try? Data(contentsOf: URL(fileURLWithPath: path + "/data.json")), let decodedItem = try? JSONDecoder().decode(SpotlightIndexStorageItem.self, from: itemData) {
@@ -87,9 +85,9 @@ private final class SpotlightIndexStorage {
         }
     }
     
-    func update(items: [PeerId: SpotlightIndexStorageItem]) {
+    func update(items: [EnginePeer.Id: SpotlightIndexStorageItem]) {
         let validPeerIds = Set(items.keys)
-        var removePeerIds: [PeerId] = []
+        var removePeerIds: [EnginePeer.Id] = []
         for (peerId, _) in self.items {
             if !validPeerIds.contains(peerId) {
                 removePeerIds.append(peerId)
@@ -112,7 +110,7 @@ private final class SpotlightIndexStorage {
             let previousItem = self.items[peerId]
             if previousItem != item {
                 var updatedAvatarSourcePath: String?
-                if let avatarSourcePath = item.avatarSourcePath, let _ = fileSize(self.appBasePath + "/" + avatarSourcePath) {
+                if let avatarSourcePath = item.avatarSourcePath, FileManager.default.fileExists(atPath: self.appBasePath + "/" + avatarSourcePath) {
                     updatedAvatarSourcePath = avatarSourcePath
                 }
                 
@@ -134,16 +132,17 @@ private final class SpotlightIndexStorage {
                     
                     if let updatedAvatarSourcePathValue = updatedAvatarSourcePath, let avatarData = try? Data(contentsOf: URL(fileURLWithPath: self.appBasePath + "/" + updatedAvatarSourcePathValue)), let image = UIImage(data: avatarData) {
                         let size = CGSize(width: 120.0, height: 120.0)
-                        let context = DrawingContext(size: size, scale: 1.0, clear: true)
-                        context.withFlippedContext { c in
-                            c.draw(image.cgImage!, in: CGRect(origin: CGPoint(), size: size))
-                            c.setBlendMode(.destinationOut)
-                            c.draw(roundCorners.cgImage!, in: CGRect(origin: CGPoint(), size: size))
-                        }
-                        if let resultImage = context.generateImage(), let resultData = resultImage.pngData(), let _ = try? resultData.write(to: URL(fileURLWithPath: avatarPath)) {
-                            resolvedAvatarPath = avatarPath
-                        } else {
-                            updatedAvatarSourcePath = nil
+                        if let context = DrawingContext(size: size, scale: 1.0, clear: true) {
+                            context.withFlippedContext { c in
+                                c.draw(image.cgImage!, in: CGRect(origin: CGPoint(), size: size))
+                                c.setBlendMode(.destinationOut)
+                                c.draw(roundCorners.cgImage!, in: CGRect(origin: CGPoint(), size: size))
+                            }
+                            if let resultImage = context.generateImage(), let resultData = resultImage.pngData(), let _ = try? resultData.write(to: URL(fileURLWithPath: avatarPath)) {
+                                resolvedAvatarPath = avatarPath
+                            } else {
+                                updatedAvatarSourcePath = nil
+                            }
                         }
                     }
                 }
@@ -182,17 +181,43 @@ private final class SpotlightIndexStorage {
     }
 }
 
-private func manageableSpotlightContacts(appBasePath: String, accounts: Signal<[Account], NoError>) -> Signal<[PeerId: SpotlightIndexStorageItem], NoError> {
+private func manageableSpotlightContacts(appBasePath: String, accounts: Signal<[Account], NoError>) -> Signal<[EnginePeer.Id: SpotlightIndexStorageItem], NoError> {
     let queue = Queue()
     return accounts
-    |> mapToSignal { accounts -> Signal<[[PeerId: SpotlightIndexStorageItem]], NoError> in
-        return combineLatest(queue: queue, accounts.map { account -> Signal<[PeerId: SpotlightIndexStorageItem], NoError> in
-            return TelegramEngine(account: account).data.subscribe(
-                TelegramEngine.EngineData.Item.Contacts.List(includePresences: false)
+    |> mapToSignal { accounts -> Signal<[[EnginePeer.Id: SpotlightIndexStorageItem]], NoError> in
+        return combineLatest(queue: queue, accounts.map { account -> Signal<[EnginePeer.Id: SpotlightIndexStorageItem], NoError> in
+            let engine = TelegramEngine(account: account)
+            let recentApps = engine.peers.recentApps()
+            |> mapToSignal { peerIds -> Signal<[EnginePeer], NoError> in
+                return engine.data.get(
+                    EngineDataMap(
+                        peerIds.map { peerId -> TelegramEngine.EngineData.Item.Peer.Peer in
+                            return TelegramEngine.EngineData.Item.Peer.Peer(id: peerId)
+                        }
+                    )
+                ) 
+                |> map { result -> [EnginePeer] in
+                    var peers: [EnginePeer] = []
+                    for (_, maybePeer) in result {
+                        if let peer = maybePeer {
+                            peers.append(peer)
+                        }
+                    }
+                    return peers
+                }
+            }
+            return combineLatest(
+                engine.data.subscribe(
+                    TelegramEngine.EngineData.Item.Contacts.List(includePresences: false)
+                ),
+                recentApps
             )
-            |> map { view -> [EnginePeer.Id: SpotlightIndexStorageItem] in
+            |> map { view, recentApps -> [EnginePeer.Id: SpotlightIndexStorageItem] in
                 var result: [EnginePeer.Id: SpotlightIndexStorageItem] = [:]
-                for peer in view.peers {
+                var peers: [EnginePeer] = []
+                peers.append(contentsOf: view.peers)
+                peers.append(contentsOf: recentApps)
+                for peer in peers {
                     if case let .user(user) = peer {
                         let avatarSourcePath = smallestImageRepresentation(user.photo).flatMap { representation -> String? in
                             let resourcePath = account.postbox.mediaBox.resourcePath(representation.resource)
@@ -252,7 +277,7 @@ private final class SpotlightDataContextImpl {
             }
             return true
         }))
-        |> deliverOn(self.queue)).start(next: { [weak self] items in
+        |> deliverOn(self.queue)).startStrict(next: { [weak self] items in
             guard let strongSelf = self else {
                 return
             }
@@ -260,7 +285,11 @@ private final class SpotlightDataContextImpl {
         })
     }
     
-    private func updateContacts(items: [PeerId: SpotlightIndexStorageItem]) {
+    deinit {
+        self.listDisposable?.dispose()
+    }
+    
+    private func updateContacts(items: [EnginePeer.Id: SpotlightIndexStorageItem]) {
         self.indexStorage.update(items: items)
     }
 }

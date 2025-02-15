@@ -41,7 +41,7 @@ private final class BotCheckoutNativeCardEntryScrollerNode: ASDisplayNode {
     }
 }
 
-final class BotCheckoutNativeCardEntryControllerNode: ViewControllerTracingNode, UIScrollViewDelegate {
+final class BotCheckoutNativeCardEntryControllerNode: ViewControllerTracingNode, ASScrollViewDelegate {
     private let context: AccountContext
     private weak var navigationBar: NavigationBar?
     private let provider: BotCheckoutNativeCardEntryController.Provider
@@ -115,7 +115,7 @@ final class BotCheckoutNativeCardEntryControllerNode: ViewControllerTracingNode,
 
                 sectionItems.append(BotPaymentHeaderItemNode(text: strings.Checkout_NewCard_CardholderNameTitle))
 
-                let cardholderItem = BotPaymentFieldItemNode(title: "", placeholder: strings.Checkout_NewCard_CardholderNamePlaceholder, contentType: .name)
+                let cardholderItem = BotPaymentFieldItemNode(title: "", placeholder: strings.Checkout_NewCard_CardholderNamePlaceholder, contentType: .asciiName)
                 self.cardholderItem = cardholderItem
                 sectionItems.append(cardholderItem)
 
@@ -183,7 +183,7 @@ final class BotCheckoutNativeCardEntryControllerNode: ViewControllerTracingNode,
         self.scrollNode.view.alwaysBounceVertical = true
         self.scrollNode.view.showsVerticalScrollIndicator = false
         self.scrollNode.view.showsHorizontalScrollIndicator = false
-        self.scrollNode.view.delegate = self
+        self.scrollNode.view.delegate = self.wrappedScrollViewDelegate
         
         self.addSubnode(self.scrollNode)
         
@@ -310,9 +310,11 @@ final class BotCheckoutNativeCardEntryControllerNode: ViewControllerTracingNode,
             }))
 
             self.updateDone()
-        case let .smartglobal(isTesting, publicToken):
+        case let .smartglobal(isTesting, publicToken, customTokenizeUrl):
             let url: String
-            if isTesting {
+            if let customTokenizeUrl {
+                url = customTokenizeUrl
+            } else if isTesting {
                 url = "https://tgb-playground.smart-glocal.com/cds/v1/tokenize/card"
             } else {
                 url = "https://tgb.smart-glocal.com/cds/v1/tokenize/card"

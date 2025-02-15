@@ -13,10 +13,16 @@ import MosaicLayout
 import WallpaperBackgroundNode
 import AccountContext
 import ChatMessageBackground
+import ChatSendMessageActionUI
+import ComponentFlow
+import ComponentDisplayAdapters
+import MediaAssetsContext
 
 private class MediaPickerSelectedItemNode: ASDisplayNode {
     let asset: TGMediaEditableItem
     private let interaction: MediaPickerInteraction?
+    private let enableAnimations: Bool
+    private let isExternalPreview: Bool
     
     private let imageNode: ImageNode
     private var checkNode: InteractiveCheckNode?
@@ -24,6 +30,9 @@ private class MediaPickerSelectedItemNode: ASDisplayNode {
     private var durationTextNode: ImmediateTextNode?
     
     private var adjustmentsDisposable: Disposable?
+    
+    private let spoilerDisposable = MetaDisposable()
+    private var spoilerNode: SpoilerOverlayNode?
     
     private var theme: PresentationTheme?
     
@@ -53,14 +62,16 @@ private class MediaPickerSelectedItemNode: ASDisplayNode {
     
     private var videoDuration: Double?
     
-    init(asset: TGMediaEditableItem, interaction: MediaPickerInteraction?) {
+    init(asset: TGMediaEditableItem, interaction: MediaPickerInteraction?, enableAnimations: Bool, isExternalPreview: Bool) {
+        self.asset = asset
+        self.interaction = interaction
+        self.enableAnimations = enableAnimations
+        self.isExternalPreview = isExternalPreview
+        
         self.imageNode = ImageNode()
         self.imageNode.contentMode = .scaleAspectFill
         self.imageNode.clipsToBounds = true
         self.imageNode.animateFirstTransition = false
-        
-        self.asset = asset
-        self.interaction = interaction
         
         super.init()
         
@@ -68,43 +79,90 @@ private class MediaPickerSelectedItemNode: ASDisplayNode {
         
         self.addSubnode(self.imageNode)
         
-        if asset.isVideo, let editingState = interaction?.editingState {
-            func adjustmentsChangedSignal(editingState: TGMediaEditingContext) -> Signal<TGMediaEditAdjustments?, NoError> {
-                return Signal { subscriber in
-                    let disposable = editingState.adjustmentsSignal(for: asset).start(next: { next in
-                        if let next = next as? TGMediaEditAdjustments {
-                            subscriber.putNext(next)
-                        } else if next == nil {
-                            subscriber.putNext(nil)
+        if let editingState = interaction?.editingState {
+            if asset.isVideo {
+                func adjustmentsChangedSignal(editingState: TGMediaEditingContext) -> Signal<TGMediaEditAdjustments?, NoError> {
+                    return Signal { subscriber in
+                        let disposable = editingState.adjustmentsSignal(for: asset).start(next: { next in
+                            if let next = next as? TGMediaEditAdjustments {
+                                subscriber.putNext(next)
+                            } else if next == nil {
+                                subscriber.putNext(nil)
+                            }
+                        }, error: nil, completed: {})
+                        return ActionDisposable {
+                            disposable?.dispose()
                         }
-                    }, error: nil, completed: {})
-                    return ActionDisposable {
-                        disposable?.dispose()
                     }
+                }
+                
+                self.adjustmentsDisposable = (adjustmentsChangedSignal(editingState: editingState)
+                                              |> deliverOnMainQueue).start(next: { [weak self] adjustments in
+                    if let strongSelf = self {
+                        let duration: Double
+                        if let adjustments = adjustments as? TGVideoEditAdjustments, adjustments.trimApplied() {
+                            duration = adjustments.trimEndValue - adjustments.trimStartValue
+                        } else {
+                            duration = asset.originalDuration ?? 0.0
+                        }
+                        strongSelf.videoDuration = duration
+                        
+                        if let size = strongSelf.validLayout {
+                            strongSelf.updateLayout(size: size, transition: .immediate)
+                        }
+                    }
+                })
+            }
+            
+            let spoilerSignal = Signal<Bool, NoError> { subscriber in
+                if let signal = editingState.spoilerSignal(forIdentifier: asset.uniqueIdentifier) {
+                    let disposable = signal.start(next: { next in
+                        if let next = next as? Bool {
+                            subscriber.putNext(next)
+                        }
+                    }, error: { _ in
+                    }, completed: nil)!
+                    
+                    return ActionDisposable {
+                        disposable.dispose()
+                    }
+                } else {
+                    return EmptyDisposable
                 }
             }
             
-            self.adjustmentsDisposable = (adjustmentsChangedSignal(editingState: editingState)
-            |> deliverOnMainQueue).start(next: { [weak self] adjustments in
-                if let strongSelf = self {
-                    let duration: Double
-                    if let adjustments = adjustments as? TGVideoEditAdjustments, adjustments.trimApplied() {
-                        duration = adjustments.trimEndValue - adjustments.trimStartValue
-                    } else {
-                        duration = asset.originalDuration ?? 0.0
-                    }
-                    strongSelf.videoDuration = duration
+            let priceSignal = Signal<Int64?, NoError> { subscriber in
+                if let signal = editingState.priceSignal(forIdentifier: asset.uniqueIdentifier) {
+                    let disposable = signal.start(next: { next in
+                        subscriber.putNext(next as? Int64)
+                    }, error: { _ in
+                    }, completed: nil)!
                     
-                    if let size = strongSelf.validLayout {
-                        strongSelf.updateLayout(size: size, transition: .immediate)
+                    return ActionDisposable {
+                        disposable.dispose()
                     }
+                } else {
+                    return EmptyDisposable
                 }
-            })
+            }
+            
+            self.spoilerDisposable.set((combineLatest(spoilerSignal, priceSignal)
+            |> deliverOnMainQueue).start(next: { [weak self] hasSpoiler, price in
+                guard let strongSelf = self else {
+                    return
+                }
+                strongSelf.updateHasSpoiler(hasSpoiler, price: price)
+            }))
+        }
+        
+        self.imageNode.contentUpdated = { [weak self] image in
+            self?.spoilerNode?.setImage(image)
         }
     }
     
     deinit {
         self.adjustmentsDisposable?.dispose()
+        self.spoilerDisposable.dispose()
     }
     
     override func didLoad() {
@@ -118,6 +176,36 @@ private class MediaPickerSelectedItemNode: ASDisplayNode {
             return
         }
         self.interaction?.openSelectedMedia(asset, self.imageNode.image)
+    }
+    
+    private var didSetupSpoiler = false
+    private func updateHasSpoiler(_ hasSpoiler: Bool, price: Int64?) {
+        var animated = true
+        if !self.didSetupSpoiler {
+            animated = false
+            self.didSetupSpoiler = true
+        }
+    
+        if hasSpoiler {
+            if self.spoilerNode == nil {
+                let spoilerNode = SpoilerOverlayNode(enableAnimations: self.enableAnimations)
+                self.insertSubnode(spoilerNode, aboveSubnode: self.imageNode)
+                self.spoilerNode = spoilerNode
+                
+                spoilerNode.setImage(self.imageNode.image)
+                
+                if animated {
+                    spoilerNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.2)
+                }
+            }
+            self.spoilerNode?.update(size: self.bounds.size, transition: .immediate)
+            self.spoilerNode?.frame = CGRect(origin: .zero, size: self.bounds.size)
+        } else if let spoilerNode = self.spoilerNode {
+            self.spoilerNode = nil
+            spoilerNode.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.2, removeOnCompletion: false, completion: { [weak spoilerNode] _ in
+                spoilerNode?.removeFromSupernode()
+            })
+        }
     }
     
     func setup(size: CGSize) {
@@ -189,7 +277,9 @@ private class MediaPickerSelectedItemNode: ASDisplayNode {
             let checkNode = InteractiveCheckNode(theme: CheckNodeTheme(theme: theme, style: .overlay))
             checkNode.valueChanged = { [weak self] value in
                 if let strongSelf = self, let interaction = strongSelf.interaction, let selectableItem = strongSelf.asset as? TGMediaSelectableItem {
-                    interaction.toggleSelection(selectableItem, value, true)
+                    if !interaction.toggleSelection(selectableItem, value, true) {
+                        strongSelf.checkNode?.setSelected(false, animated: false)
+                    }
                 }
             }
             self.addSubnode(checkNode)
@@ -210,7 +300,7 @@ private class MediaPickerSelectedItemNode: ASDisplayNode {
             
             if let checkNode = self.checkNode {
                 let transition = ContainedViewLayoutTransition.animated(duration: 0.2, curve: .easeInOut)
-                transition.updateAlpha(node: checkNode, alpha: selectionState.count() < 2 ? 0.0 : 1.0)
+                transition.updateAlpha(node: checkNode, alpha: (self.isExternalPreview || selectionState.count() < 2) ? 0.0 : 1.0)
             }
         }
     }
@@ -220,14 +310,18 @@ private class MediaPickerSelectedItemNode: ASDisplayNode {
         self.isHidden = self.interaction?.hiddenMediaId == asset.uniqueIdentifier
         if !self.isHidden && wasHidden {
             if let checkNode = self.checkNode, checkNode.alpha > 0.0 {
-                checkNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.2)
+                checkNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.3)
             }
             
             if let durationTextNode = self.durationTextNode, durationTextNode.alpha > 0.0 {
-                durationTextNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.2)
+                durationTextNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.3)
             }
             if let durationBackgroundNode = self.durationBackgroundNode, durationBackgroundNode.alpha > 0.0 {
-                durationBackgroundNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.2)
+                durationBackgroundNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.3)
+            }
+            
+            if let spoilerNode = self.spoilerNode, spoilerNode.alpha > 0.0 {
+                spoilerNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.3)
             }
         }
     }
@@ -248,6 +342,11 @@ private class MediaPickerSelectedItemNode: ASDisplayNode {
         self.validLayout = size
         
         transition.updateFrame(node: self.imageNode, frame: CGRect(origin: CGPoint(), size: size))
+        
+        if let spoilerNode = self.spoilerNode {
+            transition.updateFrame(node: spoilerNode, frame: CGRect(origin: CGPoint(), size: size))
+            spoilerNode.update(size: size, transition: transition)
+        }
         
         let checkSize = CGSize(width: 29.0, height: 29.0)
         if let checkNode = self.checkNode {
@@ -304,7 +403,7 @@ private class MediaPickerSelectedItemNode: ASDisplayNode {
         return view
     }
     
-    func animateFrom(_ view: UIView) {
+    func animateFrom(_ view: UIView, transition: ContainedViewLayoutTransition) {
         view.alpha = 0.0
         
         let frame = view.convert(view.bounds, to: self.supernode?.view)
@@ -314,13 +413,19 @@ private class MediaPickerSelectedItemNode: ASDisplayNode {
         self.durationBackgroundNode?.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.2)
         
         self.updateLayout(size: frame.size, transition: .immediate)
-        self.updateLayout(size: targetFrame.size, transition: .animated(duration: 0.25, curve: .spring))
-        self.layer.animateFrame(from: frame, to: targetFrame, duration: 0.25, timingFunction: kCAMediaTimingFunctionSpring, completion: { [weak view] _ in
-            view?.alpha = 1.0
+        self.updateLayout(size: targetFrame.size, transition: transition)
+        transition.animateFrame(layer: self.layer, from: frame, to: targetFrame, completion: { [weak self, weak view] _ in
+            guard let self else {
+                view?.alpha = 1.0
+                return
+            }
+            if !self.isExternalPreview {
+                view?.alpha = 1.0
+            }
         })
     }
     
-    func animateTo(_ view: UIView, completion: @escaping (Bool) -> Void) {
+    func animateTo(_ view: UIView, dustNode: ASDisplayNode?, transition: ContainedViewLayoutTransition, completion: @escaping (Bool) -> Void) {
         view.alpha = 0.0
         
         let frame = self.frame
@@ -331,13 +436,31 @@ private class MediaPickerSelectedItemNode: ASDisplayNode {
         self.durationTextNode?.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.2, removeOnCompletion: false)
         self.durationBackgroundNode?.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.2, removeOnCompletion: false)
         
+        var dustSupernode: ASDisplayNode?
+        var dustPosition: CGPoint?
+        if let dustNode = dustNode {
+            dustSupernode = dustNode.supernode
+            dustPosition = dustNode.position
+            
+            self.addSubnode(dustNode)
+            dustNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.25)
+            
+            transition.animatePositionAdditive(layer: dustNode.layer, offset: CGPoint(x: frame.width / 2.0, y: frame.height / 2.0), to: dustNode.position)
+            self.spoilerNode?.dustNode.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.25, removeOnCompletion: false)
+        }
+        
         self.corners = []
-        self.updateLayout(size: targetFrame.size, transition: .animated(duration: 0.25, curve: .spring))
-        self.layer.animateFrame(from: frame, to: targetFrame, duration: 0.25, timingFunction: kCAMediaTimingFunctionSpring, removeOnCompletion: false, completion: { [weak view, weak self] _ in
+        self.updateLayout(size: targetFrame.size, transition: transition)
+        transition.animateFrame(layer: self.layer, from: frame, to: targetFrame, removeOnCompletion: false, completion: { [weak view, weak self] _ in
             view?.alpha = 1.0
             
             self?.durationTextNode?.layer.removeAllAnimations()
             self?.durationBackgroundNode?.layer.removeAllAnimations()
+            
+            if let dustNode = dustNode {
+                dustSupernode?.addSubnode(dustNode)
+                dustNode.position = dustPosition ?? dustNode.position
+            }
             
             var animateCheckNode = false
             if let strongSelf = self, let checkNode = strongSelf.checkNode, checkNode.alpha.isZero {
@@ -350,8 +473,85 @@ private class MediaPickerSelectedItemNode: ASDisplayNode {
             
             Queue.mainQueue().after(0.01) {
                 self?.layer.removeAllAnimations()
+                self?.spoilerNode?.dustNode.layer.removeAllAnimations()
             }
         })
+    }
+}
+
+final class PriceNode: ASDisplayNode {
+    let backgroundNode: NavigationBackgroundNode
+    let iconNode: ASImageNode
+    let lockNode: ASImageNode
+    let labelNode: ImmediateTextNode
+    
+    override init() {
+        self.backgroundNode = NavigationBackgroundNode(color: UIColor(rgb: 0x000000, alpha: 0.35), enableBlur: true)
+        
+        self.lockNode = ASImageNode()
+        self.lockNode.displaysAsynchronously = false
+        self.lockNode.image = generateTintedImage(image: UIImage(bundleImageName: "Media Grid/Lock"), color: .white)
+        
+        self.iconNode = ASImageNode()
+        self.iconNode.displaysAsynchronously = false
+        self.iconNode.image = UIImage(bundleImageName: "Premium/Stars/StarSmall")
+
+        self.labelNode = ImmediateTextNode()
+        
+        super.init()
+        
+        self.isUserInteractionEnabled = false
+        
+        self.addSubnode(self.backgroundNode)
+        self.backgroundNode.addSubnode(self.lockNode)
+        self.backgroundNode.addSubnode(self.iconNode)
+        self.backgroundNode.addSubnode(self.labelNode)
+    }
+        
+    func update(size: CGSize, price: Int64?, small: Bool, transition: ContainedViewLayoutTransition) {
+        var nodeSize = CGSize(width: 50.0, height: 34.0)
+        var labelSize: CGSize = .zero
+        
+        var backgroundTransition = transition
+        let labelTransition = ContainedViewLayoutTransition.animated(duration: 0.2, curve: .easeInOut)
+        if let price {
+            self.labelNode.attributedText = NSAttributedString(string: "\(price)", font: Font.semibold(15.0), textColor: .white)
+            
+            labelSize = self.labelNode.updateLayout(CGSize(width: 240.0, height: 50.0))
+            nodeSize.width = labelSize.width + 40.0
+            
+            if self.labelNode.alpha != 1.0 && self.backgroundNode.frame.width > 0.0 {
+                backgroundTransition = labelTransition
+            }
+            
+            labelTransition.updateAlpha(node: self.labelNode, alpha: 1.0)
+            labelTransition.updateAlpha(node: self.lockNode, alpha: 0.0)
+        } else {
+            if self.labelNode.alpha != 0.0 && self.backgroundNode.frame.width > 0.0 {
+                backgroundTransition = labelTransition
+            }
+            
+            labelTransition.updateAlpha(node: self.labelNode, alpha: 0.0)
+            labelTransition.updateAlpha(node: self.lockNode, alpha: 1.0)
+        }
+        
+
+        self.backgroundNode.update(size: nodeSize, cornerRadius: 17.0, transition: backgroundTransition)
+        backgroundTransition.updateFrame(node: self.backgroundNode, frame: CGRect(origin: CGPoint(x: floor((size.width - nodeSize.width) / 2.0), y: floor((size.height - nodeSize.height) / 2.0)), size: nodeSize))
+        
+        if let _ = price {
+            if let icon = self.iconNode.image {
+                self.iconNode.frame = CGRect(origin: CGPoint(x: 9.0 - UIScreenPixel, y: floor((nodeSize.height - icon.size.height) / 2.0)), size: icon.size)
+            }
+            self.labelNode.frame = CGRect(origin: CGPoint(x: 30.0, y: floor((nodeSize.height - labelSize.height) / 2.0)), size: labelSize)
+        } else {
+            if let icon = self.iconNode.image {
+                self.iconNode.frame = CGRect(origin: CGPoint(x: 9.0 - UIScreenPixel, y: floor((nodeSize.height - icon.size.height) / 2.0)), size: icon.size)
+            }
+            if let icon = self.lockNode.image {
+                self.lockNode.frame = CGRect(origin: CGPoint(x: 28.0, y: floor((nodeSize.height - icon.size.height) / 2.0)), size: icon.size)
+            }
+        }
     }
 }
 
@@ -373,8 +573,7 @@ private class MessageBackgroundNode: ASDisplayNode {
     
     private var absoluteRect: (CGRect, CGSize)?
     
-    func update(size: CGSize, theme: PresentationTheme, wallpaper: TelegramWallpaper, graphics: PrincipalThemeEssentialGraphics, wallpaperBackgroundNode: WallpaperBackgroundNode, transition: ContainedViewLayoutTransition) {
-        
+    func update(size: CGSize, theme: PresentationTheme, wallpaper: TelegramWallpaper, graphics: PrincipalThemeEssentialGraphics, wallpaperBackgroundNode: WallpaperBackgroundNode?, transition: ContainedViewLayoutTransition) {
         self.backgroundNode.setType(type: .outgoing(.Extracted), highlighted: false, graphics: graphics, maskMode: false, hasWallpaper: wallpaper.hasWallpaper, transition: transition, backgroundNode: wallpaperBackgroundNode)
         self.backgroundWallpaperNode.setType(type: .outgoing(.Extracted), theme: ChatPresentationThemeData(theme: theme, wallpaper: wallpaper), essentialGraphics: graphics, maskMode: true, backgroundNode: wallpaperBackgroundNode)
         self.shadowNode.setType(type: .outgoing(.Extracted), hasWallpaper: wallpaper.hasWallpaper, graphics: graphics)
@@ -399,14 +598,21 @@ private class MessageBackgroundNode: ASDisplayNode {
     }
 }
 
-final class MediaPickerSelectedListNode: ASDisplayNode, UIScrollViewDelegate, UIGestureRecognizerDelegate {
+final class MediaPickerSelectedListNode: ASDisplayNode, ASScrollViewDelegate, ASGestureRecognizerDelegate, ChatSendMessageContextScreenMediaPreview {
     private let context: AccountContext
     private let persistentItems: Bool
+    private let isExternalPreview: Bool
+    private let isObscuredExternalPreview: Bool
+    var globalClippingRect: CGRect?
+    var layoutType: ChatSendMessageContextScreenMediaPreviewLayoutType {
+        return .media
+    }
     
-    fileprivate let wallpaperBackgroundNode: WallpaperBackgroundNode
+    fileprivate var wallpaperBackgroundNode: WallpaperBackgroundNode?
     private let scrollNode: ASScrollNode
     private var backgroundNodes: [Int: MessageBackgroundNode] = [:]
     private var itemNodes: [String: MediaPickerSelectedItemNode] = [:]
+    private var priceNodes: [Int: PriceNode] = [:]
     
     private var reorderFeedback: HapticFeedback?
     private var reorderNode: ReorderingItemNode?
@@ -421,17 +627,29 @@ final class MediaPickerSelectedListNode: ASDisplayNode, UIScrollViewDelegate, UI
     private var didSetReady = false
     private var ready = Promise<Bool>()
     
-    init(context: AccountContext, persistentItems: Bool) {
+    private var contentSize: CGSize = CGSize()
+    
+    var isReady: Signal<Bool, NoError> {
+        return self.ready.get()
+    }
+    
+    init(context: AccountContext, persistentItems: Bool, isExternalPreview: Bool, isObscuredExternalPreview: Bool) {
         self.context = context
         self.persistentItems = persistentItems
+        self.isExternalPreview = isExternalPreview
+        self.isObscuredExternalPreview = isObscuredExternalPreview
         
-        self.wallpaperBackgroundNode = createWallpaperBackgroundNode(context: context, forChatDisplay: true, useSharedAnimationPhase: false, useExperimentalImplementation: context.sharedContext.immediateExperimentalUISettings.experimentalBackground)
-        self.wallpaperBackgroundNode.backgroundColor = .black
         self.scrollNode = ASScrollNode()
+        self.scrollNode.clipsToBounds = false
         
         super.init()
         
-        self.addSubnode(self.wallpaperBackgroundNode)
+        if !self.isExternalPreview {
+            let wallpaperBackgroundNode = createWallpaperBackgroundNode(context: context, forChatDisplay: true, useSharedAnimationPhase: false)
+            wallpaperBackgroundNode.backgroundColor = .black
+            self.wallpaperBackgroundNode = wallpaperBackgroundNode
+            self.addSubnode(wallpaperBackgroundNode)
+        }
         self.addSubnode(self.scrollNode)
     }
     
@@ -442,7 +660,7 @@ final class MediaPickerSelectedListNode: ASDisplayNode, UIScrollViewDelegate, UI
             self.scrollNode.view.contentInsetAdjustmentBehavior = .never
         }
         
-        self.scrollNode.view.delegate = self
+        self.scrollNode.view.delegate = self.wrappedScrollViewDelegate
         self.scrollNode.view.panGestureRecognizer.cancelsTouchesInView = true
         self.scrollNode.view.showsVerticalScrollIndicator = false
         
@@ -479,9 +697,9 @@ final class MediaPickerSelectedListNode: ASDisplayNode, UIScrollViewDelegate, UI
         })
     }
     
-    var getTransitionView: (String ) -> (UIView, (Bool) -> Void)? = { _ in return nil }
+    var getTransitionView: (String) -> (UIView, ASDisplayNode?, (Bool) -> Void)? = { _ in return nil }
     
-    func animateIn(initiated: @escaping () -> Void, completion: @escaping () -> Void = {}) {
+    func animateIn(transition: ContainedViewLayoutTransition, initiated: @escaping () -> Void, completion: @escaping () -> Void = {}) {
         let _ = (self.ready.get()
         |> take(1)
         |> deliverOnMainQueue).start(next: { [weak self] _ in
@@ -492,76 +710,130 @@ final class MediaPickerSelectedListNode: ASDisplayNode, UIScrollViewDelegate, UI
             strongSelf.alpha = 1.0
             initiated()
             
-            strongSelf.wallpaperBackgroundNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.25, completion: { _ in
+            if let wallpaperBackgroundNode = strongSelf.wallpaperBackgroundNode {
+                wallpaperBackgroundNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.25, completion: { _ in
+                    completion()
+                })
+                wallpaperBackgroundNode.layer.animateScale(from: 1.2, to: 1.0, duration: 0.33, timingFunction: kCAMediaTimingFunctionSpring)
+            } else {
                 completion()
-            })
-            strongSelf.wallpaperBackgroundNode.layer.animateScale(from: 1.2, to: 1.0, duration: 0.4, timingFunction: kCAMediaTimingFunctionSpring)
+            }
             
             for (_, backgroundNode) in strongSelf.backgroundNodes {
                 backgroundNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.25, delay: 0.1)
+                if strongSelf.isExternalPreview {
+                    ComponentTransition.immediate.setScale(layer: backgroundNode.layer, scale: 0.001)
+                    transition.updateTransformScale(layer: backgroundNode.layer, scale: 1.0)
+                }
+            }
+                        
+            for (identifier, itemNode) in strongSelf.itemNodes {
+                if !strongSelf.isObscuredExternalPreview, let (transitionView, _, _) = strongSelf.getTransitionView(identifier) {
+                    itemNode.animateFrom(transitionView, transition: transition)
+                } else {
+                    if strongSelf.isExternalPreview {
+                        itemNode.alpha = 0.0
+                        transition.animateTransformScale(node: itemNode, from: 0.001)
+                        transition.updateAlpha(node: itemNode, alpha: 1.0)
+                    } else {
+                        itemNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.1)
+                    }
+                }
             }
             
-            for (identifier, itemNode) in strongSelf.itemNodes {
-                if let (transitionView, _) = strongSelf.getTransitionView(identifier) {
-                    itemNode.animateFrom(transitionView)
-                } else {
-                    itemNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.1)
+            for (_, priceNode) in strongSelf.priceNodes {
+                strongSelf.scrollNode.addSubnode(priceNode)
+                priceNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.25, delay: 0.1)
+                if strongSelf.isExternalPreview {
+                    ComponentTransition.immediate.setScale(layer: priceNode.layer, scale: 0.001)
+                    transition.updateTransformScale(layer: priceNode.layer, scale: 1.0)
                 }
             }
             
             if let topNode = strongSelf.messageNodes?.first, !topNode.alpha.isZero {
                 topNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.25, delay: 0.1)
-                topNode.layer.animatePosition(from: CGPoint(x: 0.0, y: -30.0), to: CGPoint(), duration: 0.4, delay: 0.0, timingFunction: kCAMediaTimingFunctionSpring, additive: true)
+                transition.animatePositionAdditive(layer: topNode.layer, offset: CGPoint(x: 0.0, y: -30.0))
             }
             
             if let bottomNode = strongSelf.messageNodes?.last, !bottomNode.alpha.isZero {
                 bottomNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.25, delay: 0.1)
-                bottomNode.layer.animatePosition(from: CGPoint(x: 0.0, y: 30.0), to: CGPoint(), duration: 0.4, delay: 0.0, timingFunction: kCAMediaTimingFunctionSpring, additive: true)
+                transition.animatePositionAdditive(layer: bottomNode.layer, offset: CGPoint(x: 0.0, y: 30.0))
             }
         })
     }
     
-    func animateOut(completion: @escaping () -> Void = {}) {
-        self.wallpaperBackgroundNode.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.25, removeOnCompletion: false, completion: { [weak self] _ in
-            completion()
-            
-            if let strongSelf = self {
-                Queue.mainQueue().after(0.01) {
-                    for (_, backgroundNode) in strongSelf.backgroundNodes {
-                        backgroundNode.layer.removeAllAnimations()
+    func animateOut(transition: ContainedViewLayoutTransition, completion: @escaping () -> Void = {}) {
+        if let wallpaperBackgroundNode = self.wallpaperBackgroundNode {
+            wallpaperBackgroundNode.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.25, removeOnCompletion: false, completion: { [weak self] _ in
+                completion()
+                
+                if let strongSelf = self {
+                    Queue.mainQueue().after(0.01) {
+                        for (_, backgroundNode) in strongSelf.backgroundNodes {
+                            backgroundNode.layer.removeAllAnimations()
+                        }
+                        
+                        for (_, itemNode) in strongSelf.itemNodes {
+                            itemNode.layer.removeAllAnimations()
+                        }
+                        
+                        for (_, priceNode) in strongSelf.priceNodes {
+                            priceNode.layer.removeAllAnimations()
+                        }
+                        
+                        strongSelf.messageNodes?.first?.layer.removeAllAnimations()
+                        strongSelf.messageNodes?.last?.layer.removeAllAnimations()
+                        
+                        strongSelf.wallpaperBackgroundNode?.layer.removeAllAnimations()
                     }
-                    
-                    for (_, itemNode) in strongSelf.itemNodes {
-                        itemNode.layer.removeAllAnimations()
-                    }
-                    
-                    strongSelf.messageNodes?.first?.layer.removeAllAnimations()
-                    strongSelf.messageNodes?.last?.layer.removeAllAnimations()
-                    
-                    strongSelf.wallpaperBackgroundNode.layer.removeAllAnimations()
                 }
-            }
-        })
-        
-        self.wallpaperBackgroundNode.layer.animateScale(from: 1.0, to: 1.2, duration: 0.4, timingFunction: kCAMediaTimingFunctionSpring)
+            })
+            
+            wallpaperBackgroundNode.layer.animateScale(from: 1.0, to: 1.2, duration: 0.33, timingFunction: kCAMediaTimingFunctionSpring)
+        } else {
+            completion()
+        }
         
         for (_, backgroundNode) in self.backgroundNodes {
             backgroundNode.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.1, removeOnCompletion: false)
-        }
-        
-        for (identifier, itemNode) in self.itemNodes {
-            if let (transitionView, completion) = self.getTransitionView(identifier) {
-                itemNode.animateTo(transitionView, completion: completion)
-            } else {
-                itemNode.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.1, removeOnCompletion: false)
+            if self.isExternalPreview {
+                transition.updateTransformScale(layer: backgroundNode.layer, scale: 0.001)
             }
         }
         
-        self.messageNodes?.first?.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.15, removeOnCompletion: false)
-        self.messageNodes?.first?.layer.animatePosition(from: CGPoint(), to: CGPoint(x: 0.0, y: -30.0), duration: 0.4, delay: 0.0, timingFunction: kCAMediaTimingFunctionSpring, removeOnCompletion: false, additive: true)
+        for (_, priceNode) in self.priceNodes {
+            priceNode.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.1, removeOnCompletion: false)
+            if self.isExternalPreview {
+                transition.updateTransformScale(layer: priceNode.layer, scale: 0.001)
+            }
+        }
         
-        self.messageNodes?.last?.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.15, removeOnCompletion: false)
-        self.messageNodes?.last?.layer.animatePosition(from: CGPoint(), to: CGPoint(x: 0.0, y: 30.0), duration: 0.4, delay: 0.0, timingFunction: kCAMediaTimingFunctionSpring, removeOnCompletion: false, additive: true)
+        for (identifier, itemNode) in self.itemNodes {
+            if !self.isObscuredExternalPreview, let (transitionView, maybeDustNode, completion) = self.getTransitionView(identifier) {
+                itemNode.animateTo(transitionView, dustNode: maybeDustNode, transition: transition, completion: completion)
+            } else {
+                if self.isExternalPreview {
+                    transition.updateTransformScale(node: itemNode, scale: 0.001)
+                    transition.updateAlpha(node: itemNode, alpha: 0.0)
+                } else {
+                    itemNode.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.1, removeOnCompletion: false)
+                }
+            }
+        }
+        
+        if let topNode = self.messageNodes?.first {
+            topNode.layer.animateAlpha(from: topNode.alpha, to: 0.0, duration: 0.15, removeOnCompletion: false)
+            transition.animatePositionAdditive(layer: topNode.layer, offset: CGPoint(), to: CGPoint(x: 0.0, y: -30.0), removeOnCompletion: false)
+        }
+        
+        if let bottomNode = self.messageNodes?.last {
+            bottomNode.layer.animateAlpha(from: bottomNode.alpha, to: 0.0, duration: 0.15, removeOnCompletion: false)
+            transition.animatePositionAdditive(layer: bottomNode.layer, offset: CGPoint(), to: CGPoint(x: 0.0, y: 30.0), removeOnCompletion: false)
+        }
+    }
+    
+    func animateOutOnSend(transition: ComponentTransition) {
+        transition.setAlpha(view: self.view, alpha: 0.0)
     }
     
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
@@ -621,11 +893,24 @@ final class MediaPickerSelectedListNode: ASDisplayNode, UIScrollViewDelegate, UI
             self.reorderFeedback = HapticFeedback()
         }
         self.reorderFeedback?.impact()
+        
+        let priceTransition: ContainedViewLayoutTransition = .animated(duration: 0.2, curve: .easeInOut)
+        for (_, node) in self.priceNodes {
+            priceTransition.updateAlpha(node: node, alpha: 0.0)
+        }
     }
     
     private func endReordering(point: CGPoint?) {
         if let reorderNode = self.reorderNode {
             self.reorderNode = nil
+            
+            let completion = {
+                let priceTransition: ContainedViewLayoutTransition = .animated(duration: 0.2, curve: .easeInOut)
+                for (_, node) in self.priceNodes {
+                    node.supernode?.view.bringSubviewToFront(node.view)
+                    priceTransition.updateAlpha(node: node, alpha: 1.0)
+                }
+            }
         
             if let itemNode = reorderNode.itemNode, let point = point {
                 var targetNode: MediaPickerSelectedItemNode?
@@ -641,11 +926,13 @@ final class MediaPickerSelectedListNode: ASDisplayNode, UIScrollViewDelegate, UI
                 }
                 reorderNode.animateCompletion(completion: { [weak reorderNode] in
                     reorderNode?.removeFromSupernode()
+                    completion()
                 })
                 self.reorderFeedback?.tap()
             } else {
                 reorderNode.removeFromSupernode()
                 reorderNode.itemNode?.isHidden = false
+                completion()
             }
         }
         
@@ -670,6 +957,8 @@ final class MediaPickerSelectedListNode: ASDisplayNode, UIScrollViewDelegate, UI
         let sideInset: CGFloat = 34.0
         let boundingWidth = min(320.0, size.width - insets.left - insets.right - sideInset * 2.0)
         
+        var price: Int64?
+        
         var validIds: [String] = []
         for item in items {
             guard let asset = item as? TGMediaEditableItem, let identifier = asset.uniqueIdentifier else {
@@ -681,7 +970,7 @@ final class MediaPickerSelectedListNode: ASDisplayNode, UIScrollViewDelegate, UI
             if let current = self.itemNodes[identifier] {
                 itemNode = current
             } else {
-                itemNode = MediaPickerSelectedItemNode(asset: asset, interaction: self.interaction)
+                itemNode = MediaPickerSelectedItemNode(asset: asset, interaction: self.interaction, enableAnimations: self.context.sharedContext.energyUsageSettings.fullTranslucency, isExternalPreview: self.isExternalPreview)
                 self.itemNodes[identifier] = itemNode
                 self.scrollNode.addSubnode(itemNode)
                 
@@ -697,6 +986,10 @@ final class MediaPickerSelectedListNode: ASDisplayNode, UIScrollViewDelegate, UI
                 itemSizes.append(adjustments.cropRect.size)
             } else {
                 itemSizes.append(asset.originalSize ?? CGSize())
+            }
+            
+            if price == nil, let priceValue = self.interaction?.editingState.price(for: asset) as? Int64 {
+                price = priceValue
             }
         }
         
@@ -751,55 +1044,61 @@ final class MediaPickerSelectedListNode: ASDisplayNode, UIScrollViewDelegate, UI
             }
         }
         
-        let peerId = PeerId(namespace: Namespaces.Peer.CloudUser, id: PeerId.Id._internalFromInt64Value(1))
-        var peers = SimpleDictionary<PeerId, Peer>()
-        peers[peerId] = TelegramUser(id: peerId, accessHash: nil, firstName: "", lastName: "", username: nil, phone: nil, photo: [], botInfo: nil, restrictionInfo: nil, flags: [], emojiStatus: nil, usernames: [])
-        
-        let previewText = groupLayouts.count > 1 ? presentationData.strings.Attachment_MessagesPreview : presentationData.strings.Attachment_MessagePreview
-        
-        let previewMessage = Message(stableId: 0, stableVersion: 0, id: MessageId(peerId: peerId, namespace: 0, id: 0), globallyUniqueId: nil, groupingKey: nil, groupInfo: nil, threadId: nil, timestamp: 0, flags: [], tags: [], globalTags: [], localTags: [], forwardInfo: nil, author: peers[peerId], text: "", attributes: [], media: [TelegramMediaAction(action: .customText(text: previewText, entities: []))], peers: peers, associatedMessages: SimpleDictionary(), associatedMessageIds: [], associatedMedia: [:], associatedThreadInfo: nil)
-        let previewItem = self.context.sharedContext.makeChatMessagePreviewItem(context: context, messages: [previewMessage], theme: theme, strings: presentationData.strings, wallpaper: wallpaper, fontSize: presentationData.chatFontSize, chatBubbleCorners: bubbleCorners, dateTimeFormat: presentationData.dateTimeFormat, nameOrder: presentationData.nameDisplayOrder, forcedResourceStatus: nil, tapMessage: nil, clickThroughMessage: nil, backgroundNode: self.wallpaperBackgroundNode, availableReactions: nil, isCentered: true)
-        
-        let dragMessage = Message(stableId: 0, stableVersion: 0, id: MessageId(peerId: peerId, namespace: 0, id: 0), globallyUniqueId: nil, groupingKey: nil, groupInfo: nil, threadId: nil, timestamp: 0, flags: [], tags: [], globalTags: [], localTags: [], forwardInfo: nil, author: peers[peerId], text: "", attributes: [], media: [TelegramMediaAction(action: .customText(text: presentationData.strings.Attachment_DragToReorder, entities: []))], peers: peers, associatedMessages: SimpleDictionary(), associatedMessageIds: [], associatedMedia: [:], associatedThreadInfo: nil)
-        let dragItem = self.context.sharedContext.makeChatMessagePreviewItem(context: context, messages: [dragMessage], theme: theme, strings: presentationData.strings, wallpaper: wallpaper, fontSize: presentationData.chatFontSize, chatBubbleCorners: bubbleCorners, dateTimeFormat: presentationData.dateTimeFormat, nameOrder: presentationData.nameDisplayOrder, forcedResourceStatus: nil, tapMessage: nil, clickThroughMessage: nil, backgroundNode: self.wallpaperBackgroundNode, availableReactions: nil, isCentered: true)
-        
-        let headerItems: [ListViewItem] = [previewItem, dragItem]
-        
-        let params = ListViewItemLayoutParams(width: size.width, leftInset: insets.left, rightInset: insets.right, availableHeight: size.height)
-        if let messageNodes = self.messageNodes {
-            for i in 0 ..< headerItems.count {
-                let itemNode = messageNodes[i]
-                headerItems[i].updateNode(async: { $0() }, node: {
-                    return itemNode
-                }, params: params, previousItem: nil, nextItem: nil, animation: .None, completion: { (layout, apply) in
-                    let nodeFrame = CGRect(origin: itemNode.frame.origin, size: CGSize(width: size.width, height: layout.size.height))
-                    
-                    itemNode.contentSize = layout.contentSize
-                    itemNode.insets = layout.insets
-                    itemNode.frame = nodeFrame
-                    itemNode.isUserInteractionEnabled = false
-                    
-                    apply(ListViewItemApply(isOnScreen: true))
-                })
+        if !self.isExternalPreview {
+            let peerId = PeerId(namespace: Namespaces.Peer.CloudUser, id: PeerId.Id._internalFromInt64Value(1))
+            var peers = SimpleDictionary<PeerId, Peer>()
+            peers[peerId] = TelegramUser(id: peerId, accessHash: nil, firstName: "", lastName: "", username: nil, phone: nil, photo: [], botInfo: nil, restrictionInfo: nil, flags: [], emojiStatus: nil, usernames: [], storiesHidden: nil, nameColor: nil, backgroundEmojiId: nil, profileColor: nil, profileBackgroundEmojiId: nil, subscriberCount: nil, verificationIconFileId: nil)
+            
+            let previewText = groupLayouts.count > 1 ? presentationData.strings.Attachment_MessagesPreview : presentationData.strings.Attachment_MessagePreview
+            
+            let previewMessage = Message(stableId: 0, stableVersion: 0, id: MessageId(peerId: peerId, namespace: 0, id: 0), globallyUniqueId: nil, groupingKey: nil, groupInfo: nil, threadId: nil, timestamp: 0, flags: [], tags: [], globalTags: [], localTags: [], customTags: [], forwardInfo: nil, author: peers[peerId], text: "", attributes: [], media: [TelegramMediaAction(action: .customText(text: previewText, entities: [], additionalAttributes: nil))], peers: peers, associatedMessages: SimpleDictionary(), associatedMessageIds: [], associatedMedia: [:], associatedThreadInfo: nil, associatedStories: [:])
+            let previewItem = self.context.sharedContext.makeChatMessagePreviewItem(context: context, messages: [previewMessage], theme: theme, strings: presentationData.strings, wallpaper: wallpaper, fontSize: presentationData.chatFontSize, chatBubbleCorners: bubbleCorners, dateTimeFormat: presentationData.dateTimeFormat, nameOrder: presentationData.nameDisplayOrder, forcedResourceStatus: nil, tapMessage: nil, clickThroughMessage: nil, backgroundNode: self.wallpaperBackgroundNode, availableReactions: nil, accountPeer: nil, isCentered: true, isPreview: true, isStandalone: false)
+            
+            let dragMessage = Message(stableId: 0, stableVersion: 0, id: MessageId(peerId: peerId, namespace: 0, id: 0), globallyUniqueId: nil, groupingKey: nil, groupInfo: nil, threadId: nil, timestamp: 0, flags: [], tags: [], globalTags: [], localTags: [], customTags: [], forwardInfo: nil, author: peers[peerId], text: "", attributes: [], media: [TelegramMediaAction(action: .customText(text: presentationData.strings.Attachment_DragToReorder, entities: [], additionalAttributes: nil))], peers: peers, associatedMessages: SimpleDictionary(), associatedMessageIds: [], associatedMedia: [:], associatedThreadInfo: nil, associatedStories: [:])
+            let dragItem = self.context.sharedContext.makeChatMessagePreviewItem(context: context, messages: [dragMessage], theme: theme, strings: presentationData.strings, wallpaper: wallpaper, fontSize: presentationData.chatFontSize, chatBubbleCorners: bubbleCorners, dateTimeFormat: presentationData.dateTimeFormat, nameOrder: presentationData.nameDisplayOrder, forcedResourceStatus: nil, tapMessage: nil, clickThroughMessage: nil, backgroundNode: self.wallpaperBackgroundNode, availableReactions: nil, accountPeer: nil, isCentered: true, isPreview: true, isStandalone: false)
+            
+            let headerItems: [ListViewItem] = [previewItem, dragItem]
+            
+            let params = ListViewItemLayoutParams(width: size.width, leftInset: insets.left, rightInset: insets.right, availableHeight: size.height)
+            if let messageNodes = self.messageNodes {
+                for i in 0 ..< headerItems.count {
+                    let itemNode = messageNodes[i]
+                    headerItems[i].updateNode(async: { $0() }, node: {
+                        return itemNode
+                    }, params: params, previousItem: nil, nextItem: nil, animation: .None, completion: { (layout, apply) in
+                        let nodeFrame = CGRect(origin: itemNode.frame.origin, size: CGSize(width: size.width, height: layout.size.height))
+                        
+                        itemNode.contentSize = layout.contentSize
+                        itemNode.insets = layout.insets
+                        itemNode.frame = nodeFrame
+                        itemNode.isUserInteractionEnabled = false
+                        
+                        apply(ListViewItemApply(isOnScreen: true))
+                    })
+                }
+            } else {
+                var messageNodes: [ListViewItemNode] = []
+                for i in 0 ..< headerItems.count {
+                    var itemNode: ListViewItemNode?
+                    headerItems[i].nodeConfiguredForParams(async: { $0() }, params: params, synchronousLoads: false, previousItem: nil, nextItem: nil, completion: { node, apply in
+                        itemNode = node
+                        apply().1(ListViewItemApply(isOnScreen: true))
+                    })
+                    itemNode!.subnodeTransform = CATransform3DMakeRotation(CGFloat.pi, 0.0, 0.0, 1.0)
+                    itemNode!.isUserInteractionEnabled = false
+                    messageNodes.append(itemNode!)
+                    self.scrollNode.addSubnode(itemNode!)
+                }
+                self.messageNodes = messageNodes
             }
-        } else {
-            var messageNodes: [ListViewItemNode] = []
-            for i in 0 ..< headerItems.count {
-                var itemNode: ListViewItemNode?
-                headerItems[i].nodeConfiguredForParams(async: { $0() }, params: params, synchronousLoads: false, previousItem: nil, nextItem: nil, completion: { node, apply in
-                    itemNode = node
-                    apply().1(ListViewItemApply(isOnScreen: true))
-                })
-                itemNode!.subnodeTransform = CATransform3DMakeRotation(CGFloat.pi, 0.0, 0.0, 1.0)
-                itemNode!.isUserInteractionEnabled = false
-                messageNodes.append(itemNode!)
-                self.scrollNode.addSubnode(itemNode!)
-            }
-            self.messageNodes = messageNodes
         }
         
         let spacing: CGFloat = 8.0
-        var contentHeight: CGFloat = 60.0
+        var contentHeight: CGFloat = 0.0
+        var contentWidth: CGFloat = 0.0
+        if !self.isExternalPreview {
+            contentHeight += 60.0
+        }
         
         if let previewNode = self.messageNodes?.first {
             transition.updateFrame(node: previewNode, frame: CGRect(origin: CGPoint(x: 0.0, y: insets.top + 28.0), size: previewNode.frame.size))
@@ -813,26 +1112,41 @@ final class MediaPickerSelectedListNode: ASDisplayNode, UIScrollViewDelegate, UI
         let graphics = PresentationResourcesChat.principalGraphics(theme: theme, wallpaper: wallpaper, bubbleCorners: bubbleCorners)
         
         var groupIndex = 0
+        var isFirstGroup = true
         for (items, groupSize) in groupLayouts {
-            let groupRect = CGRect(origin: CGPoint(x: insets.left + floorToScreenPixels((size.width - insets.left - insets.right - groupSize.width) / 2.0), y: insets.top + contentHeight), size: groupSize)
-            
-            let groupBackgroundNode: MessageBackgroundNode
-            if let current = self.backgroundNodes[groupIndex] {
-                groupBackgroundNode = current
+            if isFirstGroup {
+                isFirstGroup = false
             } else {
-                groupBackgroundNode = MessageBackgroundNode()
-                groupBackgroundNode.displaysAsynchronously = false
-                self.backgroundNodes[groupIndex] = groupBackgroundNode
-                self.scrollNode.insertSubnode(groupBackgroundNode, at: 0)
+                contentHeight += spacing
+            }
+            
+            var groupRect = CGRect(origin: CGPoint(x: 0.0, y: insets.top + contentHeight), size: groupSize)
+            if !self.isExternalPreview {
+                groupRect.origin.x = insets.left + floorToScreenPixels((size.width - insets.left - insets.right - groupSize.width) / 2.0)
             }
             
             var itemTransition = transition
-            if groupBackgroundNode.frame.width.isZero {
-                itemTransition = .immediate
+            
+            if !self.isExternalPreview {
+                let groupBackgroundNode: MessageBackgroundNode
+                if let current = self.backgroundNodes[groupIndex] {
+                    groupBackgroundNode = current
+                } else {
+                    groupBackgroundNode = MessageBackgroundNode()
+                    groupBackgroundNode.displaysAsynchronously = false
+                    self.backgroundNodes[groupIndex] = groupBackgroundNode
+                    self.scrollNode.insertSubnode(groupBackgroundNode, at: 0)
+                }
+                
+                if groupBackgroundNode.frame.width.isZero {
+                    itemTransition = .immediate
+                }
+                
+                let groupBackgroundFrame = groupRect.insetBy(dx: -5.0, dy: -2.0).offsetBy(dx: 3.0, dy: 0.0)
+                itemTransition.updatePosition(node: groupBackgroundNode, position: groupBackgroundFrame.center)
+                itemTransition.updateBounds(node: groupBackgroundNode, bounds: CGRect(origin: CGPoint(), size: groupBackgroundFrame.size))
+                groupBackgroundNode.update(size: groupBackgroundNode.frame.size, theme: theme, wallpaper: wallpaper, graphics: graphics, wallpaperBackgroundNode: self.wallpaperBackgroundNode, transition: itemTransition)
             }
-
-            itemTransition.updateFrame(node: groupBackgroundNode, frame: groupRect.insetBy(dx: -5.0, dy: -2.0).offsetBy(dx: 3.0, dy: 0.0))
-            groupBackgroundNode.update(size: groupBackgroundNode.frame.size, theme: theme, wallpaper: wallpaper, graphics: graphics, wallpaperBackgroundNode: self.wallpaperBackgroundNode, transition: itemTransition)
             
             for (item, itemRect, itemPosition) in items {
                 if let identifier = item.uniqueIdentifier, let itemNode = self.itemNodes[identifier] {
@@ -867,13 +1181,39 @@ final class MediaPickerSelectedListNode: ASDisplayNode, UIScrollViewDelegate, UI
                 }
             }
             
-            contentHeight += groupSize.height + spacing
+            if let price {
+                let priceNode: PriceNode
+                if let current = self.priceNodes[groupIndex] {
+                    priceNode = current
+                } else {
+                    priceNode = PriceNode()
+                    self.priceNodes[groupIndex] = priceNode
+                    self.scrollNode.addSubnode(priceNode)
+                }
+                
+                if priceNode.frame.width.isZero {
+                    itemTransition = .immediate
+                }
+                
+                let priceNodeFrame = groupRect
+                itemTransition.updatePosition(node: priceNode, position: priceNodeFrame.center)
+                itemTransition.updateBounds(node: priceNode, bounds: CGRect(origin: CGPoint(), size: priceNodeFrame.size))
+                priceNode.update(size: priceNode.frame.size, price: price, small: false, transition: itemTransition)
+            } else if let priceNode = self.priceNodes[groupIndex] {
+                self.priceNodes[groupIndex] = nil
+                priceNode.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.15, removeOnCompletion: false, completion: { [weak priceNode] _ in
+                    priceNode?.removeFromSupernode()
+                })
+            }
+            
+            contentHeight += groupSize.height
+            contentWidth = max(contentWidth, groupSize.width)
             groupIndex += 1
         }
         
         if let dragNode = self.messageNodes?.last {
             transition.updateAlpha(node: dragNode, alpha: items.count > 1 ? 1.0 : 0.0)
-            transition.updateFrame(node: dragNode, frame: CGRect(origin: CGPoint(x: 0.0, y: insets.top + contentHeight + 1.0), size: dragNode.frame.size))
+            transition.updateFrame(node: dragNode, frame: CGRect(origin: CGPoint(x: 0.0, y: insets.top + contentHeight + 9.0), size: dragNode.frame.size))
             
             var dragNodeFrame = dragNode.frame
             dragNodeFrame.origin.y = size.height - dragNodeFrame.origin.y - dragNodeFrame.size.height
@@ -931,7 +1271,13 @@ final class MediaPickerSelectedListNode: ASDisplayNode, UIScrollViewDelegate, UI
         
         self.updateAbsoluteRects()
         
-        self.scrollNode.view.contentSize = CGSize(width: size.width, height: contentHeight)
+        if self.isExternalPreview {
+            self.scrollNode.view.contentSize = CGSize(width: contentWidth, height: contentHeight)
+        } else {
+            self.scrollNode.view.contentSize = CGSize(width: size.width, height: contentHeight)
+        }
+        
+        self.contentSize = CGSize(width: contentWidth, height: contentHeight)
     }
     
     func updateSelectionState() {
@@ -944,6 +1290,25 @@ final class MediaPickerSelectedListNode: ASDisplayNode, UIScrollViewDelegate, UI
         for (_, itemNode) in self.itemNodes {
             itemNode.updateHiddenMedia()
         }
+    }
+    
+    func animateIn(transition: ComponentTransition) {
+        self.animateIn(transition: transition.containedViewLayoutTransition, initiated: {}, completion: {})
+    }
+    
+    func animateOut(transition: ComponentTransition) {
+        self.animateOut(transition: transition.containedViewLayoutTransition, completion: {})
+    }
+    
+    func update(containerSize: CGSize, transition: ComponentTransition) -> CGSize {
+        if var validLayout = self.validLayout {
+            validLayout.size = containerSize
+            self.validLayout = validLayout
+        }
+        
+        self.updateItems(transition: transition.containedViewLayoutTransition)
+        
+        return self.contentSize
     }
     
     func updateLayout(size: CGSize, insets: UIEdgeInsets, items: [TGMediaSelectableItem], grouped: Bool, theme: PresentationTheme, wallpaper: TelegramWallpaper, bubbleCorners: PresentationChatBubbleCorners, transition: ContainedViewLayoutTransition) {
@@ -967,10 +1332,12 @@ final class MediaPickerSelectedListNode: ASDisplayNode, UIScrollViewDelegate, UI
         }
         
         let inset: CGFloat = insets.left == 70 ? insets.left : 0.0
-        self.wallpaperBackgroundNode.update(wallpaper: wallpaper)
-        self.wallpaperBackgroundNode.updateBubbleTheme(bubbleTheme: theme, bubbleCorners: bubbleCorners)
-        transition.updateFrame(node: self.wallpaperBackgroundNode, frame: CGRect(origin: CGPoint(x: inset, y: 0.0), size: CGSize(width: size.width - inset * 2.0, height: size.height)))
-        self.wallpaperBackgroundNode.updateLayout(size: CGSize(width: size.width - inset * 2.0, height: size.height), transition: transition)
+        if let wallpaperBackgroundNode = self.wallpaperBackgroundNode {
+            wallpaperBackgroundNode.update(wallpaper: wallpaper, animated: false)
+            wallpaperBackgroundNode.updateBubbleTheme(bubbleTheme: theme, bubbleCorners: bubbleCorners)
+            transition.updateFrame(node: wallpaperBackgroundNode, frame: CGRect(origin: CGPoint(x: inset, y: 0.0), size: CGSize(width: size.width - inset * 2.0, height: size.height)))
+            wallpaperBackgroundNode.updateLayout(size: CGSize(width: size.width - inset * 2.0, height: size.height), displayMode: .aspectFill, transition: transition)
+        }
         
         self.updateItems(transition: itemsTransition)
         
@@ -1062,7 +1429,6 @@ private class ReorderingGestureRecognizer: UIGestureRecognizer {
         }
     }
     
-    private var currentItemNode: ASDisplayNode?
     override public func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
         super.touchesBegan(touches, with: event)
         

@@ -23,24 +23,27 @@ public enum StickerPackReference: PostboxCoding, Hashable, Equatable, Codable {
     case emojiGenericAnimations
     case iconStatusEmoji
     case iconTopicEmoji
+    case iconChannelStatusEmoji
     
     public init(decoder: PostboxDecoder) {
         switch decoder.decodeInt32ForKey("r", orElse: 0) {
-            case 0:
-                self = .id(id: decoder.decodeInt64ForKey("i", orElse: 0), accessHash: decoder.decodeInt64ForKey("h", orElse: 0))
-            case 1:
-                self = .name(decoder.decodeStringForKey("n", orElse: ""))
-            case 2:
-                self = .animatedEmoji
-            case 3:
-                self = .dice(decoder.decodeStringForKey("e", orElse: "🎲"))
-            case 4:
-                self = .animatedEmojiAnimations
-            case 5:
-                self = .premiumGifts
-            default:
-                self = .name("")
-                assertionFailure()
+        case 0:
+            self = .id(id: decoder.decodeInt64ForKey("i", orElse: 0), accessHash: decoder.decodeInt64ForKey("h", orElse: 0))
+        case 1:
+            self = .name(decoder.decodeStringForKey("n", orElse: ""))
+        case 2:
+            self = .animatedEmoji
+        case 3:
+            self = .dice(decoder.decodeStringForKey("e", orElse: "🎲"))
+        case 4:
+            self = .animatedEmojiAnimations
+        case 5:
+            self = .premiumGifts
+        case 6:
+            self = .iconChannelStatusEmoji
+        default:
+            self = .name("")
+            assertionFailure()
         }
     }
     
@@ -61,6 +64,8 @@ public enum StickerPackReference: PostboxCoding, Hashable, Equatable, Codable {
             self = .animatedEmojiAnimations
         case 5:
             self = .premiumGifts
+        case 6:
+            self = .iconChannelStatusEmoji
         default:
             self = .name("")
             assertionFailure()
@@ -85,7 +90,7 @@ public enum StickerPackReference: PostboxCoding, Hashable, Equatable, Codable {
             encoder.encodeInt32(4, forKey: "r")
         case .premiumGifts:
             encoder.encodeInt32(5, forKey: "r")
-        case .emojiGenericAnimations, .iconStatusEmoji, .iconTopicEmoji:
+        case .emojiGenericAnimations, .iconStatusEmoji, .iconTopicEmoji, .iconChannelStatusEmoji:
             preconditionFailure()
         }
     }
@@ -110,7 +115,7 @@ public enum StickerPackReference: PostboxCoding, Hashable, Equatable, Codable {
             try container.encode(4 as Int32, forKey: "r")
         case .premiumGifts:
             try container.encode(5 as Int32, forKey: "r")
-        case .emojiGenericAnimations, .iconStatusEmoji, .iconTopicEmoji:
+        case .emojiGenericAnimations, .iconStatusEmoji, .iconTopicEmoji, .iconChannelStatusEmoji:
             preconditionFailure()
         }
     }
@@ -171,6 +176,12 @@ public enum StickerPackReference: PostboxCoding, Hashable, Equatable, Codable {
             } else {
                 return false
             }
+        case .iconChannelStatusEmoji:
+            if case .iconChannelStatusEmoji = rhs {
+                return true
+            } else {
+                return false
+            }
         }
     }
 }
@@ -188,9 +199,10 @@ public struct TelegramMediaVideoFlags: OptionSet {
     
     public static let instantRoundVideo = TelegramMediaVideoFlags(rawValue: 1 << 0)
     public static let supportsStreaming = TelegramMediaVideoFlags(rawValue: 1 << 1)
+    public static let isSilent = TelegramMediaVideoFlags(rawValue: 1 << 3)
 }
 
-public struct StickerMaskCoords: PostboxCoding {
+public struct StickerMaskCoords: PostboxCoding, Equatable {
     public let n: Int32
     public let x: Double
     public let y: Double
@@ -218,18 +230,18 @@ public struct StickerMaskCoords: PostboxCoding {
     }
 }
 
-public enum TelegramMediaFileAttribute: PostboxCoding {
+public enum TelegramMediaFileAttribute: PostboxCoding, Equatable {
     case FileName(fileName: String)
     case Sticker(displayText: String, packReference: StickerPackReference?, maskData: StickerMaskCoords?)
     case ImageSize(size: PixelDimensions)
     case Animated
-    case Video(duration: Int, size: PixelDimensions, flags: TelegramMediaVideoFlags)
+    case Video(duration: Double, size: PixelDimensions, flags: TelegramMediaVideoFlags, preloadSize: Int32?, coverTime: Double?, videoCodec: String?)
     case Audio(isVoice: Bool, duration: Int, title: String?, performer: String?, waveform: Data?)
     case HasLinkedStickers
     case hintFileIsLarge
     case hintIsValidated
     case NoPremium
-    case CustomEmoji(isPremium: Bool, alt: String, packReference: StickerPackReference?)
+    case CustomEmoji(isPremium: Bool, isSingleColor: Bool, alt: String, packReference: StickerPackReference?)
     
     public init(decoder: PostboxDecoder) {
         let type: Int32 = decoder.decodeInt32ForKey("t", orElse: 0)
@@ -243,7 +255,14 @@ public enum TelegramMediaFileAttribute: PostboxCoding {
             case typeAnimated:
                 self = .Animated
             case typeVideo:
-                self = .Video(duration: Int(decoder.decodeInt32ForKey("du", orElse: 0)), size: PixelDimensions(width: decoder.decodeInt32ForKey("w", orElse: 0), height: decoder.decodeInt32ForKey("h", orElse: 0)), flags: TelegramMediaVideoFlags(rawValue: decoder.decodeInt32ForKey("f", orElse: 0)))
+                let duration: Double
+                if let value = decoder.decodeOptionalDoubleForKey("dur") {
+                    duration = value
+                } else {
+                    duration = Double(decoder.decodeInt32ForKey("du", orElse: 0))
+                }
+            
+                self = .Video(duration: duration, size: PixelDimensions(width: decoder.decodeInt32ForKey("w", orElse: 0), height: decoder.decodeInt32ForKey("h", orElse: 0)), flags: TelegramMediaVideoFlags(rawValue: decoder.decodeInt32ForKey("f", orElse: 0)), preloadSize: decoder.decodeOptionalInt32ForKey("prs"), coverTime: decoder.decodeOptionalDoubleForKey("ct"), videoCodec: decoder.decodeOptionalStringForKey("vc"))
             case typeAudio:
                 let waveformBuffer = decoder.decodeBytesForKeyNoCopy("wf")
                 var waveform: Data?
@@ -260,7 +279,7 @@ public enum TelegramMediaFileAttribute: PostboxCoding {
             case typeNoPremium:
                 self = .NoPremium
             case typeCustomEmoji:
-                self = .CustomEmoji(isPremium: decoder.decodeBoolForKey("ip", orElse: true), alt: decoder.decodeStringForKey("dt", orElse: ""), packReference: decoder.decodeObjectForKey("pr", decoder: { StickerPackReference(decoder: $0) }) as? StickerPackReference)
+                self = .CustomEmoji(isPremium: decoder.decodeBoolForKey("ip", orElse: true), isSingleColor: decoder.decodeBoolForKey("sc", orElse: false), alt: decoder.decodeStringForKey("dt", orElse: ""), packReference: decoder.decodeObjectForKey("pr", decoder: { StickerPackReference(decoder: $0) }) as? StickerPackReference)
             default:
                 preconditionFailure()
         }
@@ -290,12 +309,27 @@ public enum TelegramMediaFileAttribute: PostboxCoding {
                 encoder.encodeInt32(Int32(size.height), forKey: "h")
             case .Animated:
                 encoder.encodeInt32(typeAnimated, forKey: "t")
-            case let .Video(duration, size, flags):
+            case let .Video(duration, size, flags, preloadSize, coverTime, videoCodec):
                 encoder.encodeInt32(typeVideo, forKey: "t")
-                encoder.encodeInt32(Int32(duration), forKey: "du")
+                encoder.encodeDouble(duration, forKey: "dur")
                 encoder.encodeInt32(Int32(size.width), forKey: "w")
                 encoder.encodeInt32(Int32(size.height), forKey: "h")
                 encoder.encodeInt32(flags.rawValue, forKey: "f")
+                if let preloadSize = preloadSize {
+                    encoder.encodeInt32(preloadSize, forKey: "prs")
+                } else {
+                    encoder.encodeNil(forKey: "prs")
+                }
+                if let coverTime = coverTime {
+                    encoder.encodeDouble(coverTime, forKey: "ct")
+                } else {
+                    encoder.encodeNil(forKey: "ct")
+                }
+                if let videoCodec {
+                    encoder.encodeString(videoCodec, forKey: "vc")
+                } else {
+                    encoder.encodeNil(forKey: "vc")
+                }
             case let .Audio(isVoice, duration, title, performer, waveform):
                 encoder.encodeInt32(typeAudio, forKey: "t")
                 encoder.encodeInt32(isVoice ? 1 : 0, forKey: "iv")
@@ -317,9 +351,10 @@ public enum TelegramMediaFileAttribute: PostboxCoding {
                 encoder.encodeInt32(typeHintIsValidated, forKey: "t")
             case .NoPremium:
                 encoder.encodeInt32(typeNoPremium, forKey: "t")
-            case let .CustomEmoji(isPremium, alt, packReference):
+            case let .CustomEmoji(isPremium, isSingleColor, alt, packReference):
                 encoder.encodeInt32(typeCustomEmoji, forKey: "t")
                 encoder.encodeBool(isPremium, forKey: "ip")
+                encoder.encodeBool(isSingleColor, forKey: "sc")
                 encoder.encodeString(alt, forKey: "dt")
                 if let packReference = packReference {
                     encoder.encodeObject(packReference, forKey: "pr")
@@ -410,6 +445,7 @@ public final class TelegramMediaFile: Media, Equatable, Codable {
     public let mimeType: String
     public let size: Int64?
     public let attributes: [TelegramMediaFileAttribute]
+    public let alternativeRepresentations: [Media]
     public let peerIds: [PeerId] = []
     
     public var id: MediaId? {
@@ -429,7 +465,7 @@ public final class TelegramMediaFile: Media, Equatable, Codable {
         return result.isEmpty ? nil : result
     }
     
-    public init(fileId: MediaId, partialReference: PartialMediaReference?, resource: TelegramMediaResource, previewRepresentations: [TelegramMediaImageRepresentation], videoThumbnails: [TelegramMediaFile.VideoThumbnail], immediateThumbnailData: Data?, mimeType: String, size: Int64?, attributes: [TelegramMediaFileAttribute]) {
+    public init(fileId: MediaId, partialReference: PartialMediaReference?, resource: TelegramMediaResource, previewRepresentations: [TelegramMediaImageRepresentation], videoThumbnails: [TelegramMediaFile.VideoThumbnail], immediateThumbnailData: Data?, mimeType: String, size: Int64?, attributes: [TelegramMediaFileAttribute], alternativeRepresentations: [Media]) {
         self.fileId = fileId
         self.partialReference = partialReference
         self.resource = resource
@@ -439,6 +475,7 @@ public final class TelegramMediaFile: Media, Equatable, Codable {
         self.mimeType = mimeType
         self.size = size
         self.attributes = attributes
+        self.alternativeRepresentations = alternativeRepresentations
     }
     
     public init(decoder: PostboxDecoder) {
@@ -457,6 +494,13 @@ public final class TelegramMediaFile: Media, Equatable, Codable {
             self.size = nil
         }
         self.attributes = decoder.decodeObjectArrayForKey("at")
+        if let altMedia = try? decoder.decodeObjectArrayWithCustomDecoderForKey("arep", decoder: { d in
+            return d.decodeRootObject() as! Media
+        }) {
+            self.alternativeRepresentations = altMedia
+        } else {
+            self.alternativeRepresentations = []
+        }
     }
     
     public func encode(_ encoder: PostboxEncoder) {
@@ -483,6 +527,9 @@ public final class TelegramMediaFile: Media, Equatable, Codable {
             encoder.encodeNil(forKey: "s64")
         }
         encoder.encodeObjectArray(self.attributes, forKey: "at")
+        encoder.encodeObjectArrayWithEncoder(self.alternativeRepresentations, forKey: "arep", encoder: { v, e in
+            e.encodeRootObject(v)
+        })
     }
     
     public required init(from decoder: Decoder) throws {
@@ -501,6 +548,7 @@ public final class TelegramMediaFile: Media, Equatable, Codable {
         self.mimeType = object.mimeType
         self.size = object.size
         self.attributes = object.attributes
+        self.alternativeRepresentations = object.alternativeRepresentations
     }
     
     public func encode(to encoder: Encoder) throws {
@@ -567,11 +615,20 @@ public final class TelegramMediaFile: Media, Equatable, Codable {
     
     public var isInstantVideo: Bool {
         for attribute in self.attributes {
-            if case .Video(_, _, let flags) = attribute {
+            if case .Video(_, _, let flags, _, _, _) = attribute {
                 return flags.contains(.instantRoundVideo)
             }
         }
         return false
+    }
+    
+    public var preloadSize: Int32? {
+        for attribute in self.attributes {
+            if case .Video(_, _, _, let preloadSize, _, _) = attribute {
+                return preloadSize
+            }
+        }
+        return nil
     }
     
     public var isAnimated: Bool {
@@ -632,6 +689,9 @@ public final class TelegramMediaFile: Media, Equatable, Codable {
                 if case .Sticker = attribute {
                     hasSticker = true
                     break
+                } else if case .CustomEmoji = attribute {
+                    hasSticker = true
+                    break
                 }
             }
             return hasSticker
@@ -650,9 +710,29 @@ public final class TelegramMediaFile: Media, Equatable, Codable {
         return hasSticker
     }
     
+    public var isCustomTemplateEmoji: Bool {
+        for attribute in self.attributes {
+            if case let .CustomEmoji(_, isSingleColor, _, packReference) = attribute, let packReference = packReference {
+                if isSingleColor {
+                    return true
+                }
+                switch packReference {
+                case let .id(id, _):
+                    if id == 1269403972611866647 {
+                        return true
+                    }
+                default:
+                    break
+                }
+                break
+            }
+        }
+        return false
+    }
+    
     public var isPremiumEmoji: Bool {
         for attribute in self.attributes {
-            if case let .CustomEmoji(isPremium, _, _) = attribute {
+            if case let .CustomEmoji(isPremium, _, _, _) = attribute {
                 return isPremium
             }
         }
@@ -683,12 +763,16 @@ public final class TelegramMediaFile: Media, Equatable, Codable {
     }
     
     public var isMusic: Bool {
+        var hasNonVoiceAudio = false
+        var hasVideo = false
         for attribute in self.attributes {
             if case .Audio(false, _, _, _, _) = attribute {
-                return true
+                hasNonVoiceAudio = true
+            } else if case .Video = attribute {
+                hasVideo = true
             }
         }
-        return false
+        return hasNonVoiceAudio && !hasVideo
     }
     
     public var isVoice: Bool {
@@ -730,6 +814,14 @@ public final class TelegramMediaFile: Media, Equatable, Codable {
         }
         
         if self.mimeType != other.mimeType {
+            return false
+        }
+        
+        if self.attributes != other.attributes {
+            return false
+        }
+        
+        if !areMediaArraysEqual(self.alternativeRepresentations, other.alternativeRepresentations) {
             return false
         }
         
@@ -779,27 +871,31 @@ public final class TelegramMediaFile: Media, Equatable, Codable {
             return false
         }
         
+        if !areMediaArraysSemanticallyEqual(self.alternativeRepresentations, other.alternativeRepresentations) {
+            return false
+        }
+        
         return true
     }
     
     public func withUpdatedPartialReference(_ partialReference: PartialMediaReference?) -> TelegramMediaFile {
-        return TelegramMediaFile(fileId: self.fileId, partialReference: partialReference, resource: self.resource, previewRepresentations: self.previewRepresentations, videoThumbnails: self.videoThumbnails, immediateThumbnailData: self.immediateThumbnailData, mimeType: self.mimeType, size: self.size, attributes: self.attributes)
+        return TelegramMediaFile(fileId: self.fileId, partialReference: partialReference, resource: self.resource, previewRepresentations: self.previewRepresentations, videoThumbnails: self.videoThumbnails, immediateThumbnailData: self.immediateThumbnailData, mimeType: self.mimeType, size: self.size, attributes: self.attributes, alternativeRepresentations: self.alternativeRepresentations)
     }
 
     public func withUpdatedResource(_ resource: TelegramMediaResource) -> TelegramMediaFile {
-        return TelegramMediaFile(fileId: self.fileId, partialReference: self.partialReference, resource: resource, previewRepresentations: self.previewRepresentations, videoThumbnails: self.videoThumbnails, immediateThumbnailData: self.immediateThumbnailData, mimeType: self.mimeType, size: self.size, attributes: self.attributes)
+        return TelegramMediaFile(fileId: self.fileId, partialReference: self.partialReference, resource: resource, previewRepresentations: self.previewRepresentations, videoThumbnails: self.videoThumbnails, immediateThumbnailData: self.immediateThumbnailData, mimeType: self.mimeType, size: self.size, attributes: self.attributes, alternativeRepresentations: self.alternativeRepresentations)
     }
     
     public func withUpdatedSize(_ size: Int64?) -> TelegramMediaFile {
-        return TelegramMediaFile(fileId: self.fileId, partialReference: self.partialReference, resource: self.resource, previewRepresentations: self.previewRepresentations, videoThumbnails: self.videoThumbnails, immediateThumbnailData: self.immediateThumbnailData, mimeType: self.mimeType, size: size, attributes: self.attributes)
+        return TelegramMediaFile(fileId: self.fileId, partialReference: self.partialReference, resource: self.resource, previewRepresentations: self.previewRepresentations, videoThumbnails: self.videoThumbnails, immediateThumbnailData: self.immediateThumbnailData, mimeType: self.mimeType, size: size, attributes: self.attributes, alternativeRepresentations: self.alternativeRepresentations)
     }
     
     public func withUpdatedPreviewRepresentations(_ previewRepresentations: [TelegramMediaImageRepresentation]) -> TelegramMediaFile {
-        return TelegramMediaFile(fileId: self.fileId, partialReference: self.partialReference, resource: self.resource, previewRepresentations: previewRepresentations, videoThumbnails: self.videoThumbnails, immediateThumbnailData: self.immediateThumbnailData, mimeType: self.mimeType, size: self.size, attributes: self.attributes)
+        return TelegramMediaFile(fileId: self.fileId, partialReference: self.partialReference, resource: self.resource, previewRepresentations: previewRepresentations, videoThumbnails: self.videoThumbnails, immediateThumbnailData: self.immediateThumbnailData, mimeType: self.mimeType, size: self.size, attributes: self.attributes, alternativeRepresentations: self.alternativeRepresentations)
     }
     
     public func withUpdatedAttributes(_ attributes: [TelegramMediaFileAttribute]) -> TelegramMediaFile {
-        return TelegramMediaFile(fileId: self.fileId, partialReference: self.partialReference, resource: self.resource, previewRepresentations: self.previewRepresentations, videoThumbnails: self.videoThumbnails, immediateThumbnailData: self.immediateThumbnailData, mimeType: self.mimeType, size: self.size, attributes: attributes)
+        return TelegramMediaFile(fileId: self.fileId, partialReference: self.partialReference, resource: self.resource, previewRepresentations: self.previewRepresentations, videoThumbnails: self.videoThumbnails, immediateThumbnailData: self.immediateThumbnailData, mimeType: self.mimeType, size: self.size, attributes: attributes, alternativeRepresentations: self.alternativeRepresentations)
     }
 }
 

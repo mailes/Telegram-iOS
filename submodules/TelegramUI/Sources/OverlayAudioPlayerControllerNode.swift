@@ -10,8 +10,9 @@ import TelegramUIPreferences
 import AccountContext
 import DirectionalPanGesture
 import ChatPresentationInterfaceState
+import ChatControllerInteraction
 
-final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, UIGestureRecognizerDelegate {
+final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, ASGestureRecognizerDelegate {
     let ready = Promise<Bool>()
     
     private let context: AccountContext
@@ -35,14 +36,20 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, UIGestu
     private let historyBackgroundNode: ASDisplayNode
     private let historyBackgroundContentNode: ASDisplayNode
     private var floatingHeaderOffset: CGFloat?
-    private var historyNode: ChatHistoryListNode
-    private var replacementHistoryNode: ChatHistoryListNode?
+    private var historyNode: ChatHistoryListNodeImpl
+    private var replacementHistoryNode: ChatHistoryListNodeImpl?
     private var replacementHistoryNodeFloatingOffset: CGFloat?
     
     private var validLayout: ContainerViewLayout?
     
     private var presentationDataDisposable: Disposable?
     private let replacementHistoryNodeReadyDisposable = MetaDisposable()
+    
+    var getParentController: () -> ViewController? = { return nil } {
+        didSet {
+            self.controlsNode.getParentController = self.getParentController
+        }
+    }
     
     init(context: AccountContext, chatLocation: ChatLocation, type: MediaManagerPlayerType, initialMessageId: MessageId, initialOrder: MusicPlaybackSettingsOrder, playlistLocation: SharedMediaPlaylistLocation?, requestDismiss: @escaping () -> Void, requestShare: @escaping (MessageId) -> Void, requestSearchByArtist: @escaping (String) -> Void) {
         self.context = context
@@ -68,29 +75,30 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, UIGestu
                 return false
             }
         }, openPeer: { _, _, _, _ in
-        }, openPeerMention: { _ in
+        }, openPeerMention: { _, _ in
         }, openMessageContextMenu: { _, _, _, _, _, _ in
         }, openMessageReactionContextMenu: { _, _, _, _ in
-        }, updateMessageReaction: { _, _ in
+        }, updateMessageReaction: { _, _, _, _ in
         }, activateMessagePinch: { _ in
         }, openMessageContextActions: { _, _, _, _ in
-        }, navigateToMessage: { _, _ in
+        }, navigateToMessage: { _, _, _ in
         }, navigateToMessageStandalone: { _ in
-        }, tapMessage: nil, clickThroughMessage: {
+        }, navigateToThreadMessage: { _, _, _ in
+        }, tapMessage: nil, clickThroughMessage: { _, _ in
         }, toggleMessagesSelection: { _, _ in
-        }, sendCurrentMessage: { _ in
+        }, sendCurrentMessage: { _, _ in
         }, sendMessage: { _ in
         }, sendSticker: { _, _, _, _, _, _, _, _, _ in
             return false
-        }, sendEmoji: { _, _ in
+        }, sendEmoji: { _, _, _ in
         }, sendGif: { _, _, _, _, _ in
             return false
-        }, sendBotContextResultAsGif: { _, _, _, _, _ in
+        }, sendBotContextResultAsGif: { _, _, _, _, _, _ in
             return false
         }, requestMessageActionCallback: { _, _, _, _ in
         }, requestMessageActionUrlAuth: { _, _ in
-        }, activateSwitchInline: { _, _ in
-        }, openUrl: { _, _, _, _ in
+        }, activateSwitchInline: { _, _, _ in
+        }, openUrl: { _ in
         }, shareCurrentLocation: {
         }, shareAccountContact: {
         }, sendBotCommand: { _, _ in
@@ -110,11 +118,13 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, UIGestu
         }, presentGlobalOverlayController: { _, _ in
         }, callPeer: { _, _ in
         }, longTap: { _, _ in
-        }, openCheckoutOrReceipt: { _ in
+        }, openCheckoutOrReceipt: { _, _ in
         }, openSearch: {
         }, setupReply: { _ in
         }, canSetupReply: { _ in
             return .none
+        }, canSendMessages: {
+            return false
         }, navigateToFirstDateMessage: { _, _ in
         }, requestRedeliveryOfFailedMessages: { _ in
         }, addContact: { _ in   
@@ -122,12 +132,12 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, UIGestu
         }, requestSelectMessagePollOptions: { _, _ in
         }, requestOpenMessagePollResults: { _, _ in
         }, openAppStorePage: {
-        }, displayMessageTooltip: { _, _, _, _ in
+        }, displayMessageTooltip: { _, _, _, _, _ in
         }, seekToTimecode: { _, _, _ in    
-        }, scheduleCurrentMessage: {
+        }, scheduleCurrentMessage: { _ in
         }, sendScheduledMessagesNow: { _ in
         }, editScheduledMessagesTime: { _ in
-        }, performTextSelectionAction: { _, _, _ in
+        }, performTextSelectionAction: { _, _, _, _ in
         }, displayImportedMessageTooltip: { _ in
         }, displaySwipeToReplyHint: {
         }, dismissReplyMarkupMessage: { _ in
@@ -138,6 +148,7 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, UIGestu
         }, displayDiceTooltip: { _ in
         }, animateDiceSuccess: { _, _ in
         }, displayPremiumStickerTooltip: { _, _ in
+        }, displayEmojiPackTooltip: { _, _ in
         }, openPeerContextMenu: { _, _, _, _, _ in
         }, openMessageReplies: { _, _, _ in
         }, openReplyThreadOriginalMessage: { _ in
@@ -154,12 +165,31 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, UIGestu
         }, openLargeEmojiInfo: { _, _, _ in
         }, openJoinLink: { _ in
         }, openWebView: { _, _, _, _ in
-        }, activateAdAction: { _ in
+        }, activateAdAction: { _, _, _, _ in
+        }, adContextAction: { _, _, _ in
+        }, removeAd: { _ in
+        }, openRequestedPeerSelection: { _, _, _, _ in
+        }, saveMediaToFiles: { _ in
+        }, openNoAdsDemo: {
+        }, openAdsInfo: {
+        }, displayGiveawayParticipationStatus: { _ in
+        }, openPremiumStatusInfo: { _, _, _, _ in
+        }, openRecommendedChannelContextMenu: { _, _, _ in
+        }, openGroupBoostInfo: { _, _ in
+        }, openStickerEditor: {
+        }, openAgeRestrictedMessageMedia: { _, _ in
+        }, playMessageEffect: { _ in
+        }, editMessageFactCheck: { _ in
+        }, sendGift: { _ in
         }, requestMessageUpdate: { _, _ in
         }, cancelInteractiveKeyboardGestures: {
         }, dismissTextInput: {
         }, scrollToMessageId: { _ in
-        }, automaticMediaDownloadSettings: MediaAutoDownloadSettings.defaultSettings, pollActionState: ChatInterfacePollActionState(), stickerSettings: ChatInterfaceStickerSettings(loopAnimatedStickers: false), presentationContext: ChatPresentationContext(context: context, backgroundNode: nil))
+        }, navigateToStory: { _, _ in
+        }, attemptedNavigationToPrivateQuote: { _ in
+        }, forceUpdateWarpContents: {
+        }, playShakeAnimation: {
+        }, automaticMediaDownloadSettings: MediaAutoDownloadSettings.defaultSettings, pollActionState: ChatInterfacePollActionState(), stickerSettings: ChatInterfaceStickerSettings(), presentationContext: ChatPresentationContext(context: context, backgroundNode: nil))
         
         self.dimNode = ASDisplayNode()
         self.dimNode.backgroundColor = UIColor(white: 0.0, alpha: 0.5)
@@ -191,14 +221,14 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, UIGestu
         
         let source: ChatHistoryListSource
         if let playlistLocation = playlistLocation as? PeerMessagesPlaylistLocation, case let .custom(messages, at, loadMore) = playlistLocation {
-            source = .custom(messages: messages, messageId: at, loadMore: loadMore)
+            source = .custom(messages: messages, messageId: at, quote: nil, loadMore: loadMore)
             self.isGlobalSearch = true
         } else {
             source = .default
             self.isGlobalSearch = false
         }
         
-        self.historyNode = ChatHistoryListNode(context: context, updatedPresentationData: (context.sharedContext.currentPresentationData.with({ $0 }), context.sharedContext.presentationData), chatLocation: chatLocation, chatLocationContextHolder: chatLocationContextHolder, tagMask: tagMask, source: source,  subject: .message(id: .id(initialMessageId), highlight: true, timecode: nil), controllerInteraction: self.controllerInteraction, selectedMessages: .single(nil), mode: .list(search: false, reversed: self.currentIsReversed, displayHeaders: .none, hintLinks: false, isGlobalSearch: self.isGlobalSearch))
+        self.historyNode = ChatHistoryListNodeImpl(context: context, updatedPresentationData: (context.sharedContext.currentPresentationData.with({ $0 }), context.sharedContext.presentationData), chatLocation: chatLocation, chatLocationContextHolder: chatLocationContextHolder, tag: .tag(tagMask), source: source, subject: .message(id: .id(initialMessageId), highlight: ChatControllerSubject.MessageHighlight(quote: nil), timecode: nil, setupReply: false), controllerInteraction: self.controllerInteraction, selectedMessages: .single(nil), mode: .list(search: false, reversed: self.currentIsReversed, reverseGroups: !self.currentIsReversed, displayHeaders: .none, hintLinks: false, isGlobalSearch: self.isGlobalSearch), isChatPreview: false, messageTransitionNode: { return nil })
         self.historyNode.clipsToBounds = true
         
         super.init()
@@ -285,12 +315,12 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, UIGestu
                 if let location = strongSelf.playlistLocation as? PeerMessagesPlaylistLocation, case let .custom(messages, _, loadMore) = location {
                     playlistLocation = .custom(messages: messages, at: id, loadMore: loadMore)
                 }
-                return strongSelf.context.sharedContext.openChatMessage(OpenChatMessageParams(context: strongSelf.context, chatLocation: nil, chatLocationContextHolder: nil, message: message, standalone: false, reverseMessageGalleryOrder: false, navigationController: nil, dismissInput: { }, present: { _, _ in }, transitionNode: { _, _ in return nil }, addToTransitionSurface: { _ in }, openUrl: { _ in }, openPeer: { _, _ in }, callPeer: { _, _ in }, enqueueMessage: { _ in }, sendSticker: nil, sendEmoji: nil, setupTemporaryHiddenMedia: { _, _, _ in }, chatAvatarHiddenMedia: { _, _ in }, playlistLocation: playlistLocation))
+                return strongSelf.context.sharedContext.openChatMessage(OpenChatMessageParams(context: strongSelf.context, chatLocation: nil, chatFilterTag: nil, chatLocationContextHolder: nil, message: message, standalone: false, reverseMessageGalleryOrder: false, navigationController: nil, dismissInput: { }, present: { _, _, _ in }, transitionNode: { _, _, _ in return nil }, addToTransitionSurface: { _ in }, openUrl: { _ in }, openPeer: { _, _ in }, callPeer: { _, _ in }, enqueueMessage: { _ in }, sendSticker: nil, sendEmoji: nil, setupTemporaryHiddenMedia: { _, _, _ in }, chatAvatarHiddenMedia: { _, _ in }, playlistLocation: playlistLocation))
             }
             return false
         }
         
-        self.presentationDataDisposable = context.sharedContext.presentationData.start(next: { [weak self] presentationData in
+        self.presentationDataDisposable = context.sharedContext.presentationData.startStrict(next: { [weak self] presentationData in
             if let strongSelf = self {
                 if strongSelf.presentationData.theme !== presentationData.theme || strongSelf.presentationData.strings !== presentationData.strings {
                     strongSelf.updatePresentationData(presentationData)
@@ -314,7 +344,7 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, UIGestu
         self.dimNode.view.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(self.dimTapGesture(_:))))
         
         let panRecognizer = DirectionalPanGestureRecognizer(target: self, action: #selector(self.panGesture(_:)))
-        panRecognizer.delegate = self
+        panRecognizer.delegate = self.wrappedGestureRecognizerDelegate
         panRecognizer.delaysTouchesBegan = false
         panRecognizer.cancelsTouchesInView = true
         panRecognizer.shouldBegin = { [weak self] point in
@@ -540,7 +570,7 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, UIGestu
         }
         
         let chatLocationContextHolder = Atomic<ChatLocationContextHolder?>(value: nil)
-        let historyNode = ChatHistoryListNode(context: self.context, updatedPresentationData: (self.context.sharedContext.currentPresentationData.with({ $0 }), self.context.sharedContext.presentationData), chatLocation: self.chatLocation, chatLocationContextHolder: chatLocationContextHolder, tagMask: tagMask, subject: .message(id: .id(messageId), highlight: true, timecode: nil), controllerInteraction: self.controllerInteraction, selectedMessages: .single(nil), mode: .list(search: false, reversed: self.currentIsReversed, displayHeaders: .none, hintLinks: false, isGlobalSearch: self.isGlobalSearch))
+        let historyNode = ChatHistoryListNodeImpl(context: self.context, updatedPresentationData: (self.context.sharedContext.currentPresentationData.with({ $0 }), self.context.sharedContext.presentationData), chatLocation: self.chatLocation, chatLocationContextHolder: chatLocationContextHolder, tag: .tag(tagMask), source: .default, subject: .message(id: .id(messageId), highlight: ChatControllerSubject.MessageHighlight(quote: nil), timecode: nil, setupReply: false), controllerInteraction: self.controllerInteraction, selectedMessages: .single(nil), mode: .list(search: false, reversed: self.currentIsReversed, reverseGroups: !self.currentIsReversed, displayHeaders: .none, hintLinks: false, isGlobalSearch: self.isGlobalSearch), isChatPreview: false, messageTransitionNode: { return nil })
         historyNode.clipsToBounds = true
         historyNode.preloadPages = true
         historyNode.stackFromBottom = true
@@ -571,7 +601,7 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, UIGestu
             let updateSizeAndInsets = ListViewUpdateSizeAndInsets(size: listNodeSize, insets: insets, duration: 0.0, curve: .Default(duration: nil))
             historyNode.updateLayout(transition: .immediate, updateSizeAndInsets: updateSizeAndInsets)
         }
-        self.replacementHistoryNodeReadyDisposable.set((historyNode.historyState.get() |> take(1) |> deliverOnMainQueue).start(next: { [weak self] _ in
+        self.replacementHistoryNodeReadyDisposable.set((historyNode.historyState.get() |> take(1) |> deliverOnMainQueue).startStrict(next: { [weak self] _ in
             if let strongSelf = self {
                 strongSelf.replaceWithReadyUpdatedHistoryNode()
             }

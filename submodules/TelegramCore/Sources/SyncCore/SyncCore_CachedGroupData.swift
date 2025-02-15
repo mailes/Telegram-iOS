@@ -38,6 +38,7 @@ public struct CachedGroupFlags: OptionSet {
     }
     
     public static let canChangeUsername = CachedGroupFlags(rawValue: 1 << 0)
+    public static let translationHidden = CachedGroupFlags(rawValue: 1 << 1)
 }
 
 public enum PeerAllowedReactions: Equatable, Codable {
@@ -96,6 +97,34 @@ extension PeerAllowedReactions {
     }
 }
 
+public final class PeerReactionSettings: Equatable, Codable {
+    public let allowedReactions: PeerAllowedReactions
+    public let maxReactionCount: Int32?
+    public let starsAllowed: Bool?
+    
+    public init(allowedReactions: PeerAllowedReactions, maxReactionCount: Int32?, starsAllowed: Bool?) {
+        self.allowedReactions = allowedReactions
+        self.maxReactionCount = maxReactionCount
+        self.starsAllowed = starsAllowed
+    }
+    
+    public static func ==(lhs: PeerReactionSettings, rhs: PeerReactionSettings) -> Bool {
+        if lhs === rhs {
+            return true
+        }
+        if lhs.allowedReactions != rhs.allowedReactions {
+            return false
+        }
+        if lhs.maxReactionCount != rhs.maxReactionCount {
+            return false
+        }
+        if lhs.starsAllowed != rhs.starsAllowed {
+            return false
+        }
+        return true
+    }
+}
+
 public final class CachedGroupData: CachedPeerData {
     public let participants: CachedGroupParticipants?
     public let exportedInvitation: ExportedInvitation?
@@ -113,7 +142,7 @@ public final class CachedGroupData: CachedPeerData {
     public let themeEmoticon: String?
     public let inviteRequestsPending: Int32?
     
-    public let allowedReactions: EnginePeerCachedInfoItem<PeerAllowedReactions>
+    public let reactionSettings: EnginePeerCachedInfoItem<PeerReactionSettings>
     
     public let peerIds: Set<PeerId>
     public let messageIds: Set<MessageId>
@@ -137,7 +166,7 @@ public final class CachedGroupData: CachedPeerData {
         self.callJoinPeerId = nil
         self.themeEmoticon = nil
         self.inviteRequestsPending = nil
-        self.allowedReactions = .unknown
+        self.reactionSettings = .unknown
     }
     
     public init(
@@ -156,7 +185,7 @@ public final class CachedGroupData: CachedPeerData {
         callJoinPeerId: PeerId?,
         themeEmoticon: String?,
         inviteRequestsPending: Int32?,
-        allowedReactions: EnginePeerCachedInfoItem<PeerAllowedReactions>
+        reactionSettings: EnginePeerCachedInfoItem<PeerReactionSettings>
     ) {
         self.participants = participants
         self.exportedInvitation = exportedInvitation
@@ -173,7 +202,7 @@ public final class CachedGroupData: CachedPeerData {
         self.callJoinPeerId = callJoinPeerId
         self.themeEmoticon = themeEmoticon
         self.inviteRequestsPending = inviteRequestsPending
-        self.allowedReactions = allowedReactions
+        self.reactionSettings = reactionSettings
         
         var messageIds = Set<MessageId>()
         if let pinnedMessageId = self.pinnedMessageId {
@@ -202,7 +231,7 @@ public final class CachedGroupData: CachedPeerData {
         self.exportedInvitation = decoder.decode(ExportedInvitation.self, forKey: "i")
         self.botInfos = decoder.decodeObjectArrayWithDecoderForKey("b") as [CachedPeerBotInfo]
         if let legacyValue = decoder.decodeOptionalInt32ForKey("pcs") {
-            self.peerStatusSettings = PeerStatusSettings(flags: PeerStatusSettings.Flags(rawValue: legacyValue), geoDistance: nil)
+            self.peerStatusSettings = PeerStatusSettings(flags: PeerStatusSettings.Flags(rawValue: legacyValue), geoDistance: nil, managingBot: nil)
         } else if let peerStatusSettings = decoder.decodeObjectForKey("pss", decoder: { PeerStatusSettings(decoder: $0) }) as? PeerStatusSettings {
             self.peerStatusSettings = peerStatusSettings
         } else {
@@ -238,12 +267,16 @@ public final class CachedGroupData: CachedPeerData {
         
         self.inviteRequestsPending = decoder.decodeOptionalInt32ForKey("irp")
         
-        if let legacyAllowedReactions = decoder.decodeOptionalStringArrayForKey("allowedReactions") {
-            self.allowedReactions = .known(.limited(legacyAllowedReactions.map(MessageReaction.Reaction.builtin)))
+        if let reactionSettings = decoder.decode(PeerReactionSettings.self, forKey: "reactionSettings") {
+            self.reactionSettings = .known(reactionSettings)
+        } else if let legacyAllowedReactions = decoder.decodeOptionalStringArrayForKey("allowedReactions") {
+            let allowedReactions: PeerAllowedReactions = .limited(legacyAllowedReactions.map(MessageReaction.Reaction.builtin))
+            self.reactionSettings = .known(PeerReactionSettings(allowedReactions: allowedReactions, maxReactionCount: nil, starsAllowed: nil))
         } else if let allowedReactions = decoder.decode(PeerAllowedReactions.self, forKey: "allowedReactionSet") {
-            self.allowedReactions = .known(allowedReactions)
+            let allowedReactions = allowedReactions
+            self.reactionSettings = .known(PeerReactionSettings(allowedReactions: allowedReactions, maxReactionCount: nil, starsAllowed: nil))
         } else {
-            self.allowedReactions = .unknown
+            self.reactionSettings = .unknown
         }
         
         var messageIds = Set<MessageId>()
@@ -336,11 +369,11 @@ public final class CachedGroupData: CachedPeerData {
             encoder.encodeNil(forKey: "irp")
         }
         
-        switch self.allowedReactions {
+        switch self.reactionSettings {
         case .unknown:
-            encoder.encodeNil(forKey: "allowedReactionSet")
+            encoder.encodeNil(forKey: "reactionSettings")
         case let .known(value):
-            encoder.encode(value, forKey: "allowedReactionSet")
+            encoder.encode(value, forKey: "reactionSettings")
         }
     }
     
@@ -357,7 +390,7 @@ public final class CachedGroupData: CachedPeerData {
             return false
         }
         
-        if self.allowedReactions != other.allowedReactions {
+        if self.reactionSettings != other.reactionSettings {
             return false
         }
         
@@ -365,66 +398,66 @@ public final class CachedGroupData: CachedPeerData {
     }
     
     public func withUpdatedParticipants(_ participants: CachedGroupParticipants?) -> CachedGroupData {
-        return CachedGroupData(participants: participants, exportedInvitation: self.exportedInvitation, botInfos: self.botInfos, peerStatusSettings: self.peerStatusSettings, pinnedMessageId: self.pinnedMessageId, about: self.about, flags: self.flags, hasScheduledMessages: self.hasScheduledMessages, invitedBy: self.invitedBy, photo: self.photo, activeCall: self.activeCall, autoremoveTimeout: self.autoremoveTimeout, callJoinPeerId: self.callJoinPeerId, themeEmoticon: self.themeEmoticon, inviteRequestsPending: self.inviteRequestsPending, allowedReactions: self.allowedReactions)
+        return CachedGroupData(participants: participants, exportedInvitation: self.exportedInvitation, botInfos: self.botInfos, peerStatusSettings: self.peerStatusSettings, pinnedMessageId: self.pinnedMessageId, about: self.about, flags: self.flags, hasScheduledMessages: self.hasScheduledMessages, invitedBy: self.invitedBy, photo: self.photo, activeCall: self.activeCall, autoremoveTimeout: self.autoremoveTimeout, callJoinPeerId: self.callJoinPeerId, themeEmoticon: self.themeEmoticon, inviteRequestsPending: self.inviteRequestsPending, reactionSettings: self.reactionSettings)
     }
     
     public func withUpdatedExportedInvitation(_ exportedInvitation: ExportedInvitation?) -> CachedGroupData {
-        return CachedGroupData(participants: self.participants, exportedInvitation: exportedInvitation, botInfos: self.botInfos, peerStatusSettings: self.peerStatusSettings, pinnedMessageId: self.pinnedMessageId, about: self.about, flags: self.flags, hasScheduledMessages: self.hasScheduledMessages, invitedBy: self.invitedBy, photo: self.photo, activeCall: self.activeCall, autoremoveTimeout: self.autoremoveTimeout, callJoinPeerId: self.callJoinPeerId, themeEmoticon: self.themeEmoticon, inviteRequestsPending: self.inviteRequestsPending, allowedReactions: self.allowedReactions)
+        return CachedGroupData(participants: self.participants, exportedInvitation: exportedInvitation, botInfos: self.botInfos, peerStatusSettings: self.peerStatusSettings, pinnedMessageId: self.pinnedMessageId, about: self.about, flags: self.flags, hasScheduledMessages: self.hasScheduledMessages, invitedBy: self.invitedBy, photo: self.photo, activeCall: self.activeCall, autoremoveTimeout: self.autoremoveTimeout, callJoinPeerId: self.callJoinPeerId, themeEmoticon: self.themeEmoticon, inviteRequestsPending: self.inviteRequestsPending, reactionSettings: self.reactionSettings)
     }
     
     public func withUpdatedBotInfos(_ botInfos: [CachedPeerBotInfo]) -> CachedGroupData {
-        return CachedGroupData(participants: self.participants, exportedInvitation: self.exportedInvitation, botInfos: botInfos, peerStatusSettings: self.peerStatusSettings, pinnedMessageId: self.pinnedMessageId, about: self.about, flags: self.flags, hasScheduledMessages: self.hasScheduledMessages, invitedBy: self.invitedBy, photo: self.photo, activeCall: self.activeCall, autoremoveTimeout: self.autoremoveTimeout, callJoinPeerId: self.callJoinPeerId, themeEmoticon: self.themeEmoticon, inviteRequestsPending: self.inviteRequestsPending, allowedReactions: self.allowedReactions)
+        return CachedGroupData(participants: self.participants, exportedInvitation: self.exportedInvitation, botInfos: botInfos, peerStatusSettings: self.peerStatusSettings, pinnedMessageId: self.pinnedMessageId, about: self.about, flags: self.flags, hasScheduledMessages: self.hasScheduledMessages, invitedBy: self.invitedBy, photo: self.photo, activeCall: self.activeCall, autoremoveTimeout: self.autoremoveTimeout, callJoinPeerId: self.callJoinPeerId, themeEmoticon: self.themeEmoticon, inviteRequestsPending: self.inviteRequestsPending, reactionSettings: self.reactionSettings)
     }
     
     public func withUpdatedPeerStatusSettings(_ peerStatusSettings: PeerStatusSettings?) -> CachedGroupData {
-        return CachedGroupData(participants: self.participants, exportedInvitation: self.exportedInvitation, botInfos: self.botInfos, peerStatusSettings: peerStatusSettings, pinnedMessageId: self.pinnedMessageId, about: self.about, flags: self.flags, hasScheduledMessages: self.hasScheduledMessages, invitedBy: self.invitedBy, photo: self.photo, activeCall: self.activeCall, autoremoveTimeout: self.autoremoveTimeout, callJoinPeerId: self.callJoinPeerId, themeEmoticon: self.themeEmoticon, inviteRequestsPending: self.inviteRequestsPending, allowedReactions: self.allowedReactions)
+        return CachedGroupData(participants: self.participants, exportedInvitation: self.exportedInvitation, botInfos: self.botInfos, peerStatusSettings: peerStatusSettings, pinnedMessageId: self.pinnedMessageId, about: self.about, flags: self.flags, hasScheduledMessages: self.hasScheduledMessages, invitedBy: self.invitedBy, photo: self.photo, activeCall: self.activeCall, autoremoveTimeout: self.autoremoveTimeout, callJoinPeerId: self.callJoinPeerId, themeEmoticon: self.themeEmoticon, inviteRequestsPending: self.inviteRequestsPending, reactionSettings: self.reactionSettings)
     }
 
     public func withUpdatedPinnedMessageId(_ pinnedMessageId: MessageId?) -> CachedGroupData {
-        return CachedGroupData(participants: self.participants, exportedInvitation: self.exportedInvitation, botInfos: self.botInfos, peerStatusSettings: self.peerStatusSettings, pinnedMessageId: pinnedMessageId, about: self.about, flags: self.flags, hasScheduledMessages: self.hasScheduledMessages, invitedBy: self.invitedBy, photo: self.photo, activeCall: self.activeCall, autoremoveTimeout: self.autoremoveTimeout, callJoinPeerId: self.callJoinPeerId, themeEmoticon: self.themeEmoticon, inviteRequestsPending: self.inviteRequestsPending, allowedReactions: self.allowedReactions)
+        return CachedGroupData(participants: self.participants, exportedInvitation: self.exportedInvitation, botInfos: self.botInfos, peerStatusSettings: self.peerStatusSettings, pinnedMessageId: pinnedMessageId, about: self.about, flags: self.flags, hasScheduledMessages: self.hasScheduledMessages, invitedBy: self.invitedBy, photo: self.photo, activeCall: self.activeCall, autoremoveTimeout: self.autoremoveTimeout, callJoinPeerId: self.callJoinPeerId, themeEmoticon: self.themeEmoticon, inviteRequestsPending: self.inviteRequestsPending, reactionSettings: self.reactionSettings)
     }
     
     public func withUpdatedAbout(_ about: String?) -> CachedGroupData {
-        return CachedGroupData(participants: self.participants, exportedInvitation: self.exportedInvitation, botInfos: self.botInfos, peerStatusSettings: self.peerStatusSettings, pinnedMessageId: self.pinnedMessageId, about: about, flags: self.flags, hasScheduledMessages: self.hasScheduledMessages, invitedBy: self.invitedBy, photo: self.photo, activeCall: self.activeCall, autoremoveTimeout: self.autoremoveTimeout, callJoinPeerId: self.callJoinPeerId, themeEmoticon: self.themeEmoticon, inviteRequestsPending: self.inviteRequestsPending, allowedReactions: self.allowedReactions)
+        return CachedGroupData(participants: self.participants, exportedInvitation: self.exportedInvitation, botInfos: self.botInfos, peerStatusSettings: self.peerStatusSettings, pinnedMessageId: self.pinnedMessageId, about: about, flags: self.flags, hasScheduledMessages: self.hasScheduledMessages, invitedBy: self.invitedBy, photo: self.photo, activeCall: self.activeCall, autoremoveTimeout: self.autoremoveTimeout, callJoinPeerId: self.callJoinPeerId, themeEmoticon: self.themeEmoticon, inviteRequestsPending: self.inviteRequestsPending, reactionSettings: self.reactionSettings)
     }
     
     public func withUpdatedFlags(_ flags: CachedGroupFlags) -> CachedGroupData {
-        return CachedGroupData(participants: self.participants, exportedInvitation: self.exportedInvitation, botInfos: self.botInfos, peerStatusSettings: self.peerStatusSettings, pinnedMessageId: self.pinnedMessageId, about: self.about, flags: flags, hasScheduledMessages: self.hasScheduledMessages, invitedBy: self.invitedBy, photo: self.photo, activeCall: self.activeCall, autoremoveTimeout: self.autoremoveTimeout, callJoinPeerId: self.callJoinPeerId, themeEmoticon: self.themeEmoticon, inviteRequestsPending: self.inviteRequestsPending, allowedReactions: self.allowedReactions)
+        return CachedGroupData(participants: self.participants, exportedInvitation: self.exportedInvitation, botInfos: self.botInfos, peerStatusSettings: self.peerStatusSettings, pinnedMessageId: self.pinnedMessageId, about: self.about, flags: flags, hasScheduledMessages: self.hasScheduledMessages, invitedBy: self.invitedBy, photo: self.photo, activeCall: self.activeCall, autoremoveTimeout: self.autoremoveTimeout, callJoinPeerId: self.callJoinPeerId, themeEmoticon: self.themeEmoticon, inviteRequestsPending: self.inviteRequestsPending, reactionSettings: self.reactionSettings)
     }
     
     public func withUpdatedHasScheduledMessages(_ hasScheduledMessages: Bool) -> CachedGroupData {
-        return CachedGroupData(participants: self.participants, exportedInvitation: self.exportedInvitation, botInfos: self.botInfos, peerStatusSettings: self.peerStatusSettings, pinnedMessageId: self.pinnedMessageId, about: self.about, flags: self.flags, hasScheduledMessages: hasScheduledMessages, invitedBy: self.invitedBy, photo: self.photo, activeCall: self.activeCall, autoremoveTimeout: self.autoremoveTimeout, callJoinPeerId: self.callJoinPeerId, themeEmoticon: self.themeEmoticon, inviteRequestsPending: self.inviteRequestsPending, allowedReactions: self.allowedReactions)
+        return CachedGroupData(participants: self.participants, exportedInvitation: self.exportedInvitation, botInfos: self.botInfos, peerStatusSettings: self.peerStatusSettings, pinnedMessageId: self.pinnedMessageId, about: self.about, flags: self.flags, hasScheduledMessages: hasScheduledMessages, invitedBy: self.invitedBy, photo: self.photo, activeCall: self.activeCall, autoremoveTimeout: self.autoremoveTimeout, callJoinPeerId: self.callJoinPeerId, themeEmoticon: self.themeEmoticon, inviteRequestsPending: self.inviteRequestsPending, reactionSettings: self.reactionSettings)
     }
     
     public func withUpdatedInvitedBy(_ invitedBy: PeerId?) -> CachedGroupData {
-        return CachedGroupData(participants: self.participants, exportedInvitation: self.exportedInvitation, botInfos: self.botInfos, peerStatusSettings: self.peerStatusSettings, pinnedMessageId: self.pinnedMessageId, about: self.about, flags: self.flags, hasScheduledMessages: self.hasScheduledMessages, invitedBy: invitedBy, photo: self.photo, activeCall: self.activeCall, autoremoveTimeout: self.autoremoveTimeout, callJoinPeerId: self.callJoinPeerId, themeEmoticon: self.themeEmoticon, inviteRequestsPending: self.inviteRequestsPending, allowedReactions: self.allowedReactions)
+        return CachedGroupData(participants: self.participants, exportedInvitation: self.exportedInvitation, botInfos: self.botInfos, peerStatusSettings: self.peerStatusSettings, pinnedMessageId: self.pinnedMessageId, about: self.about, flags: self.flags, hasScheduledMessages: self.hasScheduledMessages, invitedBy: invitedBy, photo: self.photo, activeCall: self.activeCall, autoremoveTimeout: self.autoremoveTimeout, callJoinPeerId: self.callJoinPeerId, themeEmoticon: self.themeEmoticon, inviteRequestsPending: self.inviteRequestsPending, reactionSettings: self.reactionSettings)
     }
     
     public func withUpdatedPhoto(_ photo: TelegramMediaImage?) -> CachedGroupData {
-        return CachedGroupData(participants: self.participants, exportedInvitation: self.exportedInvitation, botInfos: self.botInfos, peerStatusSettings: self.peerStatusSettings, pinnedMessageId: self.pinnedMessageId, about: self.about, flags: self.flags, hasScheduledMessages: self.hasScheduledMessages, invitedBy: self.invitedBy, photo: photo, activeCall: self.activeCall, autoremoveTimeout: self.autoremoveTimeout, callJoinPeerId: self.callJoinPeerId, themeEmoticon: self.themeEmoticon, inviteRequestsPending: self.inviteRequestsPending, allowedReactions: self.allowedReactions)
+        return CachedGroupData(participants: self.participants, exportedInvitation: self.exportedInvitation, botInfos: self.botInfos, peerStatusSettings: self.peerStatusSettings, pinnedMessageId: self.pinnedMessageId, about: self.about, flags: self.flags, hasScheduledMessages: self.hasScheduledMessages, invitedBy: self.invitedBy, photo: photo, activeCall: self.activeCall, autoremoveTimeout: self.autoremoveTimeout, callJoinPeerId: self.callJoinPeerId, themeEmoticon: self.themeEmoticon, inviteRequestsPending: self.inviteRequestsPending, reactionSettings: self.reactionSettings)
     }
     
     public func withUpdatedActiveCall(_ activeCall: CachedChannelData.ActiveCall?) -> CachedGroupData {
-        return CachedGroupData(participants: self.participants, exportedInvitation: self.exportedInvitation, botInfos: self.botInfos, peerStatusSettings: self.peerStatusSettings, pinnedMessageId: self.pinnedMessageId, about: self.about, flags: self.flags, hasScheduledMessages: self.hasScheduledMessages, invitedBy: self.invitedBy, photo: self.photo, activeCall: activeCall, autoremoveTimeout: self.autoremoveTimeout, callJoinPeerId: self.callJoinPeerId, themeEmoticon: self.themeEmoticon, inviteRequestsPending: self.inviteRequestsPending, allowedReactions: self.allowedReactions)
+        return CachedGroupData(participants: self.participants, exportedInvitation: self.exportedInvitation, botInfos: self.botInfos, peerStatusSettings: self.peerStatusSettings, pinnedMessageId: self.pinnedMessageId, about: self.about, flags: self.flags, hasScheduledMessages: self.hasScheduledMessages, invitedBy: self.invitedBy, photo: self.photo, activeCall: activeCall, autoremoveTimeout: self.autoremoveTimeout, callJoinPeerId: self.callJoinPeerId, themeEmoticon: self.themeEmoticon, inviteRequestsPending: self.inviteRequestsPending, reactionSettings: self.reactionSettings)
     }
     
     public func withUpdatedAutoremoveTimeout(_ autoremoveTimeout: CachedPeerAutoremoveTimeout) -> CachedGroupData {
-        return CachedGroupData(participants: self.participants, exportedInvitation: self.exportedInvitation, botInfos: self.botInfos, peerStatusSettings: self.peerStatusSettings, pinnedMessageId: self.pinnedMessageId, about: self.about, flags: self.flags, hasScheduledMessages: self.hasScheduledMessages, invitedBy: self.invitedBy, photo: self.photo, activeCall: self.activeCall, autoremoveTimeout: autoremoveTimeout, callJoinPeerId: self.callJoinPeerId, themeEmoticon: self.themeEmoticon, inviteRequestsPending: self.inviteRequestsPending, allowedReactions: self.allowedReactions)
+        return CachedGroupData(participants: self.participants, exportedInvitation: self.exportedInvitation, botInfos: self.botInfos, peerStatusSettings: self.peerStatusSettings, pinnedMessageId: self.pinnedMessageId, about: self.about, flags: self.flags, hasScheduledMessages: self.hasScheduledMessages, invitedBy: self.invitedBy, photo: self.photo, activeCall: self.activeCall, autoremoveTimeout: autoremoveTimeout, callJoinPeerId: self.callJoinPeerId, themeEmoticon: self.themeEmoticon, inviteRequestsPending: self.inviteRequestsPending, reactionSettings: self.reactionSettings)
     }
     
     public func withUpdatedCallJoinPeerId(_ callJoinPeerId: PeerId?) -> CachedGroupData {
-        return CachedGroupData(participants: self.participants, exportedInvitation: self.exportedInvitation, botInfos: self.botInfos, peerStatusSettings: self.peerStatusSettings, pinnedMessageId: self.pinnedMessageId, about: self.about, flags: self.flags, hasScheduledMessages: self.hasScheduledMessages, invitedBy: self.invitedBy, photo: self.photo, activeCall: self.activeCall, autoremoveTimeout: self.autoremoveTimeout, callJoinPeerId: callJoinPeerId, themeEmoticon: self.themeEmoticon, inviteRequestsPending: self.inviteRequestsPending, allowedReactions: self.allowedReactions)
+        return CachedGroupData(participants: self.participants, exportedInvitation: self.exportedInvitation, botInfos: self.botInfos, peerStatusSettings: self.peerStatusSettings, pinnedMessageId: self.pinnedMessageId, about: self.about, flags: self.flags, hasScheduledMessages: self.hasScheduledMessages, invitedBy: self.invitedBy, photo: self.photo, activeCall: self.activeCall, autoremoveTimeout: self.autoremoveTimeout, callJoinPeerId: callJoinPeerId, themeEmoticon: self.themeEmoticon, inviteRequestsPending: self.inviteRequestsPending, reactionSettings: self.reactionSettings)
     }
     
     public func withUpdatedThemeEmoticon(_ themeEmoticon: String?) -> CachedGroupData {
-        return CachedGroupData(participants: self.participants, exportedInvitation: self.exportedInvitation, botInfos: self.botInfos, peerStatusSettings: self.peerStatusSettings, pinnedMessageId: self.pinnedMessageId, about: self.about, flags: self.flags, hasScheduledMessages: self.hasScheduledMessages, invitedBy: self.invitedBy, photo: self.photo, activeCall: self.activeCall, autoremoveTimeout: self.autoremoveTimeout, callJoinPeerId: self.callJoinPeerId, themeEmoticon: themeEmoticon, inviteRequestsPending: self.inviteRequestsPending, allowedReactions: self.allowedReactions)
+        return CachedGroupData(participants: self.participants, exportedInvitation: self.exportedInvitation, botInfos: self.botInfos, peerStatusSettings: self.peerStatusSettings, pinnedMessageId: self.pinnedMessageId, about: self.about, flags: self.flags, hasScheduledMessages: self.hasScheduledMessages, invitedBy: self.invitedBy, photo: self.photo, activeCall: self.activeCall, autoremoveTimeout: self.autoremoveTimeout, callJoinPeerId: self.callJoinPeerId, themeEmoticon: themeEmoticon, inviteRequestsPending: self.inviteRequestsPending, reactionSettings: self.reactionSettings)
     }
     
     public func withUpdatedInviteRequestsPending(_ inviteRequestsPending: Int32?) -> CachedGroupData {
-        return CachedGroupData(participants: self.participants, exportedInvitation: self.exportedInvitation, botInfos: self.botInfos, peerStatusSettings: self.peerStatusSettings, pinnedMessageId: self.pinnedMessageId, about: self.about, flags: self.flags, hasScheduledMessages: self.hasScheduledMessages, invitedBy: self.invitedBy, photo: self.photo, activeCall: self.activeCall, autoremoveTimeout: self.autoremoveTimeout, callJoinPeerId: self.callJoinPeerId, themeEmoticon: self.themeEmoticon, inviteRequestsPending: inviteRequestsPending, allowedReactions: self.allowedReactions)
+        return CachedGroupData(participants: self.participants, exportedInvitation: self.exportedInvitation, botInfos: self.botInfos, peerStatusSettings: self.peerStatusSettings, pinnedMessageId: self.pinnedMessageId, about: self.about, flags: self.flags, hasScheduledMessages: self.hasScheduledMessages, invitedBy: self.invitedBy, photo: self.photo, activeCall: self.activeCall, autoremoveTimeout: self.autoremoveTimeout, callJoinPeerId: self.callJoinPeerId, themeEmoticon: self.themeEmoticon, inviteRequestsPending: inviteRequestsPending, reactionSettings: self.reactionSettings)
     }
     
-    public func withUpdatedAllowedReactions(_ allowedReactions: EnginePeerCachedInfoItem<PeerAllowedReactions>) -> CachedGroupData {
-        return CachedGroupData(participants: self.participants, exportedInvitation: self.exportedInvitation, botInfos: self.botInfos, peerStatusSettings: self.peerStatusSettings, pinnedMessageId: self.pinnedMessageId, about: self.about, flags: self.flags, hasScheduledMessages: self.hasScheduledMessages, invitedBy: self.invitedBy, photo: self.photo, activeCall: self.activeCall, autoremoveTimeout: self.autoremoveTimeout, callJoinPeerId: self.callJoinPeerId, themeEmoticon: self.themeEmoticon, inviteRequestsPending: self.inviteRequestsPending, allowedReactions: allowedReactions)
+    public func withUpdatedReactionSettings(_ reactionSettings: EnginePeerCachedInfoItem<PeerReactionSettings>) -> CachedGroupData {
+        return CachedGroupData(participants: self.participants, exportedInvitation: self.exportedInvitation, botInfos: self.botInfos, peerStatusSettings: self.peerStatusSettings, pinnedMessageId: self.pinnedMessageId, about: self.about, flags: self.flags, hasScheduledMessages: self.hasScheduledMessages, invitedBy: self.invitedBy, photo: self.photo, activeCall: self.activeCall, autoremoveTimeout: self.autoremoveTimeout, callJoinPeerId: self.callJoinPeerId, themeEmoticon: self.themeEmoticon, inviteRequestsPending: self.inviteRequestsPending, reactionSettings: reactionSettings)
     }
 }

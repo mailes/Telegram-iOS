@@ -16,6 +16,7 @@ const CGFloat TGPhotoEditorSliderViewInternalMargin = 7.0f;
     
     UIPanGestureRecognizer *_panGestureRecognizer;
     UITapGestureRecognizer *_tapGestureRecognizer;
+    UITapGestureRecognizer *_edgeTapGestureRecognizer;
     UITapGestureRecognizer *_doubleTapGestureRecognizer;
     
     UIColor *_backColor;
@@ -41,6 +42,7 @@ const CGFloat TGPhotoEditorSliderViewInternalMargin = 7.0f;
         _value = _startValue;
         _dotSize = 10.5f;
         _minimumUndottedValue = -1;
+        _markPositions = true;
         
         _lineSize = TGPhotoEditorSliderViewLineSize;
         _knobPadding = TGPhotoEditorSliderViewInternalMargin;
@@ -74,6 +76,10 @@ const CGFloat TGPhotoEditorSliderViewInternalMargin = 7.0f;
         _tapGestureRecognizer = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleTap:)];
         _tapGestureRecognizer.enabled = false;
         [self addGestureRecognizer:_tapGestureRecognizer];
+        
+        _edgeTapGestureRecognizer = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleEdgeTap:)];
+        _edgeTapGestureRecognizer.enabled = false;
+        [self addGestureRecognizer:_edgeTapGestureRecognizer];
         
         _doubleTapGestureRecognizer = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleDoubleTap:)];
         _doubleTapGestureRecognizer.numberOfTapsRequired = 2;
@@ -129,6 +135,8 @@ const CGFloat TGPhotoEditorSliderViewInternalMargin = 7.0f;
     CGFloat knobPosition = _knobPadding + (_knobView.highlighted ? _knobDragCenter : [self centerPositionForValue:_value totalLength:totalLength knobSize:_knobView.image.size.width vertical:vertical]);
     knobPosition = MAX(_knobPadding, MIN(knobPosition, _knobPadding + totalLength));
     
+    CGFloat lowerBoundPosition = _knobPadding + [self centerPositionForValue:_lowerBoundValue totalLength:totalLength knobSize:_knobView.image.size.width vertical:vertical];
+    
     CGFloat startPosition = visualMargin + visualTotalLength / (_maximumValue - _minimumValue) * (ABS(_minimumValue) + _startValue);
     if (vertical)
         startPosition = 2 * visualMargin + visualTotalLength - startPosition;
@@ -175,82 +183,120 @@ const CGFloat TGPhotoEditorSliderViewInternalMargin = 7.0f;
         CGContextSetBlendMode(context, kCGBlendModeCopy);
     }
 
-    CGContextSetFillColorWithColor(context, _backColor.CGColor);
-    [self drawRectangle:backFrame cornerRadius:self.trackCornerRadius context:context];
-
-    CGContextSetBlendMode(context, kCGBlendModeNormal);
-
-    CGContextSetFillColorWithColor(context, _trackColor.CGColor);
-    [self drawRectangle:trackFrame cornerRadius:self.trackCornerRadius context:context];
-    
-    if (!_startHidden || self.displayEdges)
-    {
-        bool highlighted = CGRectGetMidX(startFrame) < CGRectGetMaxX(trackFrame);
-        if (vertical)
-            highlighted = CGRectGetMidY(startFrame) > CGRectGetMinY(trackFrame);
-        highlighted = highlighted && self.displayEdges;
+    for (int passIndex = 0; passIndex < 2; passIndex++) {
+        CGContextSaveGState(context);
+        CGContextResetClip(context);
         
-        CGContextSetFillColorWithColor(context, highlighted ? _trackColor.CGColor : _startColor.CGColor);
-        [self drawRectangle:startFrame cornerRadius:self.trackCornerRadius context:context];
-    }
-    
-    if (self.displayEdges) {
-        CGContextSetFillColorWithColor(context, _startColor.CGColor);
-        [self drawRectangle:endFrame cornerRadius:self.trackCornerRadius context:context];
-    }
-    
-    if (_bordered)
-    {
-        CGContextSetFillColorWithColor(context, UIColorRGBA(0x000000, 0.6f).CGColor);
-        CGContextFillEllipseInRect(context, CGRectInset(knobFrame, 1.0f, 1.0f));
-    }
-    
-    if (self.positionsCount > 1)
-    {
-        for (NSInteger i = 0; i < self.positionsCount; i++)
-        {
-            if (self.useLinesForPositions) {
-                CGSize lineSize = CGSizeMake(4.0, 12.0);
-                CGRect lineRect = CGRectMake(margin - lineSize.width / 2.0f + totalLength / (self.positionsCount - 1) * i, (sideLength - lineSize.height) / 2, lineSize.width, lineSize.height);
-                if (vertical)
-                    lineRect = CGRectMake(lineRect.origin.y, lineRect.origin.x, lineRect.size.height, lineRect.size.width);
+        UIColor *passBackColor = _backColor;
+        UIColor *passTrackColor = _trackColor;
+        
+        if (passIndex == 0) {
+            if (_lowerBoundValue > 0.0f && _lowerBoundTrackColor != nil) {
+                CGContextBeginPath(context);
+                CGContextAddRect(context, CGRectMake(0.0, 0.0, lowerBoundPosition, rect.size.height));
+                CGContextClip(context);
                 
-                bool highlighted = CGRectGetMidX(lineRect) < CGRectGetMaxX(trackFrame);
-                if (vertical)
-                    highlighted = CGRectGetMidY(lineRect) > CGRectGetMinY(trackFrame);
+                CGFloat trackAlpha = 0.0f;
+                [_trackColor getRed:nil green:nil blue:nil alpha:&trackAlpha];
                 
-                CGContextSetFillColorWithColor(context, highlighted ? _trackColor.CGColor : _backColor.CGColor);
-                [self drawRectangle:lineRect cornerRadius:self.trackCornerRadius context:context];
+                passTrackColor = _lowerBoundTrackColor;
+            }
+        } else {
+            if (_lowerBoundValue > 0.0f && _lowerBoundTrackColor != nil && lowerBoundPosition < rect.size.width) {
+                CGContextBeginPath(context);
+                CGContextAddRect(context, CGRectMake(lowerBoundPosition, 0.0, rect.size.width - lowerBoundPosition, rect.size.height));
+                CGContextClip(context);
             } else {
-                if ([self.backgroundColor isEqual:[UIColor clearColor]])
-                {
-                    CGContextSetBlendMode(context, kCGBlendModeClear);
-                    CGContextSetFillColorWithColor(context, [UIColor clearColor].CGColor);
-                }
-                else
-                {
-                    CGContextSetFillColorWithColor(context, self.backgroundColor.CGColor);
-                }
-                
-                CGFloat inset = 1.5f;
-                CGFloat outerSize = _dotSize + inset * 2.0f;
-                CGRect dotRect = CGRectMake(margin - outerSize / 2.0f + totalLength / (self.positionsCount - 1) * i, (sideLength - outerSize) / 2, outerSize, outerSize);
-                if (vertical)
-                    dotRect = CGRectMake(dotRect.origin.y, dotRect.origin.x, dotRect.size.height, dotRect.size.width);
-                
-                CGContextFillEllipseInRect(context, dotRect);
-                
-                dotRect = CGRectInset(dotRect, inset, inset);
-            
-                CGContextSetBlendMode(context, kCGBlendModeNormal);
-                bool highlighted = CGRectGetMidX(dotRect) < CGRectGetMaxX(trackFrame);
-                if (vertical)
-                    highlighted = CGRectGetMidY(dotRect) > CGRectGetMinY(trackFrame);
-                
-                CGContextSetFillColorWithColor(context, highlighted ? _trackColor.CGColor : _backColor.CGColor);
-                CGContextFillEllipseInRect(context, dotRect);
+                CGContextRestoreGState(context);
+                break;
             }
         }
+        
+        CGContextSetFillColorWithColor(context, passBackColor.CGColor);
+        [self drawRectangle:backFrame cornerRadius:self.trackCornerRadius context:context];
+        
+        CGContextSetBlendMode(context, kCGBlendModeNormal);
+        
+        CGContextSetFillColorWithColor(context, passTrackColor.CGColor);
+        [self drawRectangle:trackFrame cornerRadius:self.trackCornerRadius context:context];
+        
+        if (!_startHidden || self.displayEdges)
+        {
+            bool highlighted = CGRectGetMidX(startFrame) < CGRectGetMaxX(trackFrame);
+            if (vertical)
+                highlighted = CGRectGetMidY(startFrame) > CGRectGetMinY(trackFrame);
+            highlighted = highlighted && self.displayEdges;
+            
+            CGContextSetFillColorWithColor(context, highlighted ? passTrackColor.CGColor : _startColor.CGColor);
+            [self drawRectangle:startFrame cornerRadius:self.trackCornerRadius context:context];
+        }
+        
+        if (self.displayEdges) {
+            CGContextSetFillColorWithColor(context, passBackColor.CGColor);
+            [self drawRectangle:endFrame cornerRadius:self.trackCornerRadius context:context];
+        }
+        
+        if (_bordered)
+        {
+            CGContextSetFillColorWithColor(context, UIColorRGBA(0x000000, 0.6f).CGColor);
+            CGContextFillEllipseInRect(context, CGRectInset(knobFrame, 1.0f, 1.0f));
+        }
+        
+        if (self.positionsCount > 1)
+        {
+            for (NSInteger i = 0; i < self.positionsCount; i++)
+            {
+                if (!self.markPositions) {
+                    if (i != 0 && i != self.positionsCount - 1) {
+                        continue;
+                    }
+                }
+                
+                if (self.useLinesForPositions) {
+                    CGSize lineSize = CGSizeMake(4.0, 12.0);
+                    CGRect lineRect = CGRectMake(margin - lineSize.width / 2.0f + totalLength / (self.positionsCount - 1) * i, (sideLength - lineSize.height) / 2, lineSize.width, lineSize.height);
+                    if (vertical)
+                        lineRect = CGRectMake(lineRect.origin.y, lineRect.origin.x, lineRect.size.height, lineRect.size.width);
+                    
+                    bool highlighted = CGRectGetMidX(lineRect) < CGRectGetMaxX(trackFrame);
+                    if (vertical)
+                        highlighted = CGRectGetMidY(lineRect) > CGRectGetMinY(trackFrame);
+                    
+                    CGContextSetFillColorWithColor(context, highlighted ? passTrackColor.CGColor : passBackColor.CGColor);
+                    [self drawRectangle:lineRect cornerRadius:self.trackCornerRadius context:context];
+                } else {
+                    if ([self.backgroundColor isEqual:[UIColor clearColor]])
+                    {
+                        CGContextSetBlendMode(context, kCGBlendModeClear);
+                        CGContextSetFillColorWithColor(context, [UIColor clearColor].CGColor);
+                    }
+                    else
+                    {
+                        CGContextSetFillColorWithColor(context, self.backgroundColor.CGColor);
+                    }
+                    
+                    CGFloat inset = 1.5f;
+                    CGFloat outerSize = _dotSize + inset * 2.0f;
+                    CGRect dotRect = CGRectMake(margin - outerSize / 2.0f + totalLength / (self.positionsCount - 1) * i, (sideLength - outerSize) / 2, outerSize, outerSize);
+                    if (vertical)
+                        dotRect = CGRectMake(dotRect.origin.y, dotRect.origin.x, dotRect.size.height, dotRect.size.width);
+                    
+                    CGContextFillEllipseInRect(context, dotRect);
+                    
+                    dotRect = CGRectInset(dotRect, inset, inset);
+                    
+                    CGContextSetBlendMode(context, kCGBlendModeNormal);
+                    bool highlighted = CGRectGetMidX(dotRect) < CGRectGetMaxX(trackFrame);
+                    if (vertical)
+                        highlighted = CGRectGetMidY(dotRect) > CGRectGetMinY(trackFrame);
+                    
+                    CGContextSetFillColorWithColor(context, highlighted ? passTrackColor.CGColor : passBackColor.CGColor);
+                    CGContextFillEllipseInRect(context, dotRect);
+                }
+            }
+        }
+        
+        CGContextRestoreGState(context);
     }
 }
 
@@ -335,7 +381,11 @@ const CGFloat TGPhotoEditorSliderViewInternalMargin = 7.0f;
 
 - (void)setValue:(CGFloat)value animated:(BOOL)__unused animated
 {
-    _value = MIN(MAX(value, _minimumValue), _maximumValue);
+    if (_lowerBoundValue > FLT_EPSILON) {
+        _value = MIN(MAX(_lowerBoundValue, MAX(value, _minimumValue)), _maximumValue);
+    } else {
+        _value = MIN(MAX(value, _minimumValue), _maximumValue);
+    }
     [self setNeedsLayout];
 }
 
@@ -391,7 +441,9 @@ const CGFloat TGPhotoEditorSliderViewInternalMargin = 7.0f;
     if (_minimumValue < 0)
     {
         CGFloat knob = knobSize;
-        if ((NSInteger)value == 0)
+        if (fabs(_minimumValue) > 1.0 && (NSInteger)value == 0) {
+            return totalLength / 2;
+        } else if (fabs(value) < 0.01)
         {
             return totalLength / 2;
         }
@@ -492,6 +544,46 @@ const CGFloat TGPhotoEditorSliderViewInternalMargin = 7.0f;
     {
         [self setValue:nextPosition];
         changed = true;
+    }
+    
+    if (changed)
+    {
+        if (self.interactionBegan != nil)
+            self.interactionBegan();
+        
+        [self setNeedsLayout];
+        [self sendActionsForControlEvents:UIControlEventValueChanged];
+        
+        if (self.interactionEnded != nil)
+            self.interactionEnded();
+        
+        [_feedbackGenerator selectionChanged];
+        [_feedbackGenerator prepare];
+    }
+}
+
+- (void)setEnableEdgeTap:(bool)enableEdgeTap {
+    _enableEdgeTap = enableEdgeTap;
+    _edgeTapGestureRecognizer.enabled = enableEdgeTap;
+}
+
+- (void)handleEdgeTap:(UITapGestureRecognizer *)gestureRecognizer {
+    bool changed = false;
+    
+    if (gestureRecognizer.state == UIGestureRecognizerStateEnded) {
+        CGPoint touchLocation = [gestureRecognizer locationInView:self];
+        CGFloat edgeWidth = 16.0f;
+        if (touchLocation.x < edgeWidth || touchLocation.x > self.bounds.size.width - edgeWidth) {
+            CGRect knobRect = CGRectInset(self.knobView.frame, -8.0, -8.0);
+            if (!CGRectContainsPoint(knobRect, touchLocation)) {
+                if (touchLocation.x < edgeWidth) {
+                    [self setValue:_minimumValue];
+                } else {
+                    [self setValue:_maximumValue];
+                }
+                changed = true;
+            }
+        }
     }
     
     if (changed)
@@ -615,7 +707,16 @@ const CGFloat TGPhotoEditorSliderViewInternalMargin = 7.0f;
     if (self.positionsCount > 1 && !self.disableSnapToPositions)
     {
         NSInteger position = (NSInteger)round((_knobDragCenter / totalLength) * (self.positionsCount - 1));
+        
+        if (_lowerBoundValue > 0.0f) {
+            position = MAX(position, (NSInteger)_lowerBoundValue);
+        }
+        
         _knobDragCenter = position * totalLength / (self.positionsCount - 1);
+    } else {
+        if (_lowerBoundValue > 0.0f) {
+            _knobDragCenter = MAX(_knobDragCenter, _lowerBoundValue * totalLength);
+        }
     }
     
     [self setValue:[self valueForCenterPosition:_knobDragCenter totalLength:totalLength knobSize:_knobView.image.size.width vertical:vertical]];
@@ -666,6 +767,34 @@ const CGFloat TGPhotoEditorSliderViewInternalMargin = 7.0f;
     
     if (self.interactionEnded != nil)
         self.interactionEnded();
+}
+
+- (void)increase {
+    self.value = MIN(self.maximumValue, self.value + 1);
+    
+    [self sendActionsForControlEvents:UIControlEventValueChanged];
+    [self setNeedsLayout];
+}
+
+- (void)increaseBy:(CGFloat)delta {
+    self.value = MIN(self.maximumValue, self.value + delta);
+    
+    [self sendActionsForControlEvents:UIControlEventValueChanged];
+    [self setNeedsLayout];
+}
+
+- (void)decrease {
+    self.value = MAX(self.minimumValue, self.value - 1);
+    
+    [self sendActionsForControlEvents:UIControlEventValueChanged];
+    [self setNeedsLayout];
+}
+
+- (void)decreaseBy:(CGFloat)delta {
+    self.value = MAX(self.minimumValue, self.value - delta);
+    
+    [self sendActionsForControlEvents:UIControlEventValueChanged];
+    [self setNeedsLayout];
 }
 
 @end

@@ -20,6 +20,7 @@ public final class ListMessageItemInteraction {
     let getHiddenMedia: () -> [MessageId: [Media]]
     
     public var searchTextHighightState: String?
+    public var preferredStoryHighQuality: Bool = false
     
     public init(openMessage: @escaping (Message, ChatControllerInteractionOpenMessageMode) -> Bool, openMessageContextMenu: @escaping (Message, Bool, ASDisplayNode, CGRect, UIGestureRecognizer?) -> Void, toggleMessagesSelection: @escaping ([MessageId], Bool) -> Void, openUrl: @escaping (String, Bool, Bool?, Message?) -> Void, openInstantPage: @escaping (Message, ChatMessageItemAssociatedData?) -> Void, longTap: @escaping (ChatControllerInteractionLongTapAction, Message?) -> Void, getHiddenMedia: @escaping () -> [MessageId: [Media]]) {
         self.openMessage = openMessage
@@ -49,6 +50,7 @@ public final class ListMessageItem: ListViewItem {
     let chatLocation: ChatLocation
     let interaction: ListMessageItemInteraction
     let message: Message?
+    let translateToLanguage: String?
     public let selection: ChatHistoryMessageSelection
     let hintIsLink: Bool
     let isGlobalSearchResult: Bool
@@ -61,12 +63,13 @@ public final class ListMessageItem: ListViewItem {
     
     public let selectable: Bool = true
     
-    public init(presentationData: ChatPresentationData, context: AccountContext, chatLocation: ChatLocation, interaction: ListMessageItemInteraction, message: Message?, selection: ChatHistoryMessageSelection, displayHeader: Bool, customHeader: ListViewItemHeader? = nil, hintIsLink: Bool = false, isGlobalSearchResult: Bool = false, isDownloadList: Bool = false, displayFileInfo: Bool = true, displayBackground: Bool = false, style: ItemListStyle = .plain) {
+    public init(presentationData: ChatPresentationData, context: AccountContext, chatLocation: ChatLocation, interaction: ListMessageItemInteraction, message: Message?, translateToLanguage: String? = nil, selection: ChatHistoryMessageSelection, displayHeader: Bool, customHeader: ListViewItemHeader? = nil, hintIsLink: Bool = false, isGlobalSearchResult: Bool = false, isDownloadList: Bool = false, displayFileInfo: Bool = true, displayBackground: Bool = false, style: ItemListStyle = .plain) {
         self.presentationData = presentationData
         self.context = context
         self.chatLocation = chatLocation
         self.interaction = interaction
         self.message = message
+        self.translateToLanguage = translateToLanguage
         if let header = customHeader {
             self.header = header
         } else if displayHeader, let message = message {
@@ -93,6 +96,9 @@ public final class ListMessageItem: ListViewItem {
                         viewClassName = ListMessageFileItemNode.self
                         break
                     } else if let _ = media as? TelegramMediaImage {
+                        viewClassName = ListMessageFileItemNode.self
+                        break
+                    } else if let _ = media as? TelegramMediaStory {
                         viewClassName = ListMessageFileItemNode.self
                         break
                     }
